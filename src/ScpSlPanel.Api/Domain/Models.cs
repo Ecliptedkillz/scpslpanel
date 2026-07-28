@@ -68,7 +68,9 @@ public sealed record PlayerRecord(
     DateTimeOffset FirstConnectedAt, DateTimeOffset LastConnectedAt, long PlaytimeSeconds,
     int Connections, IReadOnlyList<PlayerNameEntry> NameHistory,
     IReadOnlyList<PlayerModerationEntry> ModerationHistory, IReadOnlyList<PlayerNote> Notes,
-    string? DiscordId = null);
+    string? DiscordId = null, string? SteamDisplayName = null, string? SteamAvatarUrl = null,
+    string? SteamProfileUrl = null, string? DiscordDisplayName = null,
+    string? DiscordAvatarUrl = null, IReadOnlyList<string>? DiscordRoles = null);
 public sealed record PlayerNoteRequest(string Text);
 public sealed record PlayerActionRequest(string Type, string Reason, int? DurationMinutes);
 public sealed record MetricSample(
@@ -89,7 +91,8 @@ public sealed record PanelIntegrationSettings(
     string RestartFailureMessage = "{server} failed to restart automatically: {error}",
     string ScheduleFailureMessage = "Schedule '{schedule}' failed for {server}: {error}",
     bool DiscordBotEnabled = false, string DiscordBotToken = "", ulong DiscordGuildId = 0,
-    string DiscordControlRoleIds = "");
+    string DiscordControlRoleIds = "", ulong DiscordNotificationChannelId = 0,
+    string SteamWebApiKey = "");
 public sealed record DiscordBotStatus(bool Enabled, bool Connected, string? BotName, string? Error);
 public sealed record BackupEntry(
     Guid Id, Guid ServerId, DateTimeOffset CreatedAt, string FileName, long SizeBytes, string Actor);

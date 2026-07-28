@@ -145,6 +145,12 @@ the Discord Developer Portal, add a bot, and invite it with the `bot` and
 `applications.commands` scopes. Enter its token, the guild ID, and comma-separated Discord role
 IDs allowed to control servers. Discord administrators are always allowed.
 
+Enter a notification channel ID to send crash, restart, bridge, threshold, and audit alerts
+through the bot instead of a webhook. Give the bot View Channel and Send Messages permission in
+that channel. Enable the Guild Members privileged intent to display linked members' Discord
+avatars and guild roles. A Steam Web API key enables Steam display names, profile links, and
+avatars in Player Database.
+
 The bot provides `/scp status`, `/scp players`, `/scp start`, `/scp stop`, `/scp restart`, and
 `/scp announce`. Status and player queries are read-only. Control commands require an allowed
 role and are written to the audit log. Treat the bot token like a password.

@@ -356,7 +356,7 @@ api.MapGet("/servers/{id:guid}/player-history", async (
     if (!await Can(user, store, id, "players.history")) return Results.Forbid();
     var server = await servers.FindAsync(id);
     return server is null ? Results.NotFound()
-        : Results.Ok(discordLinks.Enrich(server, await players.ListAsync(id)));
+        : Results.Ok(await discordLinks.EnrichAsync(server, await players.ListAsync(id)));
 });
 api.MapGet("/servers/{id:guid}/player-history/{playerId:guid}", async (
     Guid id, Guid playerId, PlayerDataService players, DiscordLinkService discordLinks,
@@ -366,7 +366,7 @@ api.MapGet("/servers/{id:guid}/player-history/{playerId:guid}", async (
     var server = await servers.FindAsync(id);
     var player = await players.FindAsync(id, playerId);
     return server is null || player is null ? Results.NotFound()
-        : Results.Ok(discordLinks.Enrich(server, player));
+        : Results.Ok(await discordLinks.EnrichAsync(server, player));
 });
 api.MapPost("/servers/{id:guid}/player-history/{playerId:guid}/notes", async (
     Guid id, Guid playerId, PlayerNoteRequest request, PlayerDataService players,

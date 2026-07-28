@@ -26,15 +26,19 @@ public sealed class NotificationService(JsonStore store, ILogger<NotificationSer
     public async Task SendAsync(string title, string message, string severity = "info")
     {
         var settings = await GetAsync();
-        if (string.IsNullOrWhiteSpace(settings.DiscordWebhookUrl)) return;
+        if (!settings.DiscordBotEnabled || string.IsNullOrWhiteSpace(settings.DiscordBotToken)
+            || settings.DiscordNotificationChannelId == 0) return;
         try
         {
             var color = severity == "error" ? 15158332 : severity == "warning" ? 16753920 : 5763719;
-            using var response = await _http.PostAsJsonAsync(settings.DiscordWebhookUrl, new
+            using var request = new HttpRequestMessage(HttpMethod.Post,
+                $"https://discord.com/api/v10/channels/{settings.DiscordNotificationChannelId}/messages");
+            request.Headers.Authorization = new("Bot", settings.DiscordBotToken);
+            request.Content = JsonContent.Create(new
             {
-                username = "SCP Control",
                 embeds = new[] { new { title, description = message, color, timestamp = DateTimeOffset.UtcNow } }
             });
+            using var response = await _http.SendAsync(request);
             response.EnsureSuccessStatusCode();
         }
         catch (Exception ex) { logger.LogWarning(ex, "Discord notification failed"); }
