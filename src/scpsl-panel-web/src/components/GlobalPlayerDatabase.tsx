@@ -52,12 +52,27 @@ export function GlobalPlayerDatabase({ onError }: { onError: (message: string) =
       </button>
     })}</div>
     {!filtered.length && <div className="empty-mini">No matching players found.</div>}
-    {selected && <GlobalProfileModal record={selected} close={()=>setSelected(null)}/>}
+    {selected && <GlobalProfileModal record={selected} close={()=>setSelected(null)} onError={onError} onUpdated={updated=>{const player={...selected.player,...updated};setSelected({...selected,player});setRecords(records.map(x=>x.serverId===selected.serverId&&x.player.id===player.id?{...x,player}:x))}}/>}
   </>
 }
 
-function GlobalProfileModal({record,close}:{record:GlobalPlayer;close:()=>void}) {
+function GlobalProfileModal({record,close,onError,onUpdated}:{record:GlobalPlayer;close:()=>void;onError:(message:string)=>void;onUpdated:(player:StoredPlayer)=>void}) {
   const player=record.player
+  const [note,setNote]=useState('')
+  const [discordId,setDiscordId]=useState(player.discordId ?? '')
+  const risk=Math.min(100,player.moderationHistory.reduce((score,item)=>score+(item.type==='ban'?35:item.type==='kick'?20:item.type==='warning'?10:item.type==='watchlist'?25:5),0)+Math.max(0,player.nameHistory.length-2)*3)
+  const recordAction=async(type:string)=>{
+    const reason=prompt(`Reason for ${type}:`,`${type} added from global profile`)
+    if(reason===null)return
+    try{onUpdated(await api<StoredPlayer>(`/servers/${record.serverId}/player-history/${player.id}/actions`,{method:'POST',body:JSON.stringify({type,reason,durationMinutes:null})}))}catch(error){onError(error instanceof Error?error.message:'Unable to record action')}
+  }
+  const addNote=async()=>{
+    if(!note.trim())return
+    try{onUpdated(await api<StoredPlayer>(`/servers/${record.serverId}/player-history/${player.id}/notes`,{method:'POST',body:JSON.stringify({text:note})}));setNote('')}catch(error){onError(error instanceof Error?error.message:'Unable to add note')}
+  }
+  const saveLink=async()=>{
+    try{await api(`/servers/${record.serverId}/players/identity-link`,{method:'PUT',body:JSON.stringify({steamId:player.userId.split('@')[0],discordId})});onUpdated({...player,discordId})}catch(error){onError(error instanceof Error?error.message:'Unable to save identity link')}
+  }
   return <div className="modal-backdrop"><article className="modal global-profile-modal">
     <header className="global-profile-hero">
       <div className="dual-avatar large">{player.steamAvatarUrl ? <img src={player.steamAvatarUrl} alt="Steam avatar"/> : <UserRound/>}{player.discordAvatarUrl && <img src={player.discordAvatarUrl} alt="Discord avatar"/>}</div>
@@ -68,7 +83,8 @@ function GlobalProfileModal({record,close}:{record:GlobalPlayer;close:()=>void})
       <section><span className="eyebrow">STEAM IDENTITY</span><strong>{player.steamDisplayName ?? player.currentName}</strong><code>{player.userId}</code>{player.steamProfileUrl && <a href={player.steamProfileUrl} target="_blank" rel="noreferrer">OPEN STEAM PROFILE <ExternalLink size={13}/></a>}</section>
       <section><span className="eyebrow">DISCORD IDENTITY</span><strong>{player.discordDisplayName ?? (player.discordId ? 'Linked · profile unavailable' : 'Not linked')}</strong><code>{player.discordId ?? 'No Discord ID'}</code><div>{player.discordRoles?.map(role=><span className="tag" key={role}>{role}</span>)}</div>{player.discordId && !player.discordRoles?.length && <small className="identity-hint">Enable Guild Members intent to load server nickname and roles.</small>}</section>
     </div>
-    <div className="profile-stats"><div><span>FIRST SEEN</span><strong>{new Date(player.firstConnectedAt).toLocaleDateString()}</strong></div><div><span>LAST SEEN</span><strong>{new Date(player.lastConnectedAt).toLocaleString()}</strong></div><div><span>PLAYTIME</span><strong>{playtime(player.playtimeSeconds)}</strong></div><div><span>CONNECTIONS</span><strong>{player.connections}</strong></div></div>
+    <div className="profile-stats"><div><span>FIRST SEEN</span><strong>{new Date(player.firstConnectedAt).toLocaleDateString()}</strong></div><div><span>LAST SEEN</span><strong>{new Date(player.lastConnectedAt).toLocaleString()}</strong></div><div><span>PLAYTIME</span><strong>{playtime(player.playtimeSeconds)}</strong></div><div><span>RISK SCORE</span><strong className={risk>=40?'risk-high':''}>{risk}/100</strong></div></div>
+    <div className="global-profile-actions"><button onClick={()=>recordAction('warning')}>ADD WARNING</button><button onClick={()=>recordAction('watchlist')}>WATCHLIST</button><button onClick={()=>recordAction('allowlist')}>ALLOWLIST</button><input value={discordId} onChange={e=>setDiscordId(e.target.value.trim())} placeholder="Discord user ID"/><button onClick={saveLink}>SAVE DISCORD LINK</button><input value={note} onChange={e=>setNote(e.target.value)} placeholder="Private staff note"/><button className="primary" onClick={addNote}>ADD NOTE</button></div>
     <div className="global-profile-columns">
       <section><h3>KNOWN NAMES</h3>{player.nameHistory.slice().reverse().map(name=><div className="history-entry" key={name.name}><strong>{name.name}</strong><small>{new Date(name.lastSeenAt).toLocaleString()}</small></div>)}</section>
       <section><h3>MODERATION HISTORY</h3>{player.moderationHistory.slice().reverse().map(item=><div className="history-entry" key={item.id}><strong><span className="tag red">{item.type.toUpperCase()}</span> {item.reason}</strong><small>{item.actor} · {new Date(item.at).toLocaleString()}</small></div>)}{!player.moderationHistory.length && <div className="empty-mini">No moderation history.</div>}</section>

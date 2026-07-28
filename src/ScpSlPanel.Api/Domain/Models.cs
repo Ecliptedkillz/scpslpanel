@@ -47,7 +47,8 @@ public sealed record ScheduleEntry(
 public sealed record PanelUser(
     Guid Id, string Username, string PasswordHash, string Role, bool Enabled,
     DateTimeOffset CreatedAt, IReadOnlyList<Guid>? ServerIds = null,
-    IReadOnlyList<string>? Permissions = null, IReadOnlyList<ServerAccessGrant>? ServerAccess = null);
+    IReadOnlyList<string>? Permissions = null, IReadOnlyList<ServerAccessGrant>? ServerAccess = null,
+    string? TotpSecret = null, bool TotpEnabled = false, int SessionVersion = 0);
 public sealed record ServerAccessGrant(Guid ServerId, IReadOnlyList<string> Permissions);
 
 public sealed record PluginEntry(
@@ -61,7 +62,8 @@ public sealed record ServerCreateRequest(
     string Name, string ExecutablePath, string? Arguments, string? WorkingDirectory,
     bool AutoRestart, bool AutoStart, int QueryPort, string? UpdateCommand);
 
-public sealed record LoginRequest(string Username, string Password);
+public sealed record LoginRequest(string Username, string Password, string? Code = null);
+public sealed record TotpRequest(string Code);
 public sealed record AccountRequest(
     string Username, string? Password, bool Enabled, IReadOnlyList<Guid> ServerIds,
     IReadOnlyList<string> Permissions, IReadOnlyList<ServerAccessGrant>? ServerAccess = null);
@@ -114,7 +116,8 @@ public sealed record PanelIntegrationSettings(
     [property: JsonConverter(typeof(SnowflakeStringConverter))] string DiscordNotificationChannelId = "",
     string SteamWebApiKey = "", IReadOnlyList<DiscordRoleGrant>? DiscordRoleGrants = null,
     [property: JsonConverter(typeof(SnowflakeStringConverter))] string DiscordModerationChannelId = "",
-    [property: JsonConverter(typeof(SnowflakeStringConverter))] string DiscordAuditChannelId = "");
+    [property: JsonConverter(typeof(SnowflakeStringConverter))] string DiscordAuditChannelId = "",
+    bool DiscordDailyReportEnabled = false, int DiscordDailyReportHourUtc = 12);
 public sealed record DiscordBotStatus(bool Enabled, bool Connected, string? BotName, string? Error);
 public sealed record DiscordRoleGrant(
     [property: JsonConverter(typeof(SnowflakeStringConverter))] string RoleId,
@@ -122,6 +125,10 @@ public sealed record DiscordRoleGrant(
 public sealed record IdentityLinkHealth(
     Guid ServerId, string ServerName, int Line, string SteamId, string DiscordId,
     bool Valid, string? Issue);
+public sealed record NotificationDelivery(
+    Guid Id, DateTimeOffset At, string Category, string Severity, string Title,
+    string Message, string ChannelId, string Status, int Attempts, string? Error);
+public sealed record IdentityLinkRequest(string SteamId, string DiscordId);
 public sealed record BackupEntry(
     Guid Id, Guid ServerId, DateTimeOffset CreatedAt, string FileName, long SizeBytes, string Actor);
 public sealed record RestartCountdownRequest(int Seconds, string? Message);

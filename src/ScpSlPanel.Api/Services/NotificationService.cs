@@ -10,6 +10,7 @@ public sealed class NotificationService(
 {
     private readonly HttpClient _http = new() { Timeout = TimeSpan.FromSeconds(8) };
     private readonly IDataProtector _protector = protectionProvider.CreateProtector("ScpSlPanel.IntegrationSecrets.v1");
+    private readonly SemaphoreSlim _historyGate = new(1, 1);
     public const string SecretMask = "••••••••";
 
     public async Task<PanelIntegrationSettings> GetAsync()
@@ -77,21 +78,57 @@ public sealed class NotificationService(
             _ => settings.DiscordNotificationChannelId
         };
         if (string.IsNullOrWhiteSpace(channelId)) return;
-        try
+        var delivery = new NotificationDelivery(Guid.NewGuid(), DateTimeOffset.UtcNow, category, severity,
+            title, message, channelId, "pending", 0, null);
+        Exception? lastError = null;
+        for (var attempt = 1; attempt <= 3; attempt++)
         {
-            var color = severity == "error" ? 15158332 : severity == "warning" ? 16753920 : 5763719;
-            using var request = new HttpRequestMessage(HttpMethod.Post,
-                $"https://discord.com/api/v10/channels/{channelId}/messages");
-            request.Headers.Authorization = new("Bot", settings.DiscordBotToken);
-            request.Content = JsonContent.Create(new
+            try
             {
-                embeds = new[] { new { title, description = message, color, timestamp = DateTimeOffset.UtcNow } }
-            });
-            using var response = await _http.SendAsync(request);
-            response.EnsureSuccessStatusCode();
+                var color = severity == "error" ? 15158332 : severity == "warning" ? 16753920 : 5763719;
+                using var request = new HttpRequestMessage(HttpMethod.Post,
+                    $"https://discord.com/api/v10/channels/{channelId}/messages");
+                request.Headers.Authorization = new("Bot", settings.DiscordBotToken);
+                request.Content = JsonContent.Create(new
+                {
+                    embeds = new[] { new { title, description = message, color, timestamp = DateTimeOffset.UtcNow } }
+                });
+                using var response = await _http.SendAsync(request);
+                if ((int)response.StatusCode == 429)
+                {
+                    var retry = response.Headers.RetryAfter?.Delta ?? TimeSpan.FromSeconds(attempt);
+                    await Task.Delay(retry > TimeSpan.FromSeconds(10) ? TimeSpan.FromSeconds(10) : retry);
+                    continue;
+                }
+                response.EnsureSuccessStatusCode();
+                await RecordAsync(delivery with { Status = "delivered", Attempts = attempt });
+                return;
+            }
+            catch (Exception ex)
+            {
+                lastError = ex;
+                if (attempt < 3) await Task.Delay(TimeSpan.FromMilliseconds(300 * attempt));
+            }
         }
-        catch (Exception ex) { logger.LogWarning(ex, "Discord notification failed"); }
+        logger.LogWarning(lastError, "Discord notification failed");
+        await RecordAsync(delivery with { Status = "failed", Attempts = 3, Error = lastError?.Message });
     }
 
     public Task TestAsync() => SendAsync("SCP Control connected", "Discord notifications are configured correctly.");
+
+    public async Task<IReadOnlyList<NotificationDelivery>> HistoryAsync(int take = 100) =>
+        (await store.ReadAsync<NotificationDelivery>("notification-history"))
+            .OrderByDescending(x => x.At).Take(Math.Clamp(take, 1, 500)).ToArray();
+
+    private async Task RecordAsync(NotificationDelivery delivery)
+    {
+        await _historyGate.WaitAsync();
+        try
+        {
+            var values = await store.ReadAsync<NotificationDelivery>("notification-history");
+            values.Add(delivery);
+            await store.WriteAsync("notification-history", values.OrderByDescending(x => x.At).Take(1000));
+        }
+        finally { _historyGate.Release(); }
+    }
 }

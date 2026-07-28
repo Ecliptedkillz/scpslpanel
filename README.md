@@ -155,6 +155,37 @@ The bot provides `/scp status`, `/scp players`, `/scp start`, `/scp stop`, `/scp
 `/scp announce`. Status and player queries are read-only. Control commands require an allowed
 role and are written to the audit log. Treat the bot token like a password.
 
+Discord role access can also be configured with the visual per-server permission editor. The
+global Player Database supports staff notes, warnings, watchlists, allowlists, risk scoring, and
+managed Steam-to-Discord identity links. Invalid or duplicate CSV mappings are shown by the
+identity health panel.
+
+Discord sends are retried up to three times, including rate-limit delays, and the latest 1,000
+delivery results are retained in Settings. Optional daily fleet reports use the configured UTC
+hour. Technical, moderation, and audit messages may be routed to separate channels.
+
+## Account security
+
+Each panel account can enable TOTP two-factor authentication in Settings using an authenticator
+application. Once enabled, enter the six-digit code on the login page. The same page can revoke
+all active cookies for the account. Changing a password also invalidates existing sessions.
+
+## SQLite storage
+
+JSON remains the default storage provider. To use SQLite, add the following setting:
+
+```json
+{
+  "Panel": {
+    "StorageProvider": "sqlite"
+  }
+}
+```
+
+The first read of each collection imports the corresponding existing JSON file into
+`data/panel.db`; the original JSON files are retained as a rollback backup. Keep the Data
+Protection key directory alongside the database when moving an installation.
+
 ## Production
 
 Set a long random bootstrap password, terminate TLS with Caddy, nginx, or a trusted ingress,

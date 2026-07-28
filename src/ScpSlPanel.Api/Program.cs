@@ -23,6 +23,7 @@ builder.Services.AddDataProtection()
     .PersistKeysToFileSystem(new DirectoryInfo(Path.Combine(dataPath, "keys")));
 builder.Services.AddSingleton<JsonStore>();
 builder.Services.AddSingleton<PasswordService>();
+builder.Services.AddSingleton<TotpService>();
 builder.Services.AddSingleton<AuditService>();
 builder.Services.AddSingleton<BridgeStateService>();
 builder.Services.AddSingleton<BridgeCommandService>();
@@ -37,6 +38,7 @@ builder.Services.AddSingleton<ServerManager>();
 builder.Services.AddHostedService<BootstrapService>();
 builder.Services.AddHostedService<SchedulerService>();
 builder.Services.AddHostedService<MonitoringService>();
+builder.Services.AddHostedService<DailyReportService>();
 builder.Services.AddHostedService(provider => provider.GetRequiredService<DiscordBotService>());
 builder.Services.AddSignalR();
 builder.Services.ConfigureHttpJsonOptions(options =>
@@ -50,6 +52,19 @@ builder.Services.AddAuthentication(CookieAuthenticationDefaults.AuthenticationSc
     options.SlidingExpiration = true;
     options.Events.OnRedirectToLogin = context => { context.Response.StatusCode = 401; return Task.CompletedTask; };
     options.Events.OnRedirectToAccessDenied = context => { context.Response.StatusCode = 403; return Task.CompletedTask; };
+    options.Events.OnValidatePrincipal = async context =>
+    {
+        var idValue = context.Principal?.FindFirstValue(ClaimTypes.NameIdentifier);
+        var versionValue = context.Principal?.FindFirstValue("session_version");
+        if (!Guid.TryParse(idValue, out var id) || !int.TryParse(versionValue, out var version))
+        {
+            context.RejectPrincipal();
+            return;
+        }
+        var store = context.HttpContext.RequestServices.GetRequiredService<JsonStore>();
+        var user = (await store.ReadAsync<PanelUser>("users")).FirstOrDefault(x => x.Id == id);
+        if (user is null || !user.Enabled || user.SessionVersion != version) context.RejectPrincipal();
+    };
 });
 builder.Services.AddAuthorization(options =>
     options.AddPolicy("Owner", policy => policy.RequireRole("Owner")));
@@ -142,12 +157,14 @@ static async Task<bool> Can(ClaimsPrincipal principal, JsonStore store, Guid ser
             && permissions.Contains(permission, StringComparer.OrdinalIgnoreCase)));
 }
 
-app.MapPost("/api/auth/login", async (LoginRequest request, JsonStore store, PasswordService passwords, HttpContext context) =>
+app.MapPost("/api/auth/login", async (LoginRequest request, JsonStore store, PasswordService passwords, TotpService totp, HttpContext context) =>
 {
     var user = (await store.ReadAsync<PanelUser>("users"))
         .FirstOrDefault(x => x.Enabled && x.Username.Equals(request.Username, StringComparison.OrdinalIgnoreCase));
     if (user is null || !passwords.Verify(request.Password, user.PasswordHash)) return Results.Unauthorized();
-    var claims = new[] { new Claim(ClaimTypes.NameIdentifier, user.Id.ToString()), new Claim(ClaimTypes.Name, user.Username), new Claim(ClaimTypes.Role, user.Role) };
+    if (user.TotpEnabled && (string.IsNullOrWhiteSpace(user.TotpSecret) || !totp.Verify(user.TotpSecret, request.Code)))
+        return Results.Json(new { error = "A valid two-factor authentication code is required.", requiresTwoFactor = true }, statusCode: 401);
+    var claims = new[] { new Claim(ClaimTypes.NameIdentifier, user.Id.ToString()), new Claim(ClaimTypes.Name, user.Username), new Claim(ClaimTypes.Role, user.Role), new Claim("session_version", user.SessionVersion.ToString()) };
     await context.SignInAsync(CookieAuthenticationDefaults.AuthenticationScheme, new ClaimsPrincipal(new ClaimsIdentity(claims, CookieAuthenticationDefaults.AuthenticationScheme)));
     return Results.Ok(new { user.Id, user.Username, user.Role });
 }).RequireRateLimiting("login");
@@ -162,8 +179,50 @@ app.MapGet("/api/auth/me", async (ClaimsPrincipal principal, JsonStore store) =>
     return user is null ? Results.Unauthorized() : Results.Ok(new
     {
         user.Username, user.Role, serverIds = user.ServerAccess?.Select(x => x.ServerId).Distinct().ToArray() ?? user.ServerIds ?? [],
-        permissions = user.Permissions ?? [], serverAccess = user.ServerAccess ?? []
+        permissions = user.Permissions ?? [], serverAccess = user.ServerAccess ?? [], twoFactorEnabled = user.TotpEnabled
     });
+}).RequireAuthorization();
+app.MapPost("/api/auth/2fa/setup", async (ClaimsPrincipal principal, JsonStore store, TotpService totp) =>
+{
+    var users = await store.ReadAsync<PanelUser>("users");
+    var index = users.FindIndex(x => x.Id.ToString() == principal.FindFirstValue(ClaimTypes.NameIdentifier));
+    if (index < 0) return Results.Unauthorized();
+    var secret = totp.GenerateSecret();
+    users[index] = users[index] with { TotpSecret = secret, TotpEnabled = false };
+    await store.WriteAsync("users", users);
+    var issuer = Uri.EscapeDataString("SCP Control");
+    var account = Uri.EscapeDataString(users[index].Username);
+    return Results.Ok(new { secret, uri = $"otpauth://totp/{issuer}:{account}?secret={secret}&issuer={issuer}" });
+}).RequireAuthorization();
+app.MapPost("/api/auth/2fa/confirm", async (TotpRequest request, ClaimsPrincipal principal, JsonStore store, TotpService totp) =>
+{
+    var users = await store.ReadAsync<PanelUser>("users");
+    var index = users.FindIndex(x => x.Id.ToString() == principal.FindFirstValue(ClaimTypes.NameIdentifier));
+    if (index < 0 || string.IsNullOrWhiteSpace(users[index].TotpSecret) || !totp.Verify(users[index].TotpSecret!, request.Code))
+        return Results.BadRequest(new { error = "The verification code is invalid." });
+    users[index] = users[index] with { TotpEnabled = true };
+    await store.WriteAsync("users", users);
+    return Results.NoContent();
+}).RequireAuthorization();
+app.MapPost("/api/auth/2fa/disable", async (TotpRequest request, ClaimsPrincipal principal, JsonStore store, TotpService totp) =>
+{
+    var users = await store.ReadAsync<PanelUser>("users");
+    var index = users.FindIndex(x => x.Id.ToString() == principal.FindFirstValue(ClaimTypes.NameIdentifier));
+    if (index < 0 || !users[index].TotpEnabled || !totp.Verify(users[index].TotpSecret ?? "", request.Code))
+        return Results.BadRequest(new { error = "The verification code is invalid." });
+    users[index] = users[index] with { TotpEnabled = false, TotpSecret = null };
+    await store.WriteAsync("users", users);
+    return Results.NoContent();
+}).RequireAuthorization();
+app.MapPost("/api/auth/sessions/revoke", async (ClaimsPrincipal principal, JsonStore store, HttpContext context) =>
+{
+    var users = await store.ReadAsync<PanelUser>("users");
+    var index = users.FindIndex(x => x.Id.ToString() == principal.FindFirstValue(ClaimTypes.NameIdentifier));
+    if (index < 0) return Results.Unauthorized();
+    users[index] = users[index] with { SessionVersion = users[index].SessionVersion + 1 };
+    await store.WriteAsync("users", users);
+    await context.SignOutAsync(CookieAuthenticationDefaults.AuthenticationScheme);
+    return Results.NoContent();
 }).RequireAuthorization();
 app.MapGet("/api/health", () => Results.Ok(new { status = "healthy", at = DateTimeOffset.UtcNow }));
 app.MapPost("/api/bridge/{serverId:guid}/heartbeat", async (
@@ -389,6 +448,24 @@ api.MapGet("/players/identity-health", async (
         if (await Can(user, store, server.Id, "players.history"))
             results.AddRange(discordLinks.Health(server));
     return Results.Ok(results);
+});
+api.MapPut("/servers/{id:guid}/players/identity-link", async (
+    Guid id, IdentityLinkRequest request, ServerManager servers, ClaimsPrincipal user, JsonStore store) =>
+{
+    if (!await Can(user, store, id, "players.notes")) return Results.Forbid();
+    if (!ulong.TryParse(request.SteamId, out _) || !ulong.TryParse(request.DiscordId, out _))
+        return Results.BadRequest(new { error = "Steam and Discord IDs must be valid numeric IDs." });
+    var server = await servers.FindAsync(id);
+    if (server is null) return Results.NotFound();
+    var path = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
+        "SCP Secret Laboratory", "LabAPI", "configs", server.QueryPort.ToString(),
+        "PlayhousePlugin", "DiscordLinks.csv");
+    Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+    var lines = File.Exists(path) ? (await File.ReadAllLinesAsync(path)).ToList() : [];
+    lines.RemoveAll(line => line.Split(',', 2)[0].Trim() == request.SteamId.Trim());
+    lines.Add($"{request.SteamId.Trim()},{request.DiscordId.Trim()}");
+    await File.WriteAllLinesAsync(path, lines);
+    return Results.NoContent();
 });
 api.MapPost("/servers/{id:guid}/player-history/{playerId:guid}/notes", async (
     Guid id, Guid playerId, PlayerNoteRequest request, PlayerDataService players,
@@ -680,7 +757,10 @@ api.MapPut("/users/me/password", async (LoginRequest request, JsonStore store, P
     var users = await store.ReadAsync<PanelUser>("users");
     var index = users.FindIndex(x => x.Id == id);
     if (index < 0) return Results.NotFound();
-    users[index] = users[index] with { PasswordHash = passwords.Hash(request.Password) };
+    users[index] = users[index] with {
+        PasswordHash = passwords.Hash(request.Password),
+        SessionVersion = users[index].SessionVersion + 1
+    };
     await store.WriteAsync("users", users);
     await audit.AddAsync(Actor(actor), "user.password", users[index].Username, "Password changed");
     return Results.NoContent();
@@ -716,6 +796,8 @@ api.MapPost("/integrations/discord/test", async (NotificationService notificatio
     await notifications.TestAsync();
     return Results.NoContent();
 }).RequireAuthorization("Owner");
+api.MapGet("/integrations/notifications/history", (int? take, NotificationService notifications) =>
+    notifications.HistoryAsync(take ?? 100)).RequireAuthorization("Owner");
 api.MapGet("/integrations/discord/bot/status", (DiscordBotService bot) =>
     Results.Ok(bot.Status)).RequireAuthorization("Owner");
 api.MapPost("/integrations/discord/bot/reconnect", (DiscordBotService bot) =>

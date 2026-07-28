@@ -14,7 +14,7 @@ import type { AuditEntry, Ban, BridgeSetup, BridgeStatus, Overview, Player, Sche
 type Page = 'overview' | 'servers' | 'server' | 'players' | 'bans' | 'schedules' | 'audit' | 'admins' | 'settings'
 type ServerTab = 'overview' | 'monitoring' | 'console' | 'players' | 'player-history' | 'activity' | 'restarts' | 'plugins' | 'files' | 'maintenance'
 type ServerAccessGrant = { serverId: string; permissions: string[] }
-type User = { username: string; role: string; serverIds: string[]; permissions: string[]; serverAccess?: ServerAccessGrant[] }
+type User = { username: string; role: string; serverIds: string[]; permissions: string[]; serverAccess?: ServerAccessGrant[]; twoFactorEnabled?: boolean }
 type ThemeMode = 'dark' | 'light' | 'system'
 const hasServerPermission = (user: User, serverId: string, permission: string) => {
   if (user.role === 'Owner') return true
@@ -110,11 +110,12 @@ function ThemeButton({ theme, setTheme }: { theme: ThemeMode; setTheme: (theme: 
 function Login({ onLogin, theme, setTheme }: { onLogin: (user: User) => void; theme: ThemeMode; setTheme: (theme: ThemeMode) => void }) {
   const [username, setUsername] = useState('')
   const [password, setPassword] = useState('')
+  const [code, setCode] = useState('')
   const [error, setError] = useState('')
   const [busy, setBusy] = useState(false)
   const submit = async (event: FormEvent) => {
     event.preventDefault(); setBusy(true); setError('')
-    try { onLogin(await api<User>('/auth/login', { method: 'POST', body: JSON.stringify({ username, password }) })) }
+    try { onLogin(await api<User>('/auth/login', { method: 'POST', body: JSON.stringify({ username, password, code }) })) }
     catch (e) { setError(e instanceof Error ? e.message : 'Login failed') }
     finally { setBusy(false) }
   }
@@ -125,6 +126,7 @@ function Login({ onLogin, theme, setTheme }: { onLogin: (user: User) => void; th
       <form onSubmit={submit}>
         <label>USERNAME<input value={username} onChange={e => setUsername(e.target.value)} autoComplete="username"/></label>
         <label>PASSWORD<input type="password" value={password} onChange={e => setPassword(e.target.value)} autoComplete="current-password"/></label>
+        <label>2FA CODE (IF ENABLED)<input inputMode="numeric" pattern="[0-9]{6}" maxLength={6} value={code} onChange={e=>setCode(e.target.value.replace(/\D/g,''))} autoComplete="one-time-code"/></label>
         {error && <p className="error">{error}</p>}
         <button className="primary wide" disabled={busy}>{busy ? 'AUTHENTICATING…' : 'AUTHENTICATE'} <ChevronRight size={17}/></button>
       </form>
@@ -202,7 +204,7 @@ function Panel({ user, onLogout, theme, setTheme }: { user: User; onLogout: () =
         {page === 'schedules' && <SchedulesPage servers={servers} onError={setError}/>}
         {page === 'audit' && <AuditPage/>}
         {page === 'admins' && <AdminManagerPage user={user} servers={servers} onError={setError}/>}
-        {page === 'settings' && <SettingsPage user={user} onError={setError}/>}
+        {page === 'settings' && <SettingsPage user={user} servers={servers} onError={setError}/>}
       </div>
     </main>
   </div>
@@ -670,6 +672,7 @@ type IntegrationSettings = {
   discordNotificationChannelId: string; steamWebApiKey: string
   discordModerationChannelId: string; discordAuditChannelId: string
   discordRoleGrants: {roleId:string;serverId:string;permissions:string[]}[]
+  discordDailyReportEnabled: boolean; discordDailyReportHourUtc: number
 }
 const defaultIntegration: IntegrationSettings = {
   discordWebhookUrl: '', notifyCrash: true, notifyRestart: true, notifyBridgeOffline: true,
@@ -684,13 +687,39 @@ const defaultIntegration: IntegrationSettings = {
   discordBotEnabled: false, discordBotToken: '', discordGuildId: '', discordControlRoleIds: '',
   discordNotificationChannelId: '', steamWebApiKey: '',
   discordModerationChannelId: '', discordAuditChannelId: '', discordRoleGrants: [],
+  discordDailyReportEnabled: false, discordDailyReportHourUtc: 12,
 }
 
-function SettingsPage({ user, onError }: { user: User; onError: (e: string) => void }) {
-  return <><PageTitle eyebrow="SYSTEM" title="Panel settings"/><section className="settings-grid"><SettingsBasePage user={user} onError={onError}/>{user.role === 'Owner' && <DiscordBotPanel onError={onError}/>} {user.role === 'Owner' && <AlertRulesPanel onError={onError}/>}</section></>
+function SettingsPage({ user, servers, onError }: { user: User; servers: Server[]; onError: (e: string) => void }) {
+  return <><PageTitle eyebrow="SYSTEM" title="Panel settings"/><section className="settings-grid"><SettingsBasePage user={user} onError={onError}/><TwoFactorPanel user={user} onError={onError}/>{user.role === 'Owner' && <DiscordBotPanel servers={servers} onError={onError}/>} {user.role === 'Owner' && <AlertRulesPanel onError={onError}/>} {user.role === 'Owner' && <NotificationHistoryPanel onError={onError}/>}</section></>
 }
 
-function DiscordBotPanel({ onError }: { onError: (e: string) => void }) {
+function TwoFactorPanel({user,onError}:{user:User;onError:(message:string)=>void}) {
+  const [setup,setSetup]=useState<{secret:string;uri:string}|null>(null)
+  const [code,setCode]=useState('')
+  return <article className="panel settings-password"><Shield size={26}/><h2>Two-factor authentication</h2><p>{user.twoFactorEnabled?'Two-factor authentication is enabled.':'Protect your account with a TOTP authenticator app.'}</p>
+    {setup&&<><label>SETUP SECRET<input readOnly value={setup.secret}/></label><small className="mono totp-uri">{setup.uri}</small></>}
+    <label>6-DIGIT CODE<input inputMode="numeric" maxLength={6} value={code} onChange={e=>setCode(e.target.value.replace(/\D/g,''))}/></label>
+    <div className="button-row">{!user.twoFactorEnabled&&!setup&&<button onClick={async()=>{try{setSetup(await api('/auth/2fa/setup',{method:'POST'}))}catch(e){onError(e instanceof Error?e.message:'Unable to begin setup')}}}>BEGIN SETUP</button>}{setup&&<button className="primary" onClick={async()=>{try{await api('/auth/2fa/confirm',{method:'POST',body:JSON.stringify({code})});location.reload()}catch(e){onError(e instanceof Error?e.message:'Invalid code')}}}>ENABLE 2FA</button>}{user.twoFactorEnabled&&<button className="danger" onClick={async()=>{try{await api('/auth/2fa/disable',{method:'POST',body:JSON.stringify({code})});location.reload()}catch(e){onError(e instanceof Error?e.message:'Invalid code')}}}>DISABLE 2FA</button>}<button className="danger" onClick={async()=>{if(!confirm('Sign out every session for this account?'))return;await api('/auth/sessions/revoke',{method:'POST'});location.reload()}}>REVOKE ALL SESSIONS</button></div>
+  </article>
+}
+
+function NotificationHistoryPanel({onError}:{onError:(message:string)=>void}) {
+  type Delivery={id:string;at:string;category:string;severity:string;title:string;channelId:string;status:string;attempts:number;error?:string}
+  const [items,setItems]=useState<Delivery[]>([])
+  const load=()=>api<Delivery[]>('/integrations/notifications/history?take=50').then(setItems).catch(e=>onError(e.message))
+  useEffect(()=>{void load()},[])
+  return <article className="panel settings-alerts notification-history"><Activity size={26}/><div className="panel-head"><div><h2>Notification delivery</h2><p>Recent Discord deliveries, retry counts, and failures.</p></div><button onClick={load}><RefreshCw size={13}/> REFRESH</button></div><div className="notification-list">{items.map(item=><div key={item.id}><span className={`tag ${item.status==='failed'?'red':''}`}>{item.status}</span><strong>{item.title}</strong><small>{item.category} · {new Date(item.at).toLocaleString()} · {item.attempts} attempt{item.attempts===1?'':'s'}</small>{item.error&&<code>{item.error}</code>}</div>)}</div>{!items.length&&<EmptyMini text="No Discord notifications have been attempted yet."/>}</article>
+}
+
+const discordPermissions = [
+  ['view','View server'],['server.start','Start server'],['server.stop','Stop server'],
+  ['server.restart','Restart server'],['announcements','Announcements'],['players','View players'],
+  ['players.history','Player profiles'],['players.notes','Player notes'],['players.actions','Player flags'],
+  ['players.mute','Mute players'],['players.kick','Kick players'],['players.ban','Ban players'],
+] as const
+
+function DiscordBotPanel({ servers, onError }: { servers: Server[]; onError: (e: string) => void }) {
   const [settings,setSettings] = useState<IntegrationSettings | null>(null)
   const [status,setStatus] = useState<{enabled:boolean;connected:boolean;botName:string|null;error:string|null}|null>(null)
   const load = useCallback(() => Promise.all([
@@ -699,6 +728,8 @@ function DiscordBotPanel({ onError }: { onError: (e: string) => void }) {
   ]).catch(e => onError(e.message)), [onError])
   useEffect(() => { void load(); const timer=setInterval(load,10000); return () => clearInterval(timer) }, [load])
   if (!settings) return null
+  const addGrant=()=>setSettings({...settings,discordRoleGrants:[...(settings.discordRoleGrants ?? []),{roleId:'',serverId:servers[0]?.id ?? '',permissions:['view']}]})
+  const updateGrant=(index:number,patch:Partial<IntegrationSettings['discordRoleGrants'][number]>)=>setSettings({...settings,discordRoleGrants:settings.discordRoleGrants.map((grant,i)=>i===index?{...grant,...patch}:grant)})
   return <form className="panel settings-alerts discord-settings" onSubmit={async e => {
     e.preventDefault()
     try { await api('/integrations',{method:'PUT',body:JSON.stringify(settings)}); setTimeout(load,1200) }
@@ -708,7 +739,14 @@ function DiscordBotPanel({ onError }: { onError: (e: string) => void }) {
     <p><span className={`status-dot ${status?.connected ? '' : 'off'}`}/>{status?.connected ? `Connected as ${status.botName}` : status?.error || 'Not connected'}</p>
     <label className="check-row"><input type="checkbox" checked={settings.discordBotEnabled} onChange={e=>setSettings({...settings,discordBotEnabled:e.target.checked})}/> Enable embedded Discord bot</label>
     <div className="form-row"><label>BOT TOKEN<input type="password" value={settings.discordBotToken} onChange={e=>setSettings({...settings,discordBotToken:e.target.value})}/></label><label>GUILD ID<input value={settings.discordGuildId} onChange={e=>setSettings({...settings,discordGuildId:e.target.value.trim()})}/></label><label>TECHNICAL CHANNEL ID<input value={settings.discordNotificationChannelId} onChange={e=>setSettings({...settings,discordNotificationChannelId:e.target.value.trim()})}/></label><label>MODERATION CHANNEL ID<input value={settings.discordModerationChannelId} onChange={e=>setSettings({...settings,discordModerationChannelId:e.target.value.trim()})}/></label><label>AUDIT CHANNEL ID<input value={settings.discordAuditChannelId} onChange={e=>setSettings({...settings,discordAuditChannelId:e.target.value.trim()})}/></label><label>FULL CONTROL ROLE IDS<input value={settings.discordControlRoleIds} onChange={e=>setSettings({...settings,discordControlRoleIds:e.target.value})} placeholder="123…, 456…"/></label><label>STEAM WEB API KEY<input type="password" value={settings.steamWebApiKey} onChange={e=>setSettings({...settings,steamWebApiKey:e.target.value})}/></label></div>
-    <label>ROLE PERMISSION MAP<textarea value={(settings.discordRoleGrants ?? []).map(grant=>`${grant.roleId}:${grant.serverId}:${grant.permissions.join(',')}`).join('\n')} onChange={e=>setSettings({...settings,discordRoleGrants:e.target.value.split('\n').map(line=>{const [roleId,serverId,permissions='']=line.split(':');return {roleId:roleId.trim(),serverId,permissions:permissions.split(',').map(x=>x.trim()).filter(Boolean)}}).filter(x=>x.roleId&&x.serverId)})} placeholder="roleId:serverId:players.kick,players.mute&#10;roleId:serverId:server.restart"/></label>
+    <div className="form-row"><label className="check-row"><input type="checkbox" checked={settings.discordDailyReportEnabled} onChange={e=>setSettings({...settings,discordDailyReportEnabled:e.target.checked})}/> Send daily fleet report</label><label>REPORT HOUR (UTC)<input type="number" min={0} max={23} value={settings.discordDailyReportHourUtc} onChange={e=>setSettings({...settings,discordDailyReportHourUtc:Number(e.target.value)})}/></label></div>
+    <div className="role-grant-editor"><div className="panel-head"><div><span className="eyebrow">PER-SERVER ACCESS</span><h3>Discord role permissions</h3></div><button type="button" onClick={addGrant}>ADD ROLE</button></div>
+      {settings.discordRoleGrants.map((grant,index)=><section className="role-grant-card" key={index}>
+        <div className="form-row"><label>ROLE ID<input value={grant.roleId} onChange={e=>updateGrant(index,{roleId:e.target.value.trim()})}/></label><label>SERVER<select value={grant.serverId} onChange={e=>updateGrant(index,{serverId:e.target.value})}>{servers.map(server=><option value={server.id} key={server.id}>{server.name}</option>)}</select></label><button type="button" className="danger" onClick={()=>setSettings({...settings,discordRoleGrants:settings.discordRoleGrants.filter((_,i)=>i!==index)})}>REMOVE</button></div>
+        <div className="permission-chip-grid">{discordPermissions.map(([value,label])=><label className="check-row" key={value}><input type="checkbox" checked={grant.permissions.includes(value)} onChange={()=>updateGrant(index,{permissions:grant.permissions.includes(value)?grant.permissions.filter(x=>x!==value):[...grant.permissions,value]})}/>{label}</label>)}</div>
+      </section>)}
+      {!settings.discordRoleGrants.length && <p className="muted">No limited role grants. Add a role to give it specific permissions on one server.</p>}
+    </div>
     <p>Commands: <code>/scp status</code>, <code>players</code>, <code>player</code>, <code>kick</code>, <code>mute</code>, <code>ban</code>, <code>start</code>, <code>stop</code>, <code>restart</code>, and <code>announce</code>. Stop, restart, and moderation commands require explicit confirmation.</p>
     <div className="button-row"><button className="primary">SAVE BOT SETTINGS</button><button type="button" onClick={async()=>{try{await api('/integrations/discord/bot/reconnect',{method:'POST'});setTimeout(load,1200)}catch(error){onError(error instanceof Error ? error.message : 'Unable to reconnect bot')}}}>RECONNECT BOT</button></div>
   </form>
