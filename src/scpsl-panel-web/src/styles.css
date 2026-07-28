@@ -307,3 +307,32 @@ table { width:100%; border-collapse:collapse; font-size:12.5px } th { text-align
 .admin-modal-v2 .admin-modal-actions{position:relative;padding:15px 24px;border-top:1px solid var(--line);background:var(--surface);display:flex;align-items:center;gap:10px}.admin-modal-actions>div{margin-right:auto}.admin-modal-actions>div strong,.admin-modal-actions>div span{display:block}.admin-modal-actions>div span{color:var(--muted);font-size:10px;margin-top:3px}
 @media(max-width:850px){.admin-modal-v2-backdrop{padding:8px}.admin-modal.admin-modal-v2{width:calc(100vw - 16px);height:calc(100vh - 16px)}.admin-modal-v2 .admin-scope-grid{grid-template-columns:1fr}.admin-server-selector,.admin-permission-selector{min-height:0}.permission-group>div{grid-template-columns:1fr}.admin-account-section .form-row,.account-enabled-card{margin-left:0}.admin-modal-v2 .admin-modal-head,.admin-account-section,.admin-access-section{padding:19px}.admin-modal-actions>div{display:none}}
 .admin-manager-card{max-width:1440px}.admin-manager-head{padding:28px 30px}.admin-manager-head h2{font-size:21px}.admin-table-wrap{padding:18px 30px 30px}.admin-table td{height:80px}.admin-identity .avatar{width:40px;height:40px}.admin-actions button{min-width:62px}
+
+/* Full-canvas admin editor sizing */
+.admin-modal-v2-backdrop{padding:14px!important;align-items:stretch!important}
+.admin-modal.admin-modal-v2{position:relative;width:min(1500px,calc(100vw - 28px))!important;height:calc(100vh - 28px)!important;margin:auto;max-width:none!important}
+.admin-modal-v2 .admin-modal-body{min-width:0;overflow:hidden!important;display:flex;flex-direction:column}
+.admin-modal-v2 .admin-account-section{flex:none;padding:18px 28px}
+.admin-modal-v2 .admin-account-section .admin-section-title{margin-bottom:12px}
+.admin-modal-v2 .admin-account-section .form-row{display:grid;grid-template-columns:minmax(220px,1fr) minmax(220px,1fr) auto;max-width:none;margin:0;align-items:end;gap:12px}
+.admin-modal-v2 .admin-account-section .form-row:after{content:"";display:block}
+.admin-modal-v2 .admin-account-section label{margin:0}
+.admin-modal-v2 .account-enabled-card{position:absolute;right:32px;top:106px;margin:0}
+.admin-modal-v2 .admin-access-section{flex:1;min-height:0;padding:18px 28px 22px;display:flex;flex-direction:column}
+.admin-modal-v2 .admin-access-section>.admin-section-title{flex:none;margin-bottom:13px}
+.admin-modal-v2 .admin-scope-grid{width:100%;max-width:none;min-width:0;min-height:0;flex:1;display:grid;grid-template-columns:minmax(250px,300px) minmax(0,1fr)!important;gap:14px}
+.admin-modal-v2 .admin-server-selector,.admin-modal-v2 .admin-permission-selector{width:100%;min-width:0;min-height:0;height:100%;overflow:auto}
+.admin-modal-v2 .admin-permission-selector{display:flex;flex-direction:column;padding:16px 18px}
+.admin-modal-v2 .permission-selector-head{flex:none}.admin-modal-v2 .permission-selector-head h3{margin:2px 0;font-size:18px}
+.admin-modal-v2 .permission-presets{flex:none;margin:10px 0;padding:9px 0}
+.admin-modal-v2 .permission-tools{flex:none;margin-bottom:10px}.admin-modal-v2 .permission-tools label{margin:0;min-height:39px}
+.admin-modal-v2 .permission-groups{min-width:0;display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:9px;align-content:start}
+.admin-modal-v2 .permission-group{min-width:0;height:max-content}
+.admin-modal-v2 .permission-group header{min-height:55px;padding:9px 11px}
+.admin-modal-v2 .permission-group>div{grid-template-columns:repeat(2,minmax(0,1fr));gap:1px}
+.admin-modal-v2 .permission-option{margin:0!important;min-width:0;min-height:58px;padding:9px 11px;grid-template-columns:18px minmax(0,1fr) auto}
+.admin-modal-v2 .permission-option span{min-width:0}.admin-modal-v2 .permission-option strong{font-size:11px;line-height:1.25}.admin-modal-v2 .permission-option code{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.admin-modal-v2 .permission-option em{font-size:6px}
+@media(min-width:1350px){.admin-modal-v2 .permission-groups{grid-template-columns:repeat(3,minmax(0,1fr))}.admin-modal-v2 .permission-group>div{grid-template-columns:1fr}}
+@media(max-width:1050px){.admin-modal-v2 .admin-scope-grid{grid-template-columns:230px minmax(0,1fr)!important}.admin-modal-v2 .permission-groups{grid-template-columns:1fr}.admin-modal-v2 .account-enabled-card{position:static;margin-top:10px}.admin-modal-v2 .admin-account-section .form-row{grid-template-columns:1fr 1fr}.admin-modal-v2 .admin-account-section .form-row:after{display:none}}
+@media(max-width:720px){.admin-modal-v2-backdrop{padding:0!important}.admin-modal.admin-modal-v2{width:100vw!important;height:100vh!important;border-radius:0}.admin-modal-v2 .admin-modal-body{overflow:auto!important}.admin-modal-v2 .admin-scope-grid{display:flex;flex-direction:column}.admin-modal-v2 .admin-server-selector,.admin-modal-v2 .admin-permission-selector{height:auto;overflow:visible}.admin-modal-v2 .admin-account-section .form-row{grid-template-columns:1fr}.admin-modal-v2 .permission-group>div{grid-template-columns:1fr}.admin-modal-v2 .admin-modal-actions{position:sticky;bottom:0}}
