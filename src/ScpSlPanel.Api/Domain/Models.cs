@@ -45,6 +45,8 @@ public sealed record LoginRequest(string Username, string Password);
 public sealed record CommandRequest(string Command);
 public sealed record ModerationRequest(string PlayerId, string? Reason, int? DurationMinutes);
 public sealed record ConfigFileRequest(string Content);
+public sealed record PluginActionRequest(string Path, string Action);
+public sealed record PluginConfigRequest(string Path, string Content);
 public sealed record ScheduleRequest(Guid ServerId, string Name, string Cron, string Action, bool Enabled);
 public sealed record BridgePlayerReport(int PlayerId, string DisplayName, string UserId, string IpAddress, string Role);
 public sealed record BridgeHeartbeat(string BridgeVersion, string ApiVersion, string RoundState, int MaxPlayers, IReadOnlyList<BridgePlayerReport> Players);

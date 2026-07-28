@@ -70,6 +70,41 @@ app.UseAuthentication();
 app.UseAuthorization();
 
 static string Actor(ClaimsPrincipal user) => user.Identity?.Name ?? "unknown";
+static IReadOnlyList<(string Framework, string Path)> PluginRoots(ServerDefinition server)
+{
+    var appData = Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData);
+    return
+    [
+        ("EXILED", Path.Combine(server.WorkingDirectory, "EXILED", "Plugins")),
+        ("NWAPI", Path.Combine(server.WorkingDirectory, "PluginAPI", "plugins")),
+        ("LabAPI", Path.Combine(server.WorkingDirectory, "AppData", "SCP Secret Laboratory", "LabAPI", "plugins")),
+        ("LabAPI", Path.Combine(appData, "SCP Secret Laboratory", "LabAPI", "plugins"))
+    ];
+}
+
+static IReadOnlyList<string> PluginConfigRoots(ServerDefinition server)
+{
+    var appData = Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData);
+    return
+    [
+        Path.Combine(server.WorkingDirectory, "EXILED", "Configs"),
+        Path.Combine(server.WorkingDirectory, "PluginAPI", "configs"),
+        Path.Combine(server.WorkingDirectory, "AppData", "SCP Secret Laboratory", "LabAPI", "configs", server.QueryPort.ToString()),
+        Path.Combine(appData, "SCP Secret Laboratory", "LabAPI", "configs", server.QueryPort.ToString())
+    ];
+}
+
+static string EnsurePathInRoots(string requestedPath, IEnumerable<string> roots)
+{
+    var fullPath = Path.GetFullPath(requestedPath);
+    var valid = roots.Where(Directory.Exists).Any(root =>
+        fullPath.StartsWith(Path.GetFullPath(root) + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase));
+    if (!valid) throw new ArgumentException("The requested plugin file is outside this server's plugin directories.");
+    return fullPath;
+}
+
+static string NormalizePluginName(string value) =>
+    string.Concat(value.Where(char.IsLetterOrDigit)).ToLowerInvariant();
 
 app.MapPost("/api/auth/login", async (LoginRequest request, JsonStore store, PasswordService passwords, HttpContext context) =>
 {
@@ -210,22 +245,86 @@ api.MapGet("/plugins/{serverId:guid}", async (Guid serverId, ServerManager serve
 {
     var server = await servers.FindAsync(serverId);
     if (server is null) return Results.NotFound();
-    var labApiRoots = new[]
-    {
-        Path.Combine(server.WorkingDirectory, "AppData", "SCP Secret Laboratory", "LabAPI", "plugins"),
-        Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "SCP Secret Laboratory", "LabAPI", "plugins")
-    };
-    var roots = new List<(string Framework, string Path)>
-    {
-        ("EXILED", Path.Combine(server.WorkingDirectory, "EXILED", "Plugins")),
-        ("NWAPI", Path.Combine(server.WorkingDirectory, "PluginAPI", "plugins"))
-    };
-    roots.AddRange(labApiRoots.Select(path => ("LabAPI", path)));
-    var plugins = roots.Where(x => Directory.Exists(x.Path)).SelectMany(x =>
-        Directory.EnumerateFiles(x.Path, "*.dll", SearchOption.AllDirectories)
-        .Select(path => new PluginEntry(Path.GetFileNameWithoutExtension(path), "unknown", x.Item1, true, path))).ToList();
-    return Results.Ok(plugins.DistinctBy(plugin => plugin.Path));
+    var configFiles = PluginConfigRoots(server).Where(Directory.Exists)
+        .SelectMany(root => Directory.EnumerateFiles(root, "*.*", SearchOption.AllDirectories))
+        .Where(path => path.EndsWith(".yml", StringComparison.OrdinalIgnoreCase)
+            || path.EndsWith(".yaml", StringComparison.OrdinalIgnoreCase)
+            || path.EndsWith(".json", StringComparison.OrdinalIgnoreCase)
+            || path.EndsWith(".txt", StringComparison.OrdinalIgnoreCase)).ToList();
+    var plugins = PluginRoots(server).Where(x => Directory.Exists(x.Path)).SelectMany(x =>
+        Directory.EnumerateFiles(x.Path, "*", SearchOption.AllDirectories)
+        .Where(path => path.EndsWith(".dll", StringComparison.OrdinalIgnoreCase)
+            || path.EndsWith(".dll.disabled", StringComparison.OrdinalIgnoreCase))
+        .Select(path =>
+        {
+            var enabled = path.EndsWith(".dll", StringComparison.OrdinalIgnoreCase);
+            var dllPath = enabled ? path : path[..^".disabled".Length];
+            var name = Path.GetFileNameWithoutExtension(dllPath);
+            string version;
+            try { version = System.Reflection.AssemblyName.GetAssemblyName(path).Version?.ToString() ?? "unknown"; }
+            catch { version = "unknown"; }
+            var normalizedName = NormalizePluginName(name);
+            var config = configFiles.FirstOrDefault(file =>
+                NormalizePluginName(Path.GetFileNameWithoutExtension(file)).Contains(normalizedName)
+                || NormalizePluginName(Path.GetDirectoryName(file) ?? "").Contains(normalizedName));
+            return new { name, version, framework = x.Framework, enabled, path, configPath = config };
+        })).ToList();
+    return Results.Ok(plugins.DistinctBy(plugin => plugin.path));
 });
+api.MapPost("/plugins/{serverId:guid}/action", async (
+    Guid serverId, PluginActionRequest request, ServerManager servers, AuditService audit, ClaimsPrincipal user) =>
+{
+    var server = await servers.FindAsync(serverId);
+    if (server is null) return Results.NotFound();
+    var path = EnsurePathInRoots(request.Path, PluginRoots(server).Select(x => x.Path));
+    var action = request.Action.Trim().ToLowerInvariant();
+    if (action is not ("load" or "unload" or "restart"))
+        return Results.BadRequest(new { error = "Action must be load, unload, or restart." });
+
+    if (action == "restart")
+    {
+        if (!File.Exists(path)) return Results.NotFound();
+        await servers.RestartAsync(serverId, Actor(user));
+    }
+    else
+    {
+        if (!File.Exists(path)) return Results.NotFound();
+        await servers.StopAsync(serverId, Actor(user), force: true);
+        try
+        {
+            if (action == "unload" && path.EndsWith(".dll", StringComparison.OrdinalIgnoreCase))
+                File.Move(path, path + ".disabled");
+            else if (action == "load" && path.EndsWith(".dll.disabled", StringComparison.OrdinalIgnoreCase))
+                File.Move(path, path[..^".disabled".Length]);
+        }
+        finally
+        {
+            await servers.StartAsync(serverId, Actor(user));
+        }
+    }
+    await audit.AddAsync(Actor(user), $"plugin.{action}", Path.GetFileName(path), "Applied with a clean server restart");
+    return Results.Ok(new { restarted = true });
+}).RequireAuthorization("Owner");
+api.MapGet("/plugins/{serverId:guid}/config", async (Guid serverId, string path, ServerManager servers) =>
+{
+    var server = await servers.FindAsync(serverId);
+    if (server is null) return Results.NotFound();
+    var safePath = EnsurePathInRoots(path, PluginConfigRoots(server));
+    return File.Exists(safePath)
+        ? Results.Ok(new { path = safePath, content = await File.ReadAllTextAsync(safePath) })
+        : Results.NotFound();
+});
+api.MapPut("/plugins/{serverId:guid}/config", async (
+    Guid serverId, PluginConfigRequest request, ServerManager servers, AuditService audit, ClaimsPrincipal user) =>
+{
+    var server = await servers.FindAsync(serverId);
+    if (server is null) return Results.NotFound();
+    var safePath = EnsurePathInRoots(request.Path, PluginConfigRoots(server));
+    if (!File.Exists(safePath)) return Results.NotFound();
+    await File.WriteAllTextAsync(safePath, request.Content);
+    await audit.AddAsync(Actor(user), "plugin.config", Path.GetFileName(safePath), "Configuration saved");
+    return Results.NoContent();
+}).RequireAuthorization("Owner");
 api.MapGet("/users", (JsonStore store) => store.ReadAsync<PanelUser>("users")).RequireAuthorization("Owner");
 api.MapPost("/users", async (LoginRequest request, JsonStore store, PasswordService passwords, AuditService audit, ClaimsPrincipal actor) =>
 {

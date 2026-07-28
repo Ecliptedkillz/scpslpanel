@@ -1,4 +1,4 @@
-import { FormEvent, useCallback, useEffect, useState } from 'react'
+import { FormEvent, useCallback, useEffect, useRef, useState } from 'react'
 import {
   Activity, ArrowLeft, Ban as BanIcon, CalendarClock, ChevronRight, CircleGauge, Command,
   FileCode2, FolderOpen, Gamepad2, History, LayoutDashboard, LogOut, Menu, Play, Plug, Save,
@@ -273,7 +273,7 @@ function ServerWorkspace({ server, tab, setTab, refresh, back, onError }: { serv
       {tab === 'overview' && <ServerOverview server={server} setTab={setTab}/>}
       {tab === 'console' && <ConsolePage servers={[server]} selected={server.id} setSelected={() => {}} onError={onError} embedded/>}
       {tab === 'players' && <ServerPlayers server={server} onError={onError}/>}
-      {tab === 'plugins' && <PluginsPage servers={[server]} selected={server.id} setSelected={() => {}} embedded/>}
+      {tab === 'plugins' && <PluginsPage servers={[server]} selected={server.id} setSelected={() => {}} onError={onError} embedded/>}
       {tab === 'files' && <ServerFiles server={server} onError={onError}/>}
     </div>
   </>
@@ -373,6 +373,7 @@ function ServerFiles({ server, onError }: { server: Server; onError: (error: str
 function ConsolePage({ servers, selected, setSelected, onError, embedded = false }: { servers: Server[]; selected: string | null; setSelected: (id: string) => void; onError: (e: string) => void; embedded?: boolean }) {
   const [lines, setLines] = useState<{ at: string; stream: string; line: string }[]>([])
   const [command, setCommand] = useState('')
+  const outputRef = useRef<HTMLDivElement>(null)
   const server = servers.find(x => x.id === selected)
   const submit = async (event: FormEvent) => {
     event.preventDefault(); if (!selected || !command.trim()) return
@@ -387,14 +388,20 @@ function ConsolePage({ servers, selected, setSelected, onError, embedded = false
       if (disposed) return
       connection = new HubConnectionBuilder().withUrl('/hub/panel').withAutomaticReconnect().configureLogging(LogLevel.Warning).build()
       connection.on('ConsoleLine', line => setLines(old => [...old.slice(-499), line]))
+      connection.on('ServerChanged', () => {})
+      connection.on('BridgeChanged', () => {})
       connection.start().then(() => connection?.invoke('JoinServer', selected)).catch(() => {})
     })
     return () => { disposed = true; connection?.stop() }
   }, [selected])
+  useEffect(() => {
+    const output = outputRef.current
+    if (output) output.scrollTop = output.scrollHeight
+  }, [lines])
   return <>
     {!embedded && <PageTitle eyebrow="REAL-TIME OPERATIONS" title="Live console"><select value={selected ?? ''} onChange={e => { setSelected(e.target.value); setLines([]) }}><option value="">Select server</option>{servers.map(x => <option key={x.id} value={x.id}>{x.name}</option>)}</select></PageTitle>}
     <section className="console-panel"><div className="console-toolbar"><div><span className={`status-dot ${server?.state !== 'online' ? 'off' : ''}`}/>{server?.name ?? 'NO SERVER SELECTED'} <small>{fmtState(server?.state)}</small></div><button onClick={() => setLines([])}>CLEAR</button></div>
-      <div className="console-output">{lines.length ? lines.map((line, i) => <div key={i} className={line.stream}><time>{new Date(line.at).toLocaleTimeString()}</time><span>{line.line}</span></div>) : <div className="console-placeholder"><Terminal size={28}/><span>Console output will stream here.</span></div>}</div>
+      <div className="console-output" ref={outputRef}>{lines.length ? lines.map((line, i) => <div key={i} className={line.stream}><time>{new Date(line.at).toLocaleTimeString()}</time><span>{line.line}</span></div>) : <div className="console-placeholder"><Terminal size={28}/><span>Console output will stream here.</span></div>}</div>
       <form className="command-line" onSubmit={submit}><span>RA &gt;</span><input disabled={!server || server.state !== 'online'} value={command} onChange={e => setCommand(e.target.value)} placeholder={server?.state === 'online' ? 'Enter server command…' : 'Server is offline'}/><button disabled={!command.trim()}>EXECUTE</button></form>
     </section>
   </>
@@ -428,11 +435,42 @@ function SchedulesPage({ servers, onError }: { servers: Server[]; onError: (e: s
   </>
 }
 
-function PluginsPage({ servers, selected, setSelected, embedded = false }: { servers: Server[]; selected: string | null; setSelected: (id: string) => void; embedded?: boolean }) {
-  const [plugins, setPlugins] = useState<{ name: string; version: string; framework: string; path: string }[]>([])
-  useEffect(() => { if (selected) api<typeof plugins>(`/plugins/${selected}`).then(setPlugins).catch(() => setPlugins([])) }, [selected])
+function PluginsPage({ servers, selected, setSelected, onError, embedded = false }: { servers: Server[]; selected: string | null; setSelected: (id: string) => void; onError: (e: string) => void; embedded?: boolean }) {
+  type Plugin = { name: string; version: string; framework: string; enabled: boolean; path: string; configPath?: string }
+  const [plugins, setPlugins] = useState<Plugin[]>([])
+  const [busy, setBusy] = useState('')
+  const [config, setConfig] = useState<{ plugin: string; path: string; content: string } | null>(null)
+  const load = useCallback(() => {
+    if (selected) api<Plugin[]>(`/plugins/${selected}`).then(setPlugins).catch(e => onError(e.message))
+  }, [selected])
+  useEffect(() => { load() }, [load])
+  const action = async (plugin: Plugin, name: 'load' | 'unload' | 'restart') => {
+    if (!selected || !window.confirm(`${name.toUpperCase()} ${plugin.name}? This performs a clean game-server restart.`)) return
+    setBusy(plugin.path)
+    try {
+      await api(`/plugins/${selected}/action`, { method: 'POST', body: JSON.stringify({ path: plugin.path, action: name }) })
+      load()
+    } catch (e) { onError(e instanceof Error ? e.message : 'Plugin action failed') }
+    finally { setBusy('') }
+  }
+  const openConfig = async (plugin: Plugin) => {
+    if (!selected || !plugin.configPath) return
+    try {
+      const value = await api<{ path: string; content: string }>(`/plugins/${selected}/config?path=${encodeURIComponent(plugin.configPath)}`)
+      setConfig({ plugin: plugin.name, ...value })
+    } catch (e) { onError(e instanceof Error ? e.message : 'Unable to open plugin configuration') }
+  }
+  const saveConfig = async () => {
+    if (!selected || !config) return
+    setBusy(config.path)
+    try {
+      await api(`/plugins/${selected}/config`, { method: 'PUT', body: JSON.stringify({ path: config.path, content: config.content }) })
+    } catch (e) { onError(e instanceof Error ? e.message : 'Unable to save plugin configuration') }
+    finally { setBusy('') }
+  }
   return <>{!embedded && <PageTitle eyebrow="EXTENSIONS" title="Plugin inventory"><select value={selected ?? ''} onChange={e => setSelected(e.target.value)}><option value="">Select server</option>{servers.map(x => <option value={x.id} key={x.id}>{x.name}</option>)}</select></PageTitle>}
-    <Table headers={['PLUGIN','FRAMEWORK','VERSION','LOCATION']}>{plugins.map(x => <tr key={x.path}><td><strong>{x.name}</strong></td><td><span className="tag">{x.framework}</span></td><td>{x.version}</td><td className="mono">{x.path}</td></tr>)}</Table>{!plugins.length && <EmptyPage icon={Plug} title="No plugins detected" text="EXILED and NWAPI plugin folders are scanned automatically."/>}
+    <Table headers={['PLUGIN','FRAMEWORK','VERSION','STATUS','ACTIONS']}>{plugins.map(x => <tr key={x.path}><td><strong>{x.name}</strong><small className="mono">{x.path}</small></td><td><span className="tag">{x.framework}</span></td><td>{x.version}</td><td><span className={`tag ${x.enabled ? '' : 'red'}`}>{x.enabled ? 'LOADED' : 'UNLOADED'}</span></td><td><div className="row-actions"><button disabled={busy === x.path} onClick={() => action(x, x.enabled ? 'unload' : 'load')}>{x.enabled ? 'UNLOAD' : 'LOAD'}</button><button disabled={busy === x.path || !x.enabled} onClick={() => action(x, 'restart')}><RefreshCw size={11}/> RESTART</button><button disabled={!x.configPath} onClick={() => openConfig(x)}><FileCode2 size={11}/> CONFIG</button></div></td></tr>)}</Table>{!plugins.length && <EmptyPage icon={Plug} title="No plugins detected" text="LabAPI, EXILED and NWAPI plugin folders are scanned automatically."/>}
+    {config && <section className="plugin-config"><div className="plugin-config-head"><div><span className="eyebrow">PLUGIN CONFIGURATION</span><h2>{config.plugin}</h2><small className="mono">{config.path}</small></div><button className="icon-button" onClick={() => setConfig(null)}><X size={16}/></button></div><textarea className="code-editor" value={config.content} onChange={e => setConfig({ ...config, content: e.target.value })} spellCheck={false}/><div className="plugin-config-actions"><span>Save changes, then restart the plugin to apply them.</span><button className="primary" disabled={busy === config.path} onClick={saveConfig}><Save size={14}/> SAVE CONFIG</button></div></section>}
   </>
 }
 
