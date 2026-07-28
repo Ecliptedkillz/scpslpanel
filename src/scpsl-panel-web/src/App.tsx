@@ -76,11 +76,25 @@ const fmtAgo = (value: string) => {
 const formatPlaytime = (seconds: number) => seconds >= 3600
   ? `${Math.floor(seconds / 3600)}h ${Math.floor(seconds % 3600 / 60)}m`
   : `${Math.floor(seconds / 60)}m`
+function ServerGlyph({server,size=22}:{server:Pick<Server,'icon'|'accentColor'>;size?:number}){
+  const props={size,style:{color:server.accentColor||'var(--red)'}}
+  return server.icon==='shield'?<Shield {...props}/>:server.icon==='activity'?<Activity {...props}/>:server.icon==='server'?<ServerIcon {...props}/>:<Gamepad2 {...props}/>
+}
+function useConfirmDialog(){
+  const [request,setRequest]=useState<{title:string;message:string;confirm:string;danger:boolean;resolve:(value:boolean)=>void}|null>(null)
+  const ask=(title:string,message:string,confirm='CONFIRM',danger=true)=>new Promise<boolean>(resolve=>setRequest({title,message,confirm,danger,resolve}))
+  const close=(value:boolean)=>{request?.resolve(value);setRequest(null)}
+  const dialog=request?<div className="modal-backdrop confirm-backdrop"><article className="modal confirm-dialog"><div className={`confirm-symbol ${request.danger?'danger':''}`}><Shield size={24}/></div><span className="eyebrow">CONFIRM ACTION</span><h2>{request.title}</h2><p>{request.message}</p><footer><button onClick={()=>close(false)}>CANCEL</button><button className={request.danger?'danger solid':'primary'} onClick={()=>close(true)}>{request.confirm}</button></footer></article></div>:null
+  return {ask,dialog}
+}
 
 export function App() {
   const [theme, setTheme] = useState<ThemeMode>(() => (localStorage.getItem('scpcontrol-theme') as ThemeMode) || 'dark')
   const [user, setUser] = useState<User | null | undefined>(undefined)
   useEffect(() => {
+    document.documentElement.dataset.density=localStorage.getItem('scpcontrol-density')||'comfortable'
+    const accent=localStorage.getItem('scpcontrol-accent')
+    if(accent) document.documentElement.style.setProperty('--red',accent)
     const apply = () => {
       const resolved = theme === 'system'
         ? (window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark') : theme
@@ -246,11 +260,12 @@ function OverviewPage({ data, navigatePage, openServer }: { data: Overview | nul
 function ServersPage({ user, servers, refresh, openServer, onError }: { user: User; servers: Server[]; refresh: () => void; openServer: (id: string) => void; onError: (e: string) => void }) {
   const [modal, setModal] = useState(false)
   const [busyServer, setBusyServer] = useState<string | null>(null)
+  const confirmation=useConfirmDialog()
   const action = async (id: string, name: string) => {
     if (busyServer) return
     const server = servers.find(item => item.id === id)
-    if (name === 'restart' && !window.confirm(`Restart ${server?.name ?? 'this server'}? Connected players may be disconnected.`)) return
-    if (name === 'stop' && !window.confirm(`Stop ${server?.name ?? 'this server'}? The panel will request a graceful shutdown.`)) return
+    if (name === 'restart' && !await confirmation.ask('Restart server?',`Restart ${server?.name ?? 'this server'}? Connected players may be disconnected.`,'RESTART SERVER')) return
+    if (name === 'stop' && !await confirmation.ask('Stop server?',`Stop ${server?.name ?? 'this server'}? The panel will request a graceful shutdown.`,'STOP SERVER')) return
     setBusyServer(id)
     try { await api(`/servers/${id}/${name}`, { method: 'POST' }); await refresh() }
     catch (e) { onError(e instanceof Error ? e.message : 'Action failed') }
@@ -266,11 +281,12 @@ function ServersPage({ user, servers, refresh, openServer, onError }: { user: Us
     </article>)}</div>
     {!servers.length && <EmptyPage icon={ServerIcon} title="No servers registered" text="Connect your first SCP:SL dedicated server to begin operations."><button className="primary" onClick={() => setModal(true)}><Plus size={16}/> REGISTER SERVER</button></EmptyPage>}
     {modal && <AddServerModal close={() => setModal(false)} saved={() => { setModal(false); refresh() }} onError={onError}/>}
+    {confirmation.dialog}
   </>
 }
 
 function AddServerModal({ close, saved, onError }: { close: () => void; saved: () => void; onError: (e: string) => void }) {
-  const [form, setForm] = useState({ name: '', executablePath: '', arguments: '', workingDirectory: '', queryPort: 7777, autoRestart: true, autoStart: false, updateCommand: '' })
+  const [form, setForm] = useState({ name: '', executablePath: '', arguments: '', workingDirectory: '', queryPort: 7777, autoRestart: true, autoStart: false, updateCommand: '', icon:'gamepad', accentColor:'#e44343' })
   const submit = async (e: FormEvent) => {
     e.preventDefault()
     try { await api('/servers', { method: 'POST', body: JSON.stringify(form) }); saved() }
@@ -278,6 +294,7 @@ function AddServerModal({ close, saved, onError }: { close: () => void; saved: (
   }
   return <div className="modal-backdrop" onMouseDown={e => e.target === e.currentTarget && close()}><form className="modal" onSubmit={submit}><div className="modal-head"><div><span className="eyebrow">NEW INFRASTRUCTURE</span><h2>Register server</h2></div><button type="button" className="icon-button" onClick={close}><X/></button></div>
     <label>DISPLAY NAME<input required placeholder="Site-02 Primary" value={form.name} onChange={e => setForm({...form, name: e.target.value})}/></label>
+    <div className="form-row"><label>SERVER ICON<select value={form.icon} onChange={e=>setForm({...form,icon:e.target.value})}><option value="gamepad">Gamepad</option><option value="server">Server</option><option value="shield">Shield</option><option value="activity">Activity</option></select></label><label>ACCENT COLOR<input className="color-input" type="color" value={form.accentColor} onChange={e=>setForm({...form,accentColor:e.target.value})}/></label></div>
     <label>SERVER EXECUTABLE<input required placeholder="C:\SCPServer\LocalAdmin.exe" value={form.executablePath} onChange={e => setForm({...form, executablePath: e.target.value})}/></label>
     <label>WORKING DIRECTORY <small>(optional)</small><input placeholder="Inferred from executable" value={form.workingDirectory} onChange={e => setForm({...form, workingDirectory: e.target.value})}/></label>
     <label>UPDATE COMMAND <small>(optional)</small><input placeholder="steamcmd +login anonymous +app_update …" value={form.updateCommand} onChange={e => setForm({...form, updateCommand: e.target.value})}/></label>
@@ -289,11 +306,12 @@ function AddServerModal({ close, saved, onError }: { close: () => void; saved: (
 
 function ServerWorkspace({ user, server, tab, setTab, refresh, back, onError }: { user: User; server?: Server; tab: ServerTab; setTab: (tab: ServerTab) => void; refresh: () => void; back: () => void; onError: (e: string) => void }) {
   const [busy, setBusy] = useState(false)
+  const confirmation=useConfirmDialog()
   if (!server) return <EmptyPage icon={ServerIcon} title="Server not found" text="The selected server was removed or is no longer available."><button onClick={back}>BACK TO SERVERS</button></EmptyPage>
   const action = async (name: string) => {
     if (busy) return
-    if (name === 'restart' && !window.confirm(`Restart ${server.name}? Connected players may be disconnected.`)) return
-    if (name === 'stop' && !window.confirm(`Stop ${server.name}? The panel will request a graceful shutdown.`)) return
+    if (name === 'restart' && !await confirmation.ask('Restart server?',`Restart ${server.name}? Connected players may be disconnected.`,'RESTART SERVER')) return
+    if (name === 'stop' && !await confirmation.ask('Stop server?',`Stop ${server.name}? The panel will request a graceful shutdown.`,'STOP SERVER')) return
     setBusy(true)
     try { await api(`/servers/${server.id}/${name}`, { method: 'POST' }); await refresh() }
     catch (error) { onError(error instanceof Error ? error.message : 'Server action failed') }
@@ -316,7 +334,7 @@ function ServerWorkspace({ user, server, tab, setTab, refresh, back, onError }: 
   return <div className="server-workspace">
     <button className="back-button" onClick={back}><ArrowLeft size={15}/> ALL SERVERS</button>
     <section className="server-hero">
-      <div className={`server-state ${server.state}`}><Gamepad2 size={25}/></div>
+      <div className={`server-state ${server.state}`} style={{borderColor:server.accentColor}}><ServerGlyph server={server} size={28}/></div>
       <div><span className="eyebrow">MANAGED INSTANCE</span><h1>{server.name}</h1><span className={`state-label ${server.state}`}><span/> {fmtState(server.state)}</span></div>
       <div className="server-hero-actions">
         {allowed('server.start') && <button disabled={busy || server.state === 'online'} onClick={() => action('start')}><Play size={15}/> START</button>}
@@ -337,6 +355,7 @@ function ServerWorkspace({ user, server, tab, setTab, refresh, back, onError }: 
       {tab === 'files' && <ServerConfigEditor serverId={server.id} canWrite={allowed('config.write')} onError={onError}/>}
       {tab === 'maintenance' && <MaintenancePage server={server} onError={onError}/>}
     </div>
+    {confirmation.dialog}
   </div>
 }
 
@@ -365,12 +384,13 @@ function MonitoringPage({ server, onError }: { server: Server; onError: (value: 
   const [metrics, setMetrics] = useState<Metric[]>([])
   const [incidents, setIncidents] = useState<Incident[]>([])
   const [hours, setHours] = useState(24)
+  const [view,setView]=useState<'performance'|'incidents'>('performance')
   const load = useCallback(() => Promise.all([
     api<Metric[]>(`/servers/${server.id}/metrics?hours=${hours}`),
     api<Incident[]>(`/servers/${server.id}/incidents`)
   ]).then(([samples, events]) => { setMetrics(samples); setIncidents(events) }).catch(e => onError(e.message)), [server.id, hours, onError])
   useEffect(() => { void load(); const timer = setInterval(load, 30000); return () => clearInterval(timer) }, [load])
-  return <section><div className="section-toolbar"><div><span className="eyebrow">TELEMETRY</span><h2>Server monitoring</h2></div><select value={hours} onChange={e => setHours(Number(e.target.value))}><option value="1">Last hour</option><option value="6">Last 6 hours</option><option value="24">Last 24 hours</option><option value="168">Last 7 days</option></select></div><div className="chart-grid"><MetricChart title="CPU USAGE" values={metrics.map(x => x.cpuPercent)} suffix="%"/><MetricChart title="MEMORY" values={metrics.map(x => x.memoryBytes / 1024 / 1024)} suffix=" MB"/><MetricChart title="PLAYERS" values={metrics.map(x => x.players)} suffix=""/></div><article className="panel incident-panel"><div className="panel-head"><div><span className="eyebrow">DIAGNOSTICS</span><h2>Crash and restart history</h2></div></div>{incidents.length ? incidents.map(item => <div className="incident-row" key={item.id}><span className={`event-icon ${item.type.includes('failed') || item.type === 'crash' ? 'danger' : ''}`}><Activity size={15}/></span><div><strong>{item.type.replaceAll('-', ' ').toUpperCase()}</strong><p>{item.message}</p></div><time>{new Date(item.at).toLocaleString()}</time></div>) : <EmptyMini text="No incidents recorded."/ >}</article></section>
+  return <section><div className="section-toolbar"><div><span className="eyebrow">TELEMETRY</span><h2>Server monitoring</h2></div>{view==='performance'&&<select value={hours} onChange={e => setHours(Number(e.target.value))}><option value="1">Last hour</option><option value="6">Last 6 hours</option><option value="24">Last 24 hours</option><option value="168">Last 7 days</option></select>}</div><nav className="nested-tabs"><button className={view==='performance'?'active':''} onClick={()=>setView('performance')}>Performance</button><button className={view==='incidents'?'active':''} onClick={()=>setView('incidents')}>Incidents <span>{incidents.length}</span></button></nav>{view==='performance'&&<div className="chart-grid"><MetricChart title="CPU USAGE" values={metrics.map(x => x.cpuPercent)} suffix="%"/><MetricChart title="MEMORY" values={metrics.map(x => x.memoryBytes / 1024 / 1024)} suffix=" MB"/><MetricChart title="PLAYERS" values={metrics.map(x => x.players)} suffix=""/></div>}{view==='incidents'&&<article className="panel incident-panel"><div className="panel-head"><div><span className="eyebrow">DIAGNOSTICS</span><h2>Crash and restart history</h2></div></div>{incidents.length ? incidents.map(item => <div className="incident-row" key={item.id}><span className={`event-icon ${item.type.includes('failed') || item.type === 'crash' ? 'danger' : ''}`}><Activity size={15}/></span><div><strong>{item.type.replaceAll('-', ' ').toUpperCase()}</strong><p>{item.message}</p></div><time>{new Date(item.at).toLocaleString()}</time></div>) : <EmptyMini text="No incidents recorded."/ >}</article>}</section>
 }
 
 function MetricChart({ title, values, suffix }: { title: string; values: number[]; suffix: string }) {
@@ -704,16 +724,27 @@ const defaultIntegration: IntegrationSettings = {
 }
 
 function SettingsPage({ user, servers, onError }: { user: User; servers: Server[]; onError: (e: string) => void }) {
-  const [tab,setTab]=useState<'general'|'security'|'discord'|'alerts'|'delivery'>('general')
+  const [tab,setTab]=useState<'general'|'appearance'|'security'|'discord'|'alerts'|'delivery'>('general')
   const tabs: Array<[typeof tab,string]>=[['general','General'],['security','Security']]
+  tabs.splice(1,0,['appearance','Appearance'])
   if(user.role==='Owner') tabs.push(['discord','Discord'],['alerts','Alert rules'],['delivery','Delivery log'])
   return <><PageTitle eyebrow="SYSTEM" title="Settings"/><nav className="page-tabs settings-tabs">{tabs.map(([value,label])=><button key={value} className={tab===value?'active':''} onClick={()=>setTab(value)}>{label}</button>)}</nav><section className="settings-tab-content">
     {tab==='general'&&<article className="panel settings-section"><FileCode2 size={26}/><h2>Panel configuration</h2><p>Server access and permissions are managed in Admin Manager. Runtime settings are stored in <code>appsettings.json</code>.</p><div className="setting-info-row"><strong>Signed-in account</strong><span>{user.username}</span></div><div className="setting-info-row"><strong>Account role</strong><span>{user.role}</span></div><div className="setting-info-row"><strong>Registered servers</strong><span>{servers.length}</span></div></article>}
+    {tab==='appearance'&&<AppearancePanel/>}
     {tab==='security'&&<div className="settings-grid"><SettingsBasePage user={user} onError={onError}/><TwoFactorPanel user={user} onError={onError}/></div>}
     {tab==='discord'&&user.role==='Owner'&&<DiscordBotPanel servers={servers} onError={onError}/>}
     {tab==='alerts'&&user.role==='Owner'&&<AlertRulesPanel onError={onError}/>}
     {tab==='delivery'&&user.role==='Owner'&&<NotificationHistoryPanel onError={onError}/>}
   </section></>
+}
+
+function AppearancePanel(){
+  const [density,setDensity]=useState(()=>localStorage.getItem('scpcontrol-density')||'comfortable')
+  const [accent,setAccent]=useState(()=>localStorage.getItem('scpcontrol-accent')||'#e44343')
+  const applyDensity=(value:string)=>{setDensity(value);localStorage.setItem('scpcontrol-density',value);document.documentElement.dataset.density=value}
+  const applyAccent=(value:string)=>{setAccent(value);localStorage.setItem('scpcontrol-accent',value);document.documentElement.style.setProperty('--red',value)}
+  const accents=['#e44343','#f97316','#eab308','#22c55e','#06b6d4','#6366f1','#a855f7','#ec4899']
+  return <article className="panel settings-section appearance-panel"><Activity size={26}/><h2>Interface appearance</h2><p>Choose how much information fits on screen and personalize the panel accent.</p><section><span className="eyebrow">DISPLAY DENSITY</span><div className="choice-cards"><button className={density==='comfortable'?'active':''} onClick={()=>applyDensity('comfortable')}><strong>Comfortable</strong><small>Larger controls and generous spacing</small></button><button className={density==='compact'?'active':''} onClick={()=>applyDensity('compact')}><strong>Compact</strong><small>More rows and information on screen</small></button></div></section><section><span className="eyebrow">ACCENT COLOR</span><div className="accent-picker">{accents.map(color=><button key={color} className={accent===color?'active':''} style={{backgroundColor:color}} aria-label={`Use ${color}`} onClick={()=>applyAccent(color)}/>) }<label title="Custom accent"><input type="color" value={accent} onChange={e=>applyAccent(e.target.value)}/></label></div></section></article>
 }
 
 function TwoFactorPanel({user,onError}:{user:User;onError:(message:string)=>void}) {

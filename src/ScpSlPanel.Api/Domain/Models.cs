@@ -23,11 +23,12 @@ public enum ServerState { Offline, Starting, Online, Stopping, Faulted }
 public sealed record ServerDefinition(
     Guid Id, string Name, string ExecutablePath, string Arguments, string WorkingDirectory,
     bool AutoRestart, bool AutoStart, int QueryPort, string? UpdateCommand, DateTimeOffset CreatedAt,
-    string? BridgeToken = null);
+    string? BridgeToken = null, string Icon = "gamepad", string AccentColor = "#e44343");
 
 public sealed record ServerSnapshot(
     Guid Id, string Name, ServerState State, int? ProcessId, DateTimeOffset? StartedAt,
-    long MemoryBytes, double CpuPercent, int Players, int MaxPlayers, string? LastError);
+    long MemoryBytes, double CpuPercent, int Players, int MaxPlayers, string? LastError,
+    string Icon = "gamepad", string AccentColor = "#e44343");
 
 public sealed record PlayerInfo(
     string Id, string Nickname, string UserId, string IpAddress, string Role, int Ping,
@@ -60,7 +61,8 @@ public sealed record DashboardOverview(
 
 public sealed record ServerCreateRequest(
     string Name, string ExecutablePath, string? Arguments, string? WorkingDirectory,
-    bool AutoRestart, bool AutoStart, int QueryPort, string? UpdateCommand);
+    bool AutoRestart, bool AutoStart, int QueryPort, string? UpdateCommand,
+    string Icon = "gamepad", string AccentColor = "#e44343");
 
 public sealed record LoginRequest(string Username, string Password, string? Code = null);
 public sealed record TotpRequest(string Code);

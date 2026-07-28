@@ -11,6 +11,8 @@ export interface Server {
   players: number
   maxPlayers: number
   lastError: string | null
+  icon?: string
+  accentColor?: string
 }
 
 export interface AuditEntry {

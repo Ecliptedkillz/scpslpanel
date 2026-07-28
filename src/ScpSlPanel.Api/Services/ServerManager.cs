@@ -47,7 +47,8 @@ public sealed class ServerManager(
             : Path.GetFullPath(request.WorkingDirectory);
         var item = new ServerDefinition(Guid.NewGuid(), request.Name.Trim(), Path.GetFullPath(request.ExecutablePath),
             request.Arguments ?? "", working, request.AutoRestart, request.AutoStart, request.QueryPort,
-            request.UpdateCommand, DateTimeOffset.UtcNow, CreateBridgeToken());
+            request.UpdateCommand, DateTimeOffset.UtcNow, CreateBridgeToken(),
+            request.Icon, request.AccentColor);
         definitions.Add(item);
         await store.WriteAsync("servers", definitions);
         return item;
@@ -102,7 +103,8 @@ public sealed class ServerManager(
         }
         var bridgeStatus = bridge.Get(definition.Id);
         return new(definition.Id, definition.Name, runtime.State, processId, runtime.StartedAt,
-            memory, Math.Round(cpu, 1), bridgeStatus.Players.Count, bridgeStatus.MaxPlayers, runtime.LastError);
+            memory, Math.Round(cpu, 1), bridgeStatus.Players.Count, bridgeStatus.MaxPlayers,
+            runtime.LastError, definition.Icon, definition.AccentColor);
     }
 
     public async Task<string> EnsureBridgeTokenAsync(Guid id, bool regenerate = false)
