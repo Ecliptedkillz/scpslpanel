@@ -6,6 +6,7 @@ import {
   Square, Sun, Moon, Terminal, Users, X,
 } from 'lucide-react'
 import { api, ApiError } from './api'
+import { QRCodeSVG } from 'qrcode.react'
 import { ServerConfigEditor } from './components/ServerConfigEditor'
 import { PlayerHistoryView, type StoredPlayer } from './components/PlayerHistoryView'
 import { GlobalPlayerDatabase } from './components/GlobalPlayerDatabase'
@@ -707,7 +708,7 @@ function TwoFactorPanel({user,onError}:{user:User;onError:(message:string)=>void
   const [setup,setSetup]=useState<{secret:string;uri:string}|null>(null)
   const [code,setCode]=useState('')
   return <article className="panel settings-password"><Shield size={26}/><h2>Two-factor authentication</h2><p>{user.twoFactorEnabled?'Two-factor authentication is enabled.':'Protect your account with a TOTP authenticator app.'}</p>
-    {setup&&<><label>SETUP SECRET<input readOnly value={setup.secret}/></label><small className="mono totp-uri">{setup.uri}</small></>}
+    {setup&&<div className="totp-setup"><div className="totp-qr"><QRCodeSVG value={setup.uri} size={210} level="M" marginSize={2}/><small>SCAN WITH GOOGLE AUTHENTICATOR</small></div><div><p>Open Google Authenticator, tap <strong>+</strong>, choose <strong>Scan a QR code</strong>, then enter the generated six-digit code below.</p><label>MANUAL SETUP SECRET<div className="input-action"><input readOnly value={setup.secret}/><button type="button" onClick={()=>void copyText(setup.secret)}>COPY</button></div></label><details><summary>Show setup URI</summary><small className="mono totp-uri">{setup.uri}</small></details></div></div>}
     <label>6-DIGIT CODE<input inputMode="numeric" maxLength={6} value={code} onChange={e=>setCode(e.target.value.replace(/\D/g,''))}/></label>
     <div className="button-row">{!user.twoFactorEnabled&&!setup&&<button onClick={async()=>{try{setSetup(await api('/auth/2fa/setup',{method:'POST'}))}catch(e){onError(e instanceof Error?e.message:'Unable to begin setup')}}}>BEGIN SETUP</button>}{setup&&<button className="primary" onClick={async()=>{try{await api('/auth/2fa/confirm',{method:'POST',body:JSON.stringify({code})});location.reload()}catch(e){onError(e instanceof Error?e.message:'Invalid code')}}}>ENABLE 2FA</button>}{user.twoFactorEnabled&&<button className="danger" onClick={async()=>{try{await api('/auth/2fa/disable',{method:'POST',body:JSON.stringify({code})});location.reload()}catch(e){onError(e instanceof Error?e.message:'Invalid code')}}}>DISABLE 2FA</button>}<button className="danger" onClick={async()=>{if(!confirm('Sign out every session for this account?'))return;await api('/auth/sessions/revoke',{method:'POST'});location.reload()}}>REVOKE ALL SESSIONS</button></div>
   </article>
