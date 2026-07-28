@@ -691,7 +691,16 @@ const defaultIntegration: IntegrationSettings = {
 }
 
 function SettingsPage({ user, servers, onError }: { user: User; servers: Server[]; onError: (e: string) => void }) {
-  return <><PageTitle eyebrow="SYSTEM" title="Panel settings"/><section className="settings-grid"><SettingsBasePage user={user} onError={onError}/><TwoFactorPanel user={user} onError={onError}/>{user.role === 'Owner' && <DiscordBotPanel servers={servers} onError={onError}/>} {user.role === 'Owner' && <AlertRulesPanel onError={onError}/>} {user.role === 'Owner' && <NotificationHistoryPanel onError={onError}/>}</section></>
+  const [tab,setTab]=useState<'general'|'security'|'discord'|'alerts'|'delivery'>('general')
+  const tabs: Array<[typeof tab,string]>=[['general','General'],['security','Security']]
+  if(user.role==='Owner') tabs.push(['discord','Discord'],['alerts','Alert rules'],['delivery','Delivery log'])
+  return <><PageTitle eyebrow="SYSTEM" title="Settings"/><nav className="page-tabs settings-tabs">{tabs.map(([value,label])=><button key={value} className={tab===value?'active':''} onClick={()=>setTab(value)}>{label}</button>)}</nav><section className="settings-tab-content">
+    {tab==='general'&&<article className="panel settings-section"><FileCode2 size={26}/><h2>Panel configuration</h2><p>Server access and permissions are managed in Admin Manager. Runtime settings are stored in <code>appsettings.json</code>.</p><div className="setting-info-row"><strong>Signed-in account</strong><span>{user.username}</span></div><div className="setting-info-row"><strong>Account role</strong><span>{user.role}</span></div><div className="setting-info-row"><strong>Registered servers</strong><span>{servers.length}</span></div></article>}
+    {tab==='security'&&<div className="settings-grid"><SettingsBasePage user={user} onError={onError}/><TwoFactorPanel user={user} onError={onError}/></div>}
+    {tab==='discord'&&user.role==='Owner'&&<DiscordBotPanel servers={servers} onError={onError}/>}
+    {tab==='alerts'&&user.role==='Owner'&&<AlertRulesPanel onError={onError}/>}
+    {tab==='delivery'&&user.role==='Owner'&&<NotificationHistoryPanel onError={onError}/>}
+  </section></>
 }
 
 function TwoFactorPanel({user,onError}:{user:User;onError:(message:string)=>void}) {
@@ -722,21 +731,26 @@ const discordPermissions = [
 function DiscordBotPanel({ servers, onError }: { servers: Server[]; onError: (e: string) => void }) {
   const [settings,setSettings] = useState<IntegrationSettings | null>(null)
   const [status,setStatus] = useState<{enabled:boolean;connected:boolean;botName:string|null;error:string|null}|null>(null)
-  const load = useCallback(() => Promise.all([
+  const loadSettings = useCallback(() =>
     api<IntegrationSettings>('/integrations').then(value=>setSettings({
       ...defaultIntegration,
       ...value,
       discordRoleGrants:value.discordRoleGrants ?? [],
-    })),
-    api<typeof status>('/integrations/discord/bot/status').then(setStatus),
-  ]).catch(e => onError(e.message)), [onError])
-  useEffect(() => { void load(); const timer=setInterval(load,10000); return () => clearInterval(timer) }, [load])
+    })).catch(e => onError(e.message)), [onError])
+  const loadStatus = useCallback(() =>
+    api<typeof status>('/integrations/discord/bot/status').then(setStatus).catch(e=>onError(e.message)),[onError])
+  useEffect(() => {
+    void loadSettings()
+    void loadStatus()
+    const timer=setInterval(()=>void loadStatus(),10000)
+    return () => clearInterval(timer)
+  }, [loadSettings,loadStatus])
   if (!settings) return null
   const addGrant=()=>setSettings({...settings,discordRoleGrants:[...(settings.discordRoleGrants ?? []),{roleId:'',serverId:servers[0]?.id ?? '',permissions:['view']}]})
   const updateGrant=(index:number,patch:Partial<IntegrationSettings['discordRoleGrants'][number]>)=>setSettings({...settings,discordRoleGrants:(settings.discordRoleGrants ?? []).map((grant,i)=>i===index?{...grant,...patch}:grant)})
   return <form className="panel settings-alerts discord-settings" onSubmit={async e => {
     e.preventDefault()
-    try { await api('/integrations',{method:'PUT',body:JSON.stringify(settings)}); setTimeout(load,1200) }
+    try { await api('/integrations',{method:'PUT',body:JSON.stringify(settings)}); setTimeout(()=>void loadStatus(),1200) }
     catch(error) { onError(error instanceof Error ? error.message : 'Unable to save Discord bot settings') }
   }}>
     <Bot size={26}/><h2>Discord bot</h2>
@@ -752,7 +766,7 @@ function DiscordBotPanel({ servers, onError }: { servers: Server[]; onError: (e:
       {!(settings.discordRoleGrants?.length) && <p className="muted">No limited role grants. Add a role to give it specific permissions on one server.</p>}
     </div>
     <p>Commands: <code>/scp status</code>, <code>players</code>, <code>player</code>, <code>kick</code>, <code>mute</code>, <code>ban</code>, <code>start</code>, <code>stop</code>, <code>restart</code>, and <code>announce</code>. Stop, restart, and moderation commands require explicit confirmation.</p>
-    <div className="button-row"><button className="primary">SAVE BOT SETTINGS</button><button type="button" onClick={async()=>{try{await api('/integrations/discord/bot/reconnect',{method:'POST'});setTimeout(load,1200)}catch(error){onError(error instanceof Error ? error.message : 'Unable to reconnect bot')}}}>RECONNECT BOT</button></div>
+    <div className="button-row form-actions"><button className="primary"><Save size={14}/> SAVE CHANGES</button><button type="button" onClick={async()=>{try{await api('/integrations/discord/bot/reconnect',{method:'POST'});setTimeout(()=>void loadStatus(),1200)}catch(error){onError(error instanceof Error ? error.message : 'Unable to reconnect bot')}}}><RefreshCw size={14}/> RECONNECT BOT</button></div>
   </form>
 }
 

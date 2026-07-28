@@ -97,7 +97,23 @@ public sealed class DiscordLinkService(NotificationService settingsService, ILog
                 $"https://discord.com/api/v10/users/{discordId}");
             request.Headers.Authorization = new AuthenticationHeaderValue("Bot", settings.DiscordBotToken);
             using var response = await _http.SendAsync(request);
-            response.EnsureSuccessStatusCode();
+            if (response.StatusCode == System.Net.HttpStatusCode.NotFound)
+            {
+                logger.LogInformation(
+                    "Discord user {DiscordId} is not a member of guild {GuildId}, or the configured guild ID is incorrect; basic account details will be shown",
+                    discordId, settings.DiscordGuildId);
+                lock (_cacheGate) _discordCache[$"{settings.DiscordGuildId}:{discordId}"] =
+                    (DateTimeOffset.UtcNow.AddMinutes(5), enriched);
+                return enriched;
+            }
+            if (!response.IsSuccessStatusCode)
+            {
+                var body = await response.Content.ReadAsStringAsync();
+                logger.LogWarning(
+                    "Discord guild member lookup for {DiscordId} returned {Status}: {Body}",
+                    discordId, (int)response.StatusCode, body);
+                return enriched;
+            }
             using var document = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
             var user = document.RootElement;
             var username = user.GetProperty("username").GetString();

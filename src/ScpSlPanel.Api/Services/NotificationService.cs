@@ -100,18 +100,30 @@ public sealed class NotificationService(
                     await Task.Delay(retry > TimeSpan.FromSeconds(10) ? TimeSpan.FromSeconds(10) : retry);
                     continue;
                 }
-                response.EnsureSuccessStatusCode();
+                if (!response.IsSuccessStatusCode)
+                {
+                    var body = await response.Content.ReadAsStringAsync();
+                    throw new DiscordRequestException(
+                        $"Discord channel {channelId} returned {(int)response.StatusCode} ({response.ReasonPhrase}). "
+                        + $"{DiscordError(body)} Check that the channel ID belongs to the configured guild and the bot has View Channel and Send Messages.",
+                        permanent: (int)response.StatusCode is 400 or 401 or 403 or 404);
+                }
                 await RecordAsync(delivery with { Status = "delivered", Attempts = attempt });
                 return;
             }
             catch (Exception ex)
             {
                 lastError = ex;
+                if (ex is DiscordRequestException { Permanent: true }) break;
                 if (attempt < 3) await Task.Delay(TimeSpan.FromMilliseconds(300 * attempt));
             }
         }
         logger.LogWarning(lastError, "Discord notification failed");
-        await RecordAsync(delivery with { Status = "failed", Attempts = 3, Error = lastError?.Message });
+        await RecordAsync(delivery with {
+            Status = "failed",
+            Attempts = lastError is DiscordRequestException { Permanent: true } ? 1 : 3,
+            Error = lastError?.Message
+        });
     }
 
     public Task TestAsync() => SendAsync("SCP Control connected", "Discord notifications are configured correctly.");
@@ -130,5 +142,23 @@ public sealed class NotificationService(
             await store.WriteAsync("notification-history", values.OrderByDescending(x => x.At).Take(1000));
         }
         finally { _historyGate.Release(); }
+    }
+
+    private static string DiscordError(string body)
+    {
+        try
+        {
+            using var document = System.Text.Json.JsonDocument.Parse(body);
+            var root = document.RootElement;
+            var code = root.TryGetProperty("code", out var codeValue) ? codeValue.ToString() : "";
+            var message = root.TryGetProperty("message", out var messageValue) ? messageValue.GetString() : null;
+            return string.IsNullOrWhiteSpace(message) ? "" : $"Discord error {code}: {message}.";
+        }
+        catch { return ""; }
+    }
+
+    private sealed class DiscordRequestException(string message, bool permanent) : HttpRequestException(message)
+    {
+        public bool Permanent { get; } = permanent;
     }
 }
