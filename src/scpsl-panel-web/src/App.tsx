@@ -6,6 +6,7 @@ import {
   Square, Sun, Moon, Terminal, Users, X,
 } from 'lucide-react'
 import { api, ApiError } from './api'
+import { ServerConfigEditor } from './components/ServerConfigEditor'
 import type { AuditEntry, Ban, BridgeSetup, BridgeStatus, Overview, Player, Schedule, Server } from './types'
 
 type Page = 'overview' | 'servers' | 'server' | 'bans' | 'schedules' | 'audit' | 'admins' | 'settings'
@@ -13,6 +14,11 @@ type ServerTab = 'overview' | 'monitoring' | 'console' | 'players' | 'player-his
 type ServerAccessGrant = { serverId: string; permissions: string[] }
 type User = { username: string; role: string; serverIds: string[]; permissions: string[]; serverAccess?: ServerAccessGrant[] }
 type ThemeMode = 'dark' | 'light' | 'system'
+const hasServerPermission = (user: User, serverId: string, permission: string) => {
+  if (user.role === 'Owner') return true
+  const permissions = user.serverAccess?.find(grant => grant.serverId === serverId)?.permissions ?? user.permissions
+  return permissions.includes(permission)
+}
 
 const nav: { page: Page; label: string; icon: typeof LayoutDashboard }[] = [
   { page: 'overview', label: 'Overview', icon: LayoutDashboard },
@@ -183,7 +189,7 @@ function Panel({ user, onLogout, theme, setTheme }: { user: User; onLogout: () =
       {error && <div className="toast error">{error}<button onClick={() => setError('')}><X size={15}/></button></div>}
       <div className="content">
         {page === 'overview' && <OverviewPage data={overview} navigatePage={navigatePage} openServer={openServer}/>}
-        {page === 'servers' && <ServersPage servers={servers} refresh={load} openServer={openServer} onError={setError}/>}
+        {page === 'servers' && <ServersPage user={user} servers={servers} refresh={load} openServer={openServer} onError={setError}/>}
         {page === 'server' && <ServerWorkspace user={user} server={selectedServer} tab={serverTab} setTab={navigateServerTab} refresh={load} back={() => navigatePage('servers')} onError={setError}/>}
         {page === 'bans' && <BansPage onError={setError}/>}
         {page === 'schedules' && <SchedulesPage servers={servers} onError={setError}/>}
@@ -227,11 +233,14 @@ function OverviewPage({ data, navigatePage, openServer }: { data: Overview | nul
   </>
 }
 
-function ServersPage({ servers, refresh, openServer, onError }: { servers: Server[]; refresh: () => void; openServer: (id: string) => void; onError: (e: string) => void }) {
+function ServersPage({ user, servers, refresh, openServer, onError }: { user: User; servers: Server[]; refresh: () => void; openServer: (id: string) => void; onError: (e: string) => void }) {
   const [modal, setModal] = useState(false)
   const [busyServer, setBusyServer] = useState<string | null>(null)
   const action = async (id: string, name: string) => {
     if (busyServer) return
+    const server = servers.find(item => item.id === id)
+    if (name === 'restart' && !window.confirm(`Restart ${server?.name ?? 'this server'}? Connected players may be disconnected.`)) return
+    if (name === 'stop' && !window.confirm(`Stop ${server?.name ?? 'this server'}? The panel will request a graceful shutdown.`)) return
     setBusyServer(id)
     try { await api(`/servers/${id}/${name}`, { method: 'POST' }); await refresh() }
     catch (e) { onError(e instanceof Error ? e.message : 'Action failed') }
@@ -243,7 +252,7 @@ function ServersPage({ servers, refresh, openServer, onError }: { servers: Serve
       <div className="server-card-head"><div className={`server-state ${server.state}`}><Gamepad2/></div><div><h2>{server.name}</h2><span className={`state-label ${server.state}`}><span/> {server.state}</span></div><button className="manage-button" onClick={() => openServer(server.id)}>MANAGE <ChevronRight size={15}/></button></div>
       <div className="metric-strip"><div><span>PROCESS</span><strong>{server.processId ?? '—'}</strong></div><div><span>CPU</span><strong>{server.cpuPercent}%</strong></div><div><span>MEMORY</span><strong>{fmtBytes(server.memoryBytes)}</strong></div><div><span>PLAYERS</span><strong>{server.players}/{server.maxPlayers || '—'}</strong></div></div>
       {server.lastError && <p className="error">{server.lastError}</p>}
-      <div className="server-actions"><button disabled={busyServer === server.id || server.state === 'online'} onClick={() => action(server.id, 'start')}><Play size={15}/> START</button><button disabled={busyServer === server.id || server.state === 'offline'} onClick={() => action(server.id, 'restart')}><RotateCcw size={15}/> RESTART</button><button disabled={busyServer === server.id || server.state === 'offline'} className="danger" onClick={() => action(server.id, 'stop')}><Square size={14}/> STOP</button></div>
+      <div className="server-actions">{hasServerPermission(user, server.id, 'server.start') && <button disabled={busyServer === server.id || server.state === 'online'} onClick={() => action(server.id, 'start')}><Play size={15}/> START</button>}{hasServerPermission(user, server.id, 'server.restart') && <button disabled={busyServer === server.id || server.state === 'offline'} onClick={() => action(server.id, 'restart')}><RotateCcw size={15}/> RESTART</button>}{hasServerPermission(user, server.id, 'server.stop') && <button disabled={busyServer === server.id || server.state === 'offline'} className="danger" onClick={() => action(server.id, 'stop')}><Square size={14}/> STOP</button>}</div>
     </article>)}</div>
     {!servers.length && <EmptyPage icon={ServerIcon} title="No servers registered" text="Connect your first SCP:SL dedicated server to begin operations."><button className="primary" onClick={() => setModal(true)}><Plus size={16}/> REGISTER SERVER</button></EmptyPage>}
     {modal && <AddServerModal close={() => setModal(false)} saved={() => { setModal(false); refresh() }} onError={onError}/>}
@@ -273,6 +282,8 @@ function ServerWorkspace({ user, server, tab, setTab, refresh, back, onError }: 
   if (!server) return <EmptyPage icon={ServerIcon} title="Server not found" text="The selected server was removed or is no longer available."><button onClick={back}>BACK TO SERVERS</button></EmptyPage>
   const action = async (name: string) => {
     if (busy) return
+    if (name === 'restart' && !window.confirm(`Restart ${server.name}? Connected players may be disconnected.`)) return
+    if (name === 'stop' && !window.confirm(`Stop ${server.name}? The panel will request a graceful shutdown.`)) return
     setBusy(true)
     try { await api(`/servers/${server.id}/${name}`, { method: 'POST' }); await refresh() }
     catch (error) { onError(error instanceof Error ? error.message : 'Server action failed') }
@@ -280,7 +291,6 @@ function ServerWorkspace({ user, server, tab, setTab, refresh, back, onError }: 
   }
   const permissions = user.role === 'Owner' ? null : user.serverAccess?.find(x => x.serverId === server.id)?.permissions ?? user.permissions
   const allowed = (permission: string) => permissions === null || permissions.includes(permission)
-    || (permission.startsWith('console.') && permissions.includes('console'))
   const tabs: { id: ServerTab; label: string; icon: typeof LayoutDashboard; permission: string }[] = [
     { id: 'overview', label: 'Overview', icon: LayoutDashboard, permission: 'view' },
     { id: 'monitoring', label: 'Monitoring', icon: Activity, permission: 'monitoring' },
@@ -290,7 +300,7 @@ function ServerWorkspace({ user, server, tab, setTab, refresh, back, onError }: 
     { id: 'activity', label: 'Activity & Rounds', icon: Activity, permission: 'monitoring' },
     { id: 'restarts', label: 'Restarts', icon: RotateCcw, permission: 'server.restart' },
     { id: 'plugins', label: 'Plugins', icon: Plug, permission: 'plugins' },
-    { id: 'files', label: 'Files & Config', icon: FolderOpen, permission: 'config' },
+    { id: 'files', label: 'Files & Config', icon: FolderOpen, permission: 'config.view' },
     { id: 'maintenance', label: 'Maintenance', icon: Settings, permission: 'maintenance' },
   ]
   return <>
@@ -309,12 +319,12 @@ function ServerWorkspace({ user, server, tab, setTab, refresh, back, onError }: 
       {tab === 'overview' && <ServerOverview server={server} setTab={setTab}/>}
       {tab === 'monitoring' && <MonitoringPage server={server} onError={onError}/>}
       {tab === 'console' && <ConsolePage servers={[server]} selected={server.id} setSelected={() => {}} onError={onError} canWrite={allowed('console.write')} embedded/>}
-      {tab === 'players' && <ServerPlayers server={server} onError={onError} initialMode="live" canManage={allowed('players.manage')} canAnnounce={allowed('announcements')}/>}
-      {tab === 'player-history' && <ServerPlayers server={server} onError={onError} initialMode="history" canManage={allowed('players.manage')} canAnnounce={allowed('announcements')}/>}
+      {tab === 'players' && <ServerPlayers server={server} onError={onError} initialMode="live" moderation={{kick:allowed('players.kick'),mute:allowed('players.mute'),ban:allowed('players.ban')}} canAnnounce={allowed('announcements')}/>}
+      {tab === 'player-history' && <ServerPlayers server={server} onError={onError} initialMode="history" moderation={{kick:allowed('players.kick'),mute:allowed('players.mute'),ban:allowed('players.ban')}} canAnnounce={allowed('announcements')}/>}
       {tab === 'activity' && <ServerActivityPage server={server} onError={onError}/>}
       {tab === 'restarts' && <RestartManagerPage server={server} onError={onError}/>}
       {tab === 'plugins' && <PluginsPage servers={[server]} selected={server.id} setSelected={() => {}} onError={onError} embedded/>}
-      {tab === 'files' && <ServerFiles server={server} onError={onError}/>}
+      {tab === 'files' && <ServerConfigEditor serverId={server.id} canWrite={allowed('config.write')} onError={onError}/>}
       {tab === 'maintenance' && <MaintenancePage server={server} onError={onError}/>}
     </div>
   </>
@@ -377,6 +387,7 @@ function MaintenancePage({ server, onError }: { server: Server; onError: (value:
   const load = useCallback(() => api<Backup[]>(`/servers/${server.id}/backups`).then(setBackups).catch(e => onError(e.message)), [server.id, onError])
   useEffect(() => { void load() }, [load])
   const run = async (action: 'backups' | 'update') => {
+    if (action === 'update' && !window.confirm(`Run the configured update command for ${server.name}? A backup will be created first.`)) return
     setBusy(action)
     try { await api(`/servers/${server.id}/${action}`, {method:'POST'}); load() }
     catch(e) { onError(e instanceof Error ? e.message : `Unable to run ${action}`) }
@@ -385,11 +396,10 @@ function MaintenancePage({ server, onError }: { server: Server; onError: (value:
   return <section className="maintenance-layout"><article className="panel"><div className="panel-head"><div><span className="eyebrow">SAFE OPERATIONS</span><h2>Update and backup</h2></div></div><div className="maintenance-actions"><button onClick={() => run('backups')} disabled={!!busy}><Save/><div><strong>CREATE BACKUP</strong><span>Archive server configuration files</span></div></button><button onClick={() => run('update')} disabled={!!busy || server.state !== 'offline'}><RefreshCw/><div><strong>RUN UPDATE</strong><span>{server.state === 'offline' ? 'Backup, then execute update command' : 'Stop the server before updating'}</span></div></button></div></article><article className="panel"><div className="panel-head"><div><span className="eyebrow">RECOVERY</span><h2>Available backups</h2></div></div>{backups.map(item => <div className="backup-row" key={item.id}><FileCode2/><div><strong>{item.fileName}</strong><small>{new Date(item.createdAt).toLocaleString()} · {fmtBytes(item.sizeBytes)} · {item.actor}</small></div><a className="manage-button" href={`/api/servers/${server.id}/backups/${encodeURIComponent(item.fileName)}`}>DOWNLOAD</a></div>)}{!backups.length && <EmptyMini text="No backups created yet."/ >}</article></section>
 }
 
-function ServerPlayers({ server, onError, initialMode = 'live', canManage = true, canAnnounce = true }: { server: Server; onError: (error: string) => void; initialMode?: 'live' | 'history'; canManage?: boolean; canAnnounce?: boolean }) {
+function ServerPlayers({ server, onError, initialMode = 'live', moderation = {kick:true,mute:true,ban:true}, canAnnounce = true }: { server: Server; onError: (error: string) => void; initialMode?: 'live' | 'history'; moderation?: {kick:boolean;mute:boolean;ban:boolean}; canAnnounce?: boolean }) {
   type PlayerRecord = { id: string; userId: string; lastIpAddress: string; currentName: string; firstConnectedAt: string; lastConnectedAt: string; playtimeSeconds: number; connections: number; nameHistory: { name: string; firstSeenAt: string; lastSeenAt: string }[]; moderationHistory: { id: string; type: string; reason: string; actor: string; at: string; durationMinutes: number | null }[]; notes: { id: string; text: string; actor: string; at: string }[] }
   const [status, setStatus] = useState<BridgeStatus | null>(null)
   const [setup, setSetup] = useState<BridgeSetup | null>(null)
-  const [mode, setMode] = useState<'live' | 'history'>(initialMode)
   const [history, setHistory] = useState<PlayerRecord[]>([])
   const [profile, setProfile] = useState<PlayerRecord | null>(null)
   const [note, setNote] = useState('')
@@ -399,13 +409,14 @@ function ServerPlayers({ server, onError, initialMode = 'live', canManage = true
     catch (error) { onError(error instanceof Error ? error.message : 'Unable to load players') }
   }, [server.id, onError])
   useEffect(() => {
+    if (initialMode !== 'live') return
     void load()
     api<BridgeSetup>(`/servers/${server.id}/bridge`).then(setSetup).catch(() => {})
     const timer = setInterval(load, 3000)
     return () => clearInterval(timer)
-  }, [load, server.id])
+  }, [initialMode, load, server.id])
   const loadHistory = useCallback(() => api<PlayerRecord[]>(`/servers/${server.id}/player-history`).then(setHistory).catch(error => onError(error.message)), [server.id, onError])
-  useEffect(() => { if (mode === 'history') void loadHistory() }, [mode, loadHistory])
+  useEffect(() => { if (initialMode === 'history') void loadHistory() }, [initialMode, loadHistory])
   const moderate = async (player: Player, action: 'kick' | 'ban' | 'mute' | 'unmute') => {
     const reason = window.prompt(`Reason to ${action} ${player.nickname}:`, `Removed by ${action === 'kick' ? 'administrator' : 'moderator'}`)
     if (reason === null) return
@@ -418,16 +429,15 @@ function ServerPlayers({ server, onError, initialMode = 'live', canManage = true
       })
     } catch (error) { onError(error instanceof Error ? error.message : `Unable to ${action} player`) }
   }
-  const navigation = <div className="player-view-tabs"><button className={mode === 'live' ? 'active' : ''} onClick={() => setMode('live')}>LIVE PLAYERS</button><button className={mode === 'history' ? 'active' : ''} onClick={() => setMode('history')}>PLAYER DATABASE</button></div>
-  if (mode === 'history') return <>{navigation}<PlayerHistoryView server={server} history={history} profile={profile} setProfile={setProfile} note={note} setNote={setNote} reload={loadHistory} onError={onError}/></>
-  if (status?.connected) return <section className="players-panel">{navigation}
+  if (initialMode === 'history') return <PlayerHistoryView server={server} history={history} profile={profile} setProfile={setProfile} note={note} setNote={setNote} reload={loadHistory} onError={onError}/>
+  if (status?.connected) return <section className="players-panel">
     <div className="bridge-banner connected"><div><span className="status-dot"/><strong>LABAPI BRIDGE CONNECTED</strong><small>v{status.bridgeVersion} · LabAPI {status.apiVersion} · heartbeat {status.lastSeenAt ? fmtAgo(status.lastSeenAt) : 'now'}</small></div><span>{status.players.length}/{status.maxPlayers || '—'} PLAYERS</span></div>
     {canAnnounce && <form className="announcement-bar" onSubmit={async event => { event.preventDefault(); if (!announcement.trim()) return; try { await api(`/servers/${server.id}/announcement`, {method:'POST', body:JSON.stringify({message:announcement,durationSeconds:10})}); setAnnouncement('') } catch(error) { onError(error instanceof Error ? error.message : 'Unable to send announcement') } }}><input value={announcement} onChange={e => setAnnouncement(e.target.value)} placeholder="Broadcast an announcement to every player…"/><button className="primary">ANNOUNCE</button></form>}
-    <Table headers={['PLAYER','USER ID','ROLE','PING / SESSION','VOICE','ACTIONS']}>{status.players.map(player => <tr key={player.id}><td><strong>{player.nickname}</strong><small>Player #{player.id} · {player.ipAddress || 'Identity protected'}</small></td><td className="mono">{player.userId || 'Do Not Track'}</td><td><span className="tag">{player.role}</span></td><td><strong>{player.ping || '—'} ms</strong><small>{formatPlaytime(player.sessionSeconds)}</small></td><td><span className={`tag ${player.isMuted ? 'red' : ''}`}>{player.isMuted ? 'MUTED' : 'OPEN'}</span></td><td>{canManage && <div className="row-actions"><button onClick={() => moderate(player, player.isMuted ? 'unmute' : 'mute')}>{player.isMuted ? 'UNMUTE' : 'MUTE'}</button><button onClick={() => moderate(player, 'kick')}>KICK</button><button className="danger" onClick={() => moderate(player, 'ban')}>BAN</button></div>}</td></tr>)}</Table>
+    <Table headers={['PLAYER','USER ID','ROLE','PING / SESSION','VOICE','ACTIONS']}>{status.players.map(player => <tr key={player.id}><td><strong>{player.nickname}</strong><small>Player #{player.id} · {player.ipAddress || 'Identity protected'}</small></td><td className="mono">{player.userId || 'Do Not Track'}</td><td><span className="tag">{player.role}</span></td><td><strong>{player.ping || '—'} ms</strong><small>{formatPlaytime(player.sessionSeconds)}</small></td><td><span className={`tag ${player.isMuted ? 'red' : ''}`}>{player.isMuted ? 'MUTED' : 'OPEN'}</span></td><td><div className="row-actions">{moderation.mute && <button onClick={() => moderate(player, player.isMuted ? 'unmute' : 'mute')}>{player.isMuted ? 'UNMUTE' : 'MUTE'}</button>}{moderation.kick && <button onClick={() => moderate(player, 'kick')}>KICK</button>}{moderation.ban && <button className="danger" onClick={() => moderate(player, 'ban')}>BAN</button>}</div></td></tr>)}</Table>
     {!status.players.length && <EmptyMini text="Bridge connected. No players are currently online."/>}
   </section>
   const config = setup ? `panel_url: "${window.location.origin}"\nserver_id: "${setup.serverId}"\ntoken: "${setup.token}"\nheartbeat_seconds: 5\nrespect_do_not_track: true` : ''
-  return <>{navigation}<section className="bridge-install">
+  return <section className="bridge-install">
     <div className="bridge-install-intro"><div className="empty-icon"><Users size={28}/></div><div><span className="eyebrow">LABAPI BRIDGE REQUIRED</span><h2>Connect live players for {server.name}</h2><p>The bridge makes outbound heartbeat requests to this panel. No inbound game-server port is required.</p></div></div>
     <ol className="install-steps">
       <li><span>1</span><div><strong>Build the LabAPI bridge</strong><p>Run <code>build-bridge.bat</code> and enter the server's <code>SCPSL_Data\Managed</code> path.</p></div></li>
@@ -436,7 +446,7 @@ function ServerPlayers({ server, onError, initialMode = 'live', canManage = true
       <li><span>4</span><div><strong>Restart SCP:SL</strong><p>This page will switch to the live player table within a few seconds.</p></div></li>
     </ol>
     <div className="integration-checks"><span className={server.state === 'online' ? 'ok' : ''}><i/>{server.state === 'online' ? 'Server process online' : 'Start the server process'}</span><span className={status?.connected ? 'ok' : ''}><i/>{status?.lastSeenAt ? `Last heartbeat ${fmtAgo(status.lastSeenAt)}` : 'Waiting for first heartbeat'}</span></div>
-  </section></>
+  </section>
 }
 
 function ServerActivityPage({ server, onError }: { server: Server; onError: (error: string) => void }) {
@@ -462,35 +472,6 @@ function PlayerHistoryView({ server, history, profile, setProfile, note, setNote
     catch(error) { onError(error instanceof Error ? error.message : 'Unable to record action') }
   }
   return <section className="player-database"><div className="player-db-summary"><div><strong>{history.length}</strong><span>KNOWN PLAYERS</span></div><div><strong>{history.reduce((sum,x) => sum + x.connections, 0)}</strong><span>CONNECTIONS</span></div><div><strong>{history.reduce((sum,x) => sum + x.moderationHistory.length, 0)}</strong><span>MODERATION RECORDS</span></div></div><Table headers={['PLAYER','IDENTIFIER','FIRST CONNECTED','LAST CONNECTED','PLAYTIME','']}>{history.map(player => <tr key={player.id}><td><strong>{player.currentName}</strong><small>{player.nameHistory.length} known name{player.nameHistory.length === 1 ? '' : 's'}</small></td><td className="mono">{player.userId}</td><td>{new Date(player.firstConnectedAt).toLocaleString()}</td><td>{fmtAgo(player.lastConnectedAt)}</td><td>{formatPlaytime(player.playtimeSeconds)}</td><td><button className="manage-button" onClick={() => setProfile(player)}>VIEW PROFILE</button></td></tr>)}</Table>{!history.length && <EmptyMini text="Records will appear after LabAPI bridge heartbeats are received."/>}{profile && <div className="modal-backdrop"><div className="modal player-profile"><div className="modal-head"><div><span className="eyebrow">PLAYER PROFILE</span><h2>{profile.currentName}</h2><p className="mono">{profile.userId}</p></div><button className="icon-button" onClick={() => setProfile(null)}><X/></button></div><div className="profile-action-bar"><button onClick={() => recordAction('warning')}>ADD WARNING</button><button onClick={() => recordAction('watchlist')}>WATCHLIST</button><button onClick={() => recordAction('allowlist')}>ALLOWLIST</button><button onClick={() => copyText(`${profile.userId}\n${profile.lastIpAddress}`)}>COPY IDENTIFIERS</button></div><div className="profile-stats"><div><span>FIRST CONNECTED</span><strong>{new Date(profile.firstConnectedAt).toLocaleString()}</strong></div><div><span>LAST CONNECTED</span><strong>{new Date(profile.lastConnectedAt).toLocaleString()}</strong></div><div><span>PLAYTIME</span><strong>{formatPlaytime(profile.playtimeSeconds)}</strong></div><div><span>CONNECTIONS</span><strong>{profile.connections}</strong></div></div><div className="profile-columns"><section><h3>NAME HISTORY</h3>{profile.nameHistory.map(item => <div className="history-entry" key={item.name}><strong>{item.name}</strong><small>Last used {new Date(item.lastSeenAt).toLocaleString()}</small></div>)}</section><section><h3>MODERATION HISTORY</h3>{profile.moderationHistory.slice().reverse().map(item => <div className="history-entry" key={item.id}><strong><span className="tag red">{item.type.toUpperCase()}</span> {item.reason}</strong><small>{item.actor} · {new Date(item.at).toLocaleString()}</small></div>)}{!profile.moderationHistory.length && <EmptyMini text="No moderation history."/>}</section></div><section className="profile-notes"><h3>STAFF NOTES</h3>{profile.notes.slice().reverse().map(item => <div className="history-entry" key={item.id}><strong>{item.text}</strong><small>{item.actor} · {new Date(item.at).toLocaleString()}</small></div>)}<form onSubmit={async event => { event.preventDefault(); if (!note.trim()) return; try { const updated = await api<StoredPlayer>(`/servers/${server.id}/player-history/${profile.id}/notes`, { method:'POST', body:JSON.stringify({text:note}) }); setProfile(updated); setNote(''); reload() } catch(error) { onError(error instanceof Error ? error.message : 'Unable to add note') } }}><input value={note} onChange={event => setNote(event.target.value)} placeholder="Add a private staff note…"/><button className="primary">ADD NOTE</button></form></section></div></div>}</section>
-}
-
-function ServerFiles({ server, onError }: { server: Server; onError: (error: string) => void }) {
-  const [path, setPath] = useState('config_gameplay.txt')
-  const [content, setContent] = useState('')
-  const [loadedPath, setLoadedPath] = useState('')
-  const [busy, setBusy] = useState(false)
-  const open = async () => {
-    setBusy(true)
-    try {
-      const response = await fetch(`/api/servers/${server.id}/files/${path.split('/').map(encodeURIComponent).join('/')}`, { credentials: 'include' })
-      if (!response.ok) throw new Error(response.status === 404 ? 'File not found below the registered server directory.' : `Unable to open file (${response.status}).`)
-      setContent(await response.text()); setLoadedPath(path)
-    } catch (error) { onError(error instanceof Error ? error.message : 'Unable to open file') }
-    finally { setBusy(false) }
-  }
-  const save = async () => {
-    if (!loadedPath) return
-    setBusy(true)
-    try {
-      await api(`/servers/${server.id}/files/${loadedPath.split('/').map(encodeURIComponent).join('/')}`, { method: 'PUT', body: JSON.stringify({ content }) })
-    } catch (error) { onError(error instanceof Error ? error.message : 'Unable to save file') }
-    finally { setBusy(false) }
-  }
-  return <section className="file-editor">
-    <div className="file-toolbar"><div><label>PATH BELOW SERVER DIRECTORY<input value={path} onChange={event => setPath(event.target.value)} onKeyDown={event => { if (event.key === 'Enter') void open() }}/></label></div><button onClick={open} disabled={!path || busy}><FolderOpen size={15}/> OPEN</button><button className="primary" onClick={save} disabled={!loadedPath || busy}><Save size={15}/> SAVE</button></div>
-    <div className="file-context">{loadedPath ? `Editing ${loadedPath}` : 'Enter a relative configuration path, then choose Open.'}</div>
-    <textarea className="code-editor" value={content} onChange={event => setContent(event.target.value)} spellCheck={false} placeholder="File contents will appear here…"/>
-  </section>
 }
 
 function ConsolePage({ servers, selected, setSelected, onError, embedded = false, canWrite = true }: { servers: Server[]; selected: string | null; setSelected: (id: string) => void; onError: (e: string) => void; embedded?: boolean; canWrite?: boolean }) {
@@ -533,7 +514,7 @@ function ConsolePage({ servers, selected, setSelected, onError, embedded = false
     {!embedded && <PageTitle eyebrow="REAL-TIME OPERATIONS" title="Live console"><select value={selected ?? ''} onChange={e => { setSelected(e.target.value); setLines([]) }}><option value="">Select server</option>{servers.map(x => <option key={x.id} value={x.id}>{x.name}</option>)}</select></PageTitle>}
     <section className="console-panel"><div className="console-toolbar"><div><span className={`status-dot ${server?.state !== 'online' ? 'off' : ''}`}/>{server?.name ?? 'NO SERVER SELECTED'} <small>{fmtState(server?.state)} · {lines.length} LINES</small></div><div className="console-tools"><input value={search} onChange={e => setSearch(e.target.value)} placeholder="Search logs…"/><button className={paused ? 'active' : ''} onClick={() => setPaused(!paused)}>{paused ? 'RESUME' : 'PAUSE'}</button><a href={selected ? `/api/servers/${selected}/console/download` : '#'}>DOWNLOAD</a><button onClick={() => setLines([])}>CLEAR</button></div></div>
       <div className="console-output" ref={outputRef}>{lines.length ? lines.filter(item => !search || item.line.toLowerCase().includes(search.toLowerCase())).map((line, i) => <div key={i} className={line.stream}><time>{new Date(line.at).toLocaleTimeString()}</time><span>{line.line}</span></div>) : <div className="console-placeholder"><Terminal size={28}/><span>Console output will stream here.</span></div>}</div>
-      <form className="command-line" onSubmit={submit}><span>RA &gt;</span><input disabled={!server || server.state !== 'online'} value={command} onChange={e => setCommand(e.target.value)} onKeyDown={e => { if (e.key === 'ArrowUp' && commandHistory.length) { e.preventDefault(); const next = Math.min(commandHistory.length - 1, historyIndex + 1); setHistoryIndex(next); setCommand(commandHistory[commandHistory.length - 1 - next]) } else if (e.key === 'ArrowDown') { e.preventDefault(); const next = historyIndex - 1; setHistoryIndex(next); setCommand(next < 0 ? '' : commandHistory[commandHistory.length - 1 - next]) } }} placeholder={server?.state === 'online' ? 'Enter server command… (↑ for history)' : 'Server is offline'}/><button disabled={!command.trim()}>EXECUTE</button></form>
+      {canWrite && <form className="command-line" onSubmit={submit}><span>RA &gt;</span><input disabled={!server || server.state !== 'online'} value={command} onChange={e => setCommand(e.target.value)} onKeyDown={e => { if (e.key === 'ArrowUp' && commandHistory.length) { e.preventDefault(); const next = Math.min(commandHistory.length - 1, historyIndex + 1); setHistoryIndex(next); setCommand(commandHistory[commandHistory.length - 1 - next]) } else if (e.key === 'ArrowDown') { e.preventDefault(); const next = historyIndex - 1; setHistoryIndex(next); setCommand(next < 0 ? '' : commandHistory[commandHistory.length - 1 - next]) } }} placeholder={server?.state === 'online' ? 'Enter server command… (↑ for history)' : 'Server is offline'}/><button disabled={!command.trim()}>EXECUTE</button></form>}
     </section>
   </>
 }
@@ -618,8 +599,10 @@ function AdminManagerPage({ user, servers, onError }: { user: User; servers: Ser
     ['server.restart', 'Restart server'], ['console.view', 'View console and download logs'],
     ['console.write', 'Execute console commands'],
     ['players', 'View live players'], ['players.history', 'View player database'],
-    ['players.notes', 'Add player notes'], ['players.manage', 'Mute, kick and ban players'], ['plugins', 'View plugins'],
-    ['plugins.manage', 'Load / unload / restart plugins'], ['config', 'Read and edit configuration'],
+    ['players.notes', 'Add player notes'], ['players.actions', 'Warnings, watchlist and allowlist'],
+    ['players.mute', 'Mute and unmute players'], ['players.kick', 'Kick players'], ['players.ban', 'Ban players'],
+    ['plugins', 'View plugins'], ['plugins.manage', 'Load / unload / restart plugins'],
+    ['config.view', 'Read server and plugin configuration'], ['config.write', 'Edit server and plugin configuration'],
     ['monitoring', 'View monitoring and incidents'], ['announcements', 'Send remote announcements'],
     ['maintenance', 'Backups and server updates'],
   ]
@@ -640,17 +623,25 @@ function AdminManagerPage({ user, servers, onError }: { user: User; servers: Ser
   }
   const togglePermission = (value: string) => setForm({...form, serverAccess: form.serverAccess.map(grant =>
     grant.serverId !== scopeServer ? grant : {...grant, permissions:grant.permissions.includes(value) ? grant.permissions.filter(x => x !== value) : [...grant.permissions,value]} )})
+  const migratePermissions = (permissions: string[]) => [...new Set(permissions.flatMap(permission => {
+    if (permission === 'lifecycle') return ['server.start', 'server.stop', 'server.restart']
+    if (permission === 'console') return ['console.view', 'console.write']
+    if (permission === 'config') return ['config.view', 'config.write']
+    if (permission === 'players.manage') return ['players.actions', 'players.mute', 'players.kick', 'players.ban']
+    return [permission]
+  }))]
   const edit = (account: Account) => {
-    const grants = account.serverAccess?.length ? account.serverAccess : account.serverIds.map(serverId => ({serverId, permissions:account.permissions}))
+    const sourceGrants = account.serverAccess?.length ? account.serverAccess : account.serverIds.map(serverId => ({serverId, permissions:account.permissions}))
+    const grants = sourceGrants.map(grant => ({...grant, permissions:migratePermissions(grant.permissions)}))
     setForm({ id: account.id, username: account.username, password: '', enabled: account.enabled, serverIds: grants.map(x => x.serverId), permissions: [], serverAccess: grants })
     setScopeServer(grants[0]?.serverId || '')
     setShowModal(true)
   }
   const add = () => { setForm(blank); setScopeServer(''); setShowModal(true) }
   const applyPreset = (name: 'viewer' | 'moderator' | 'manager' | 'full') => {
-    const values = name === 'viewer' ? ['view', 'players', 'plugins']
-      : name === 'moderator' ? ['view', 'console.view', 'players', 'players.history', 'players.notes', 'players.manage']
-      : name === 'manager' ? ['view', 'server.start', 'server.stop', 'server.restart', 'console.view', 'console.write', 'players', 'players.history', 'players.notes', 'players.manage', 'plugins']
+    const values = name === 'viewer' ? ['view', 'players', 'plugins', 'config.view']
+      : name === 'moderator' ? ['view', 'console.view', 'players', 'players.history', 'players.notes', 'players.actions', 'players.mute', 'players.kick']
+      : name === 'manager' ? ['view', 'server.start', 'server.stop', 'server.restart', 'console.view', 'console.write', 'players', 'players.history', 'players.notes', 'players.actions', 'players.mute', 'players.kick', 'players.ban', 'plugins', 'config.view']
       : permissionOptions.map(([value]) => value)
     setForm({ ...form, serverAccess: form.serverAccess.map(grant => grant.serverId === scopeServer ? {...grant,permissions:values} : grant) })
   }

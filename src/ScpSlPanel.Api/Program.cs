@@ -134,13 +134,9 @@ static async Task<bool> Can(ClaimsPrincipal principal, JsonStore store, Guid ser
     var account = await CurrentUser(principal, store);
     var grant = account?.ServerAccess?.FirstOrDefault(x => x.ServerId == serverId);
     var permissions = grant?.Permissions ?? account?.Permissions ?? [];
-    var legacyLifecycle = permission is "server.start" or "server.stop" or "server.restart"
-        && permissions.Contains("lifecycle", StringComparer.OrdinalIgnoreCase);
-    var legacyConsole = permission is "console.view" or "console.write"
-        && permissions.Contains("console", StringComparer.OrdinalIgnoreCase);
     return account is not null && (account.Role == "Owner"
         || ((grant is not null || (account.ServerIds?.Contains(serverId) ?? false))
-            && (permissions.Contains(permission, StringComparer.OrdinalIgnoreCase) || legacyLifecycle || legacyConsole)));
+            && permissions.Contains(permission, StringComparer.OrdinalIgnoreCase)));
 }
 
 app.MapPost("/api/auth/login", async (LoginRequest request, JsonStore store, PasswordService passwords, HttpContext context) =>
@@ -286,7 +282,7 @@ api.MapPost("/servers/{id:guid}/bridge/regenerate", async (Guid id, ServerManage
 }).RequireAuthorization("Owner");
 api.MapPost("/servers/{id:guid}/players/{playerId}/kick", async (Guid id, string playerId, ModerationRequest request, BridgeCommandService commands, BridgeStateService bridge, PlayerDataService playerData, ClaimsPrincipal user, JsonStore store, CancellationToken cancellationToken) =>
 {
-    if (!await Can(user, store, id, "players.manage")) return Results.Forbid();
+    if (!await Can(user, store, id, "players.kick")) return Results.Forbid();
     if (!bridge.Get(id).Connected) return Results.Conflict(new { error = "The LabAPI bridge must be connected to verify a kick." });
     var reason = request.Reason ?? "Removed by panel";
     var result = await commands.ExecuteAsync(id, "kick", playerId, reason, cancellationToken: cancellationToken);
@@ -299,7 +295,7 @@ api.MapPost("/servers/{id:guid}/players/{playerId}/kick", async (Guid id, string
 });
 api.MapPost("/servers/{id:guid}/players/{playerId}/ban", async (Guid id, string playerId, ModerationRequest request, BridgeCommandService commands, BridgeStateService bridge, PlayerDataService playerData, ClaimsPrincipal user, JsonStore store, CancellationToken cancellationToken) =>
 {
-    if (!await Can(user, store, id, "players.manage")) return Results.Forbid();
+    if (!await Can(user, store, id, "players.ban")) return Results.Forbid();
     var duration = Math.Max(1, request.DurationMinutes ?? 60);
     if (!bridge.Get(id).Connected) return Results.Conflict(new { error = "The LabAPI bridge must be connected to verify a ban." });
     var reason = request.Reason ?? "Banned by panel";
@@ -313,7 +309,7 @@ api.MapPost("/servers/{id:guid}/players/{playerId}/ban", async (Guid id, string 
 });
 api.MapPost("/servers/{id:guid}/players/{playerId}/mute", async (Guid id, string playerId, ModerationRequest request, BridgeCommandService commands, BridgeStateService bridge, PlayerDataService playerData, ClaimsPrincipal user, JsonStore store, CancellationToken cancellationToken) =>
 {
-    if (!await Can(user, store, id, "players.manage")) return Results.Forbid();
+    if (!await Can(user, store, id, "players.mute")) return Results.Forbid();
     if (!bridge.Get(id).Connected) return Results.Conflict(new { error = "The LabAPI bridge must be connected to verify a mute." });
     var reason = request.Reason ?? "Muted by panel";
     var result = await commands.ExecuteAsync(id, "mute", playerId, reason,
@@ -327,7 +323,7 @@ api.MapPost("/servers/{id:guid}/players/{playerId}/mute", async (Guid id, string
 });
 api.MapPost("/servers/{id:guid}/players/{playerId}/unmute", async (Guid id, string playerId, BridgeCommandService commands, BridgeStateService bridge, PlayerDataService playerData, ClaimsPrincipal user, JsonStore store, CancellationToken cancellationToken) =>
 {
-    if (!await Can(user, store, id, "players.manage")) return Results.Forbid();
+    if (!await Can(user, store, id, "players.mute")) return Results.Forbid();
     if (!bridge.Get(id).Connected) return Results.Conflict(new { error = "The LabAPI bridge must be connected to verify an unmute." });
     var result = await commands.ExecuteAsync(id, "unmute", playerId, cancellationToken: cancellationToken);
     if (!result.Success) return Results.Conflict(new { error = result.Message ?? "The game server rejected the unmute." });
@@ -368,7 +364,7 @@ api.MapPost("/servers/{id:guid}/player-history/{playerId:guid}/actions", async (
     Guid id, Guid playerId, PlayerActionRequest request, PlayerDataService players,
     ClaimsPrincipal user, JsonStore store) =>
 {
-    if (!await Can(user, store, id, "players.manage")) return Results.Forbid();
+    if (!await Can(user, store, id, "players.actions")) return Results.Forbid();
     var type = request.Type.Trim().ToLowerInvariant();
     if (type is not ("warning" or "watchlist" or "allowlist" or "unmute"))
         return Results.BadRequest(new { error = "Unsupported player action." });
@@ -384,7 +380,7 @@ api.MapDelete("/servers/{id:guid}/player-history", async (
 
 api.MapGet("/servers/{id:guid}/files/{**path}", async (Guid id, string path, ServerManager servers, JsonStore store, ClaimsPrincipal user) =>
 {
-    if (!await Can(user, store, id, "config")) return Results.Forbid();
+    if (!await Can(user, store, id, "config.view")) return Results.Forbid();
     var server = await servers.FindAsync(id);
     if (server is null) return Results.NotFound();
     var full = store.ResolveSafePath(server.WorkingDirectory, path);
@@ -392,13 +388,55 @@ api.MapGet("/servers/{id:guid}/files/{**path}", async (Guid id, string path, Ser
 });
 api.MapPut("/servers/{id:guid}/files/{**path}", async (Guid id, string path, ConfigFileRequest request, ServerManager servers, JsonStore store, AuditService audit, ClaimsPrincipal user) =>
 {
-    if (!await Can(user, store, id, "config")) return Results.Forbid();
+    if (!await Can(user, store, id, "config.write")) return Results.Forbid();
     var server = await servers.FindAsync(id);
     if (server is null) return Results.NotFound();
     var full = store.ResolveSafePath(server.WorkingDirectory, path);
     Directory.CreateDirectory(Path.GetDirectoryName(full)!);
     await File.WriteAllTextAsync(full, request.Content);
     await audit.AddAsync(Actor(user), "file.write", server.Name, path);
+    return Results.NoContent();
+});
+
+static string ScpConfigRoot(ServerDefinition server) => Path.Combine(
+    Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
+    "SCP Secret Laboratory", "config", server.QueryPort.ToString());
+
+api.MapGet("/servers/{id:guid}/server-config", async (
+    Guid id, ServerManager servers, ClaimsPrincipal user, JsonStore store) =>
+{
+    if (!await Can(user, store, id, "config.view")) return Results.Forbid();
+    var server = await servers.FindAsync(id);
+    if (server is null) return Results.NotFound();
+    var root = ScpConfigRoot(server);
+    Directory.CreateDirectory(root);
+    var files = Directory.EnumerateFiles(root, "*", SearchOption.AllDirectories)
+        .Select(file => Path.GetRelativePath(root, file).Replace('\\', '/'))
+        .OrderBy(path => path, StringComparer.OrdinalIgnoreCase).Take(1000).ToArray();
+    return Results.Ok(new { server.QueryPort, root, files });
+});
+api.MapGet("/servers/{id:guid}/server-config/{**path}", async (
+    Guid id, string path, ServerManager servers, JsonStore store, ClaimsPrincipal user) =>
+{
+    if (!await Can(user, store, id, "config.view")) return Results.Forbid();
+    var server = await servers.FindAsync(id);
+    if (server is null) return Results.NotFound();
+    var full = store.ResolveSafePath(ScpConfigRoot(server), path);
+    return File.Exists(full) ? Results.Text(await File.ReadAllTextAsync(full), "text/plain") : Results.NotFound();
+});
+api.MapPut("/servers/{id:guid}/server-config/{**path}", async (
+    Guid id, string path, ConfigFileRequest request, ServerManager servers, JsonStore store,
+    AuditService audit, ClaimsPrincipal user) =>
+{
+    if (!await Can(user, store, id, "config.write")) return Results.Forbid();
+    var server = await servers.FindAsync(id);
+    if (server is null) return Results.NotFound();
+    var root = ScpConfigRoot(server);
+    Directory.CreateDirectory(root);
+    var full = store.ResolveSafePath(root, path);
+    Directory.CreateDirectory(Path.GetDirectoryName(full)!);
+    await File.WriteAllTextAsync(full, request.Content);
+    await audit.AddAsync(Actor(user), "server.config.write", server.Name, $"{server.QueryPort}/{path}");
     return Results.NoContent();
 });
 
@@ -517,7 +555,7 @@ api.MapPost("/plugins/{serverId:guid}/action", async (
 });
 api.MapGet("/plugins/{serverId:guid}/config", async (Guid serverId, string path, ServerManager servers, ClaimsPrincipal user, JsonStore store) =>
 {
-    if (!await Can(user, store, serverId, "config")) return Results.Forbid();
+    if (!await Can(user, store, serverId, "config.view")) return Results.Forbid();
     var server = await servers.FindAsync(serverId);
     if (server is null) return Results.NotFound();
     var safePath = EnsurePathInRoots(path, PluginConfigRoots(server));
@@ -528,7 +566,7 @@ api.MapGet("/plugins/{serverId:guid}/config", async (Guid serverId, string path,
 api.MapPut("/plugins/{serverId:guid}/config", async (
     Guid serverId, PluginConfigRequest request, ServerManager servers, AuditService audit, ClaimsPrincipal user, JsonStore store) =>
 {
-    if (!await Can(user, store, serverId, "config"))
+    if (!await Can(user, store, serverId, "config.write"))
         return Results.Forbid();
     var server = await servers.FindAsync(serverId);
     if (server is null) return Results.NotFound();

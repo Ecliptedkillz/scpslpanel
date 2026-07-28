@@ -18,8 +18,7 @@ public sealed class PanelHub(JsonStore store) : Hub
         var permissions = grant?.Permissions ?? user?.Permissions;
         if (user is null || (user.Role != "Owner"
             && (!(grant is not null || (user.ServerIds?.Contains(serverId) ?? false))
-                || !(permissions?.Any(permission => permission.Equals("console.view", StringComparison.OrdinalIgnoreCase)
-                    || permission.Equals("console", StringComparison.OrdinalIgnoreCase)) ?? false))))
+                || !(permissions?.Contains("console.view", StringComparer.OrdinalIgnoreCase) ?? false))))
             throw new HubException("You do not have console access for this server.");
         await Groups.AddToGroupAsync(Context.ConnectionId, $"server:{serverId}");
     }

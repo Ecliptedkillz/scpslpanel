@@ -15,6 +15,7 @@ configuration access, metrics, authentication, and audit logging in one dashboar
 - Record crash, bridge-disconnect, scheduled-restart, and restart-failure incidents
 - Persist console output with search, pause/resume, command history, and log downloads
 - Read and write files below each registered server directory with path traversal protection
+- Browse and edit each server's live per-port SCP:SL configuration directory
 - Record and revoke timed or permanent bans
 - Run start, stop, restart, or console-command schedules with five-field cron expressions
 - Run warned restart countdowns with in-game announcements and cancellation
@@ -124,6 +125,11 @@ sends heartbeats.
 The maintenance updater only runs while the game server is offline. It creates a configuration
 backup first, then executes the update command entered when registering the server. Treat update
 commands as trusted owner-only configuration.
+
+The **Files & Config** tab includes the registered working directory and the live SCP:SL
+configuration directory at `%AppData%\SCP Secret Laboratory\config\<query-port>` on Windows.
+The panel resolves `%AppData%` for the Windows account running the panel service. Grant
+`config.view` and `config.write` independently for each registered server.
 
 Configure Discord alerts under **Settings → Discord notifications**. Webhook URLs are sensitive
 credentials and should not be shared.
