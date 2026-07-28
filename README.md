@@ -138,6 +138,17 @@ The panel resolves `%AppData%` for the Windows account running the panel service
 Configure Discord alerts under **Settings → Discord notifications**. Webhook URLs are sensitive
 credentials and should not be shared.
 
+## Discord bot
+
+Owners can enable the embedded bot under **Settings → Discord bot**. Create an application in
+the Discord Developer Portal, add a bot, and invite it with the `bot` and
+`applications.commands` scopes. Enter its token, the guild ID, and comma-separated Discord role
+IDs allowed to control servers. Discord administrators are always allowed.
+
+The bot provides `/scp status`, `/scp players`, `/scp start`, `/scp stop`, `/scp restart`, and
+`/scp announce`. Status and player queries are read-only. Control commands require an allowed
+role and are written to the audit log. Treat the bot token like a password.
+
 ## Production
 
 Set a long random bootstrap password, terminate TLS with Caddy, nginx, or a trusted ingress,

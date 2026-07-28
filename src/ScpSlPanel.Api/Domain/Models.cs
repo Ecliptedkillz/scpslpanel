@@ -87,7 +87,10 @@ public sealed record PanelIntegrationSettings(
     string HighCpuMessage = "{server} CPU usage is {cpu}% (alert threshold: {threshold}%).",
     string HighMemoryMessage = "{server} memory usage is {memoryMb} MB (alert threshold: {thresholdMb} MB).",
     string RestartFailureMessage = "{server} failed to restart automatically: {error}",
-    string ScheduleFailureMessage = "Schedule '{schedule}' failed for {server}: {error}");
+    string ScheduleFailureMessage = "Schedule '{schedule}' failed for {server}: {error}",
+    bool DiscordBotEnabled = false, string DiscordBotToken = "", ulong DiscordGuildId = 0,
+    string DiscordControlRoleIds = "");
+public sealed record DiscordBotStatus(bool Enabled, bool Connected, string? BotName, string? Error);
 public sealed record BackupEntry(
     Guid Id, Guid ServerId, DateTimeOffset CreatedAt, string FileName, long SizeBytes, string Actor);
 public sealed record RestartCountdownRequest(int Seconds, string? Message);

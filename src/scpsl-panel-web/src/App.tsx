@@ -1,6 +1,6 @@
 import { FormEvent, useCallback, useEffect, useRef, useState } from 'react'
 import {
-  Activity, ArrowLeft, Ban as BanIcon, CalendarClock, ChevronRight, CircleGauge, Command,
+  Activity, ArrowLeft, Ban as BanIcon, Bot, CalendarClock, ChevronRight, CircleGauge, Command,
   FileCode2, FolderOpen, Gamepad2, History, LayoutDashboard, LogOut, Menu, Play, Plug, Save,
   Plus, RefreshCw, RotateCcw, Server as ServerIcon, Settings, Shield,
   Square, Sun, Moon, Terminal, Users, X,
@@ -660,6 +660,7 @@ type IntegrationSettings = {
   notifyHighMemory: boolean; highMemoryMb: number; alertCooldownMinutes: number
   crashMessage: string; bridgeOfflineMessage: string; highCpuMessage: string
   highMemoryMessage: string; restartFailureMessage: string; scheduleFailureMessage: string
+  discordBotEnabled: boolean; discordBotToken: string; discordGuildId: number; discordControlRoleIds: string
 }
 const defaultIntegration: IntegrationSettings = {
   discordWebhookUrl: '', notifyCrash: true, notifyRestart: true, notifyBridgeOffline: true,
@@ -671,10 +672,34 @@ const defaultIntegration: IntegrationSettings = {
   highMemoryMessage: '{server} memory usage is {memoryMb} MB (alert threshold: {thresholdMb} MB).',
   restartFailureMessage: '{server} failed to restart automatically: {error}',
   scheduleFailureMessage: "Schedule '{schedule}' failed for {server}: {error}",
+  discordBotEnabled: false, discordBotToken: '', discordGuildId: 0, discordControlRoleIds: '',
 }
 
 function SettingsPage({ user, onError }: { user: User; onError: (e: string) => void }) {
-  return <><PageTitle eyebrow="SYSTEM" title="Panel settings"/><section className="settings-grid"><SettingsBasePage user={user} onError={onError}/>{user.role === 'Owner' && <AlertRulesPanel onError={onError}/>}</section></>
+  return <><PageTitle eyebrow="SYSTEM" title="Panel settings"/><section className="settings-grid"><SettingsBasePage user={user} onError={onError}/>{user.role === 'Owner' && <DiscordBotPanel onError={onError}/>} {user.role === 'Owner' && <AlertRulesPanel onError={onError}/>}</section></>
+}
+
+function DiscordBotPanel({ onError }: { onError: (e: string) => void }) {
+  const [settings,setSettings] = useState<IntegrationSettings | null>(null)
+  const [status,setStatus] = useState<{enabled:boolean;connected:boolean;botName:string|null;error:string|null}|null>(null)
+  const load = useCallback(() => Promise.all([
+    api<IntegrationSettings>('/integrations').then(setSettings),
+    api<typeof status>('/integrations/discord/bot/status').then(setStatus),
+  ]).catch(e => onError(e.message)), [onError])
+  useEffect(() => { void load(); const timer=setInterval(load,10000); return () => clearInterval(timer) }, [load])
+  if (!settings) return null
+  return <form className="panel settings-alerts discord-settings" onSubmit={async e => {
+    e.preventDefault()
+    try { await api('/integrations',{method:'PUT',body:JSON.stringify(settings)}); setTimeout(load,1200) }
+    catch(error) { onError(error instanceof Error ? error.message : 'Unable to save Discord bot settings') }
+  }}>
+    <Bot size={26}/><h2>Discord bot</h2>
+    <p><span className={`status-dot ${status?.connected ? '' : 'off'}`}/>{status?.connected ? `Connected as ${status.botName}` : status?.error || 'Not connected'}</p>
+    <label className="check-row"><input type="checkbox" checked={settings.discordBotEnabled} onChange={e=>setSettings({...settings,discordBotEnabled:e.target.checked})}/> Enable embedded Discord bot</label>
+    <div className="form-row"><label>BOT TOKEN<input type="password" value={settings.discordBotToken} onChange={e=>setSettings({...settings,discordBotToken:e.target.value})}/></label><label>GUILD ID<input value={settings.discordGuildId || ''} onChange={e=>setSettings({...settings,discordGuildId:Number(e.target.value)})}/></label><label>CONTROL ROLE IDS<input value={settings.discordControlRoleIds} onChange={e=>setSettings({...settings,discordControlRoleIds:e.target.value})} placeholder="123…, 456…"/></label></div>
+    <p>Commands: <code>/scp status</code>, <code>players</code>, <code>start</code>, <code>stop</code>, <code>restart</code>, and <code>announce</code>. Control commands require Discord Administrator or one of the comma-separated role IDs.</p>
+    <button className="primary">SAVE BOT SETTINGS</button>
+  </form>
 }
 
 function AlertRulesPanel({ onError }: { onError: (e: string) => void }) {

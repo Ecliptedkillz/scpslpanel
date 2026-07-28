@@ -30,12 +30,14 @@ builder.Services.AddSingleton<PlayerDataService>();
 builder.Services.AddSingleton<DiscordLinkService>();
 builder.Services.AddSingleton<OperationsDataService>();
 builder.Services.AddSingleton<NotificationService>();
+builder.Services.AddSingleton<DiscordBotService>();
 builder.Services.AddSingleton<MaintenanceService>();
 builder.Services.AddSingleton<RestartCoordinator>();
 builder.Services.AddSingleton<ServerManager>();
 builder.Services.AddHostedService<BootstrapService>();
 builder.Services.AddHostedService<SchedulerService>();
 builder.Services.AddHostedService<MonitoringService>();
+builder.Services.AddHostedService(provider => provider.GetRequiredService<DiscordBotService>());
 builder.Services.AddSignalR();
 builder.Services.ConfigureHttpJsonOptions(options =>
     options.SerializerOptions.Converters.Add(new JsonStringEnumConverter(JsonNamingPolicy.CamelCase)));
@@ -692,6 +694,8 @@ api.MapPost("/integrations/discord/test", async (NotificationService notificatio
     await notifications.TestAsync();
     return Results.NoContent();
 }).RequireAuthorization("Owner");
+api.MapGet("/integrations/discord/bot/status", (DiscordBotService bot) =>
+    Results.Ok(bot.Status)).RequireAuthorization("Owner");
 
 app.MapHub<PanelHub>("/hub/panel");
 app.MapFallbackToFile("index.html");
