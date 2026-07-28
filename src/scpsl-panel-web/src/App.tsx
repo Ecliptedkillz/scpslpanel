@@ -8,9 +8,10 @@ import {
 import { api, ApiError } from './api'
 import { ServerConfigEditor } from './components/ServerConfigEditor'
 import { PlayerHistoryView, type StoredPlayer } from './components/PlayerHistoryView'
+import { GlobalPlayerDatabase } from './components/GlobalPlayerDatabase'
 import type { AuditEntry, Ban, BridgeSetup, BridgeStatus, Overview, Player, Schedule, Server } from './types'
 
-type Page = 'overview' | 'servers' | 'server' | 'bans' | 'schedules' | 'audit' | 'admins' | 'settings'
+type Page = 'overview' | 'servers' | 'server' | 'players' | 'bans' | 'schedules' | 'audit' | 'admins' | 'settings'
 type ServerTab = 'overview' | 'monitoring' | 'console' | 'players' | 'player-history' | 'activity' | 'restarts' | 'plugins' | 'files' | 'maintenance'
 type ServerAccessGrant = { serverId: string; permissions: string[] }
 type User = { username: string; role: string; serverIds: string[]; permissions: string[]; serverAccess?: ServerAccessGrant[] }
@@ -24,6 +25,7 @@ const hasServerPermission = (user: User, serverId: string, permission: string) =
 const nav: { page: Page; label: string; icon: typeof LayoutDashboard }[] = [
   { page: 'overview', label: 'Overview', icon: LayoutDashboard },
   { page: 'servers', label: 'Servers', icon: ServerIcon },
+  { page: 'players', label: 'Player Database', icon: Users },
   { page: 'bans', label: 'Ban Manager', icon: BanIcon },
   { page: 'schedules', label: 'Scheduler', icon: CalendarClock },
   { page: 'audit', label: 'Audit Log', icon: History },
@@ -33,7 +35,7 @@ const nav: { page: Page; label: string; icon: typeof LayoutDashboard }[] = [
 
 const fmtBytes = (bytes: number) => bytes ? `${(bytes / 1024 / 1024).toFixed(0)} MB` : '0 MB'
 const fmtState = (state: unknown) => typeof state === 'string' ? state.toUpperCase() : 'UNKNOWN'
-const topLevelPages = new Set<Page>(['overview', 'servers', 'bans', 'schedules', 'audit', 'admins', 'settings'])
+const topLevelPages = new Set<Page>(['overview', 'servers', 'players', 'bans', 'schedules', 'audit', 'admins', 'settings'])
 const serverTabs = new Set<ServerTab>(['overview', 'monitoring', 'console', 'players', 'player-history', 'activity', 'restarts', 'plugins', 'files', 'maintenance'])
 const readRoute = () => {
   const parts = window.location.pathname.split('/').filter(Boolean).map(decodeURIComponent)
@@ -162,7 +164,10 @@ function Panel({ user, onLogout, theme, setTheme }: { user: User; onLogout: () =
     return () => window.removeEventListener('popstate', onPopState)
   }, [])
   const servers = overview?.servers ?? []
-  const visibleNav = user.role === 'Owner' ? nav : nav.filter(item => !['bans', 'schedules', 'audit', 'admins'].includes(item.page))
+  const visibleNav = user.role === 'Owner' ? nav : nav.filter(item =>
+    !['bans', 'schedules', 'audit', 'admins'].includes(item.page)
+    && (item.page !== 'players' || user.serverAccess?.some(grant => grant.permissions.includes('players.history'))
+      || user.permissions.includes('players.history')))
   const selectedServer = servers.find(server => server.id === selected)
   const navigatePage = (nextPage: Page) => {
     setPage(nextPage)
@@ -191,6 +196,7 @@ function Panel({ user, onLogout, theme, setTheme }: { user: User; onLogout: () =
       <div className="content">
         {page === 'overview' && <OverviewPage data={overview} navigatePage={navigatePage} openServer={openServer}/>}
         {page === 'servers' && <ServersPage user={user} servers={servers} refresh={load} openServer={openServer} onError={setError}/>}
+        {page === 'players' && <GlobalPlayerDatabase onError={setError}/>}
         {page === 'server' && <ServerWorkspace user={user} server={selectedServer} tab={serverTab} setTab={navigateServerTab} refresh={load} back={() => navigatePage('servers')} onError={setError}/>}
         {page === 'bans' && <BansPage onError={setError}/>}
         {page === 'schedules' && <SchedulesPage servers={servers} onError={setError}/>}
