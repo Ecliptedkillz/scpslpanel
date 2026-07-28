@@ -3,7 +3,7 @@ import {
   Activity, ArrowLeft, Ban as BanIcon, CalendarClock, ChevronRight, CircleGauge, Command,
   FileCode2, FolderOpen, Gamepad2, History, LayoutDashboard, LogOut, Menu, Play, Plug, Save,
   Plus, RefreshCw, RotateCcw, Server as ServerIcon, Settings, Shield,
-  Square, Terminal, Users, X,
+  Square, Sun, Moon, Terminal, Users, X,
 } from 'lucide-react'
 import { api, ApiError } from './api'
 import type { AuditEntry, Ban, BridgeSetup, BridgeStatus, Overview, Player, Schedule, Server } from './types'
@@ -11,6 +11,7 @@ import type { AuditEntry, Ban, BridgeSetup, BridgeStatus, Overview, Player, Sche
 type Page = 'overview' | 'servers' | 'server' | 'bans' | 'schedules' | 'audit' | 'admins' | 'settings'
 type ServerTab = 'overview' | 'monitoring' | 'console' | 'players' | 'player-history' | 'restarts' | 'plugins' | 'files' | 'maintenance'
 type User = { username: string; role: string; serverIds: string[]; permissions: string[] }
+type ThemeMode = 'dark' | 'light' | 'system'
 
 const nav: { page: Page; label: string; icon: typeof LayoutDashboard }[] = [
   { page: 'overview', label: 'Overview', icon: LayoutDashboard },
@@ -66,18 +67,37 @@ const formatPlaytime = (seconds: number) => seconds >= 3600
   : `${Math.floor(seconds / 60)}m`
 
 export function App() {
+  const [theme, setTheme] = useState<ThemeMode>(() => (localStorage.getItem('scpcontrol-theme') as ThemeMode) || 'dark')
   const [user, setUser] = useState<User | null | undefined>(undefined)
+  useEffect(() => {
+    const apply = () => {
+      const resolved = theme === 'system'
+        ? (window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark') : theme
+      document.documentElement.dataset.theme = resolved
+      document.documentElement.style.colorScheme = resolved
+      document.querySelector('meta[name="theme-color"]')?.setAttribute('content', resolved === 'light' ? '#ffffff' : '#090b0f')
+    }
+    apply()
+    localStorage.setItem('scpcontrol-theme', theme)
+    const media = window.matchMedia('(prefers-color-scheme: light)')
+    media.addEventListener('change', apply)
+    return () => media.removeEventListener('change', apply)
+  }, [theme])
   useEffect(() => { api<User>('/auth/me').then(setUser).catch(() => setUser(null)) }, [])
   if (user === undefined) return <Splash />
-  if (!user) return <Login onLogin={setUser} />
-  return <Panel user={user} onLogout={() => setUser(null)} />
+  if (!user) return <Login onLogin={setUser} theme={theme} setTheme={setTheme}/>
+  return <Panel user={user} onLogout={() => setUser(null)} theme={theme} setTheme={setTheme}/>
 }
 
 function Splash() {
-  return <main className="center"><div className="brand-mark"><Shield size={28}/></div><p className="muted">Securing facility access…</p></main>
+  return <main className="center"><div className="brand-mark"><img src="/scpcontrol.png" alt="SCP Control"/></div><p className="muted">Securing facility access…</p></main>
 }
 
-function Login({ onLogin }: { onLogin: (user: User) => void }) {
+function ThemeButton({ theme, setTheme }: { theme: ThemeMode; setTheme: (theme: ThemeMode) => void }) {
+  return <button className="theme-toggle" title={`Theme: ${theme}`} onClick={() => setTheme(theme === 'dark' ? 'light' : theme === 'light' ? 'system' : 'dark')}>{theme === 'dark' ? <Moon size={16}/> : theme === 'light' ? <Sun size={16}/> : <CircleGauge size={16}/>}<span>{theme.toUpperCase()}</span></button>
+}
+
+function Login({ onLogin, theme, setTheme }: { onLogin: (user: User) => void; theme: ThemeMode; setTheme: (theme: ThemeMode) => void }) {
   const [username, setUsername] = useState('admin')
   const [password, setPassword] = useState('change-me-now')
   const [error, setError] = useState('')
@@ -88,9 +108,9 @@ function Login({ onLogin }: { onLogin: (user: User) => void }) {
     catch (e) { setError(e instanceof Error ? e.message : 'Login failed') }
     finally { setBusy(false) }
   }
-  return <main className="login-shell">
+  return <main className="login-shell"><div className="login-theme"><ThemeButton theme={theme} setTheme={setTheme}/></div>
     <section className="login-card">
-      <div className="brand"><div className="brand-mark"><Shield size={26}/></div><div><strong>SCP CONTROL</strong><span>FACILITY ADMINISTRATION</span></div></div>
+      <div className="brand"><div className="brand-mark"><img src="/scpcontrol.png" alt="SCP Control"/></div><div><strong>SCP CONTROL</strong><span>FACILITY ADMINISTRATION</span></div></div>
       <div className="login-copy"><span className="eyebrow">SECURE ACCESS</span><h1>Welcome back,<br/>Administrator.</h1><p>Authenticate to access server operations and facility controls.</p></div>
       <form onSubmit={submit}>
         <label>USERNAME<input value={username} onChange={e => setUsername(e.target.value)} autoComplete="username"/></label>
@@ -103,7 +123,7 @@ function Login({ onLogin }: { onLogin: (user: User) => void }) {
   </main>
 }
 
-function Panel({ user, onLogout }: { user: User; onLogout: () => void }) {
+function Panel({ user, onLogout, theme, setTheme }: { user: User; onLogout: () => void; theme: ThemeMode; setTheme: (theme: ThemeMode) => void }) {
   const initialRoute = readRoute()
   const [page, setPage] = useState<Page>(initialRoute.page)
   const [overview, setOverview] = useState<Overview | null>(null)
@@ -153,12 +173,12 @@ function Panel({ user, onLogout }: { user: User; onLogout: () => void }) {
   const logout = async () => { await api('/auth/logout', { method: 'POST' }).catch(() => {}); onLogout() }
   return <div className="app-shell">
     <aside className={drawer ? 'open' : ''}>
-      <div className="brand"><div className="brand-mark"><Shield size={24}/></div><div><strong>SCP CONTROL</strong><span>ADMINISTRATION</span></div></div>
+      <div className="brand"><div className="brand-mark"><img src="/scpcontrol.png" alt="SCP Control"/></div><div><strong>SCP CONTROL</strong><span>ADMINISTRATION</span></div></div>
       <nav>{visibleNav.map(item => <button key={item.page} className={page === item.page ? 'active' : ''} onClick={() => { navigatePage(item.page); setDrawer(false) }}><item.icon size={18}/>{item.label}</button>)}</nav>
       <div className="aside-bottom"><div className="system-line"><span className="status-dot"/>System operational</div><div className="profile"><div className="avatar">{user.username.slice(0, 2).toUpperCase()}</div><div><strong>{user.username}</strong><span>{user.role}</span></div><button onClick={logout} title="Log out"><LogOut size={17}/></button></div></div>
     </aside>
     <main className="workspace">
-      <header><button className="mobile-menu" onClick={() => setDrawer(!drawer)}>{drawer ? <X/> : <Menu/>}</button><div><span className="crumb">SCP CONTROL / </span>{page === 'server' ? selectedServer?.name.toUpperCase() ?? 'SERVER' : nav.find(x => x.page === page)?.label.toUpperCase()}</div><div className="header-right"><span className="live-pill"><span className="status-dot"/> LIVE</span><button className="icon-button" onClick={load}><RefreshCw size={17}/></button></div></header>
+      <header><button className="mobile-menu" onClick={() => setDrawer(!drawer)}>{drawer ? <X/> : <Menu/>}</button><div><span className="crumb">SCP CONTROL / </span>{page === 'server' ? selectedServer?.name.toUpperCase() ?? 'SERVER' : nav.find(x => x.page === page)?.label.toUpperCase()}</div><div className="header-right"><span className="live-pill"><span className="status-dot"/> LIVE</span><ThemeButton theme={theme} setTheme={setTheme}/><button className="icon-button" onClick={load}><RefreshCw size={17}/></button></div></header>
       {error && <div className="toast error">{error}<button onClick={() => setError('')}><X size={15}/></button></div>}
       <div className="content">
         {page === 'overview' && <OverviewPage data={overview} navigatePage={navigatePage} openServer={openServer}/>}
