@@ -143,7 +143,25 @@ public sealed class DiscordLinkService(NotificationService settingsService, ILog
                 $"https://discord.com/api/v10/guilds/{settings.DiscordGuildId}/members/{discordId}");
             request.Headers.Authorization = new AuthenticationHeaderValue("Bot", settings.DiscordBotToken);
             using var response = await _http.SendAsync(request);
-            response.EnsureSuccessStatusCode();
+            if (response.StatusCode == System.Net.HttpStatusCode.NotFound)
+            {
+                logger.LogInformation(
+                    "Discord user {DiscordId} is not visible as a member of guild {GuildId}. "
+                    + "Confirm the user and bot are both in that Discord server and the Guild ID is correct. "
+                    + "Basic Discord account details will still be shown.",
+                    discordId, settings.DiscordGuildId);
+                lock (_cacheGate) _discordCache[$"{settings.DiscordGuildId}:{discordId}"] =
+                    (DateTimeOffset.UtcNow.AddMinutes(5), enriched);
+                return enriched;
+            }
+            if (!response.IsSuccessStatusCode)
+            {
+                var body = await response.Content.ReadAsStringAsync();
+                logger.LogWarning(
+                    "Discord member lookup for {DiscordId} in guild {GuildId} returned {Status}: {Body}",
+                    discordId, settings.DiscordGuildId, (int)response.StatusCode, body);
+                return enriched;
+            }
             using var document = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
             var member = document.RootElement;
             var roleIds = member.GetProperty("roles").EnumerateArray()
