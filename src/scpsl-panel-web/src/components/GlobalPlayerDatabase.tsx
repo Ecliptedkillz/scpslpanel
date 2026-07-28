@@ -17,7 +17,7 @@ export function GlobalPlayerDatabase({ onError }: { onError: (message: string) =
   const [search,setSearch] = useState('')
   const [selected,setSelected] = useState<GlobalPlayer | null>(null)
   const [health,setHealth] = useState<LinkHealth[]>([])
-  const [showHealth,setShowHealth] = useState(false)
+  const [tab,setTab] = useState<'players'|'watchlist'|'links'>('players')
   useEffect(() => {
     Promise.all([
       api<GlobalPlayer[]>('/players/global').then(setRecords),
@@ -25,33 +25,37 @@ export function GlobalPlayerDatabase({ onError }: { onError: (message: string) =
     ]).catch(e=>onError(e.message))
   }, [onError])
   const issues=health.filter(x=>!x.valid)
+  const displayedRecords=tab==='watchlist'
+    ? records.filter(x=>x.player.moderationHistory.some(item=>item.type==='watchlist'))
+    : records
   const filtered = useMemo(() => {
     const query=search.trim().toLowerCase()
-    if (!query) return records
-    return records.filter(({serverName,player}) => [
+    if (!query) return displayedRecords
+    return displayedRecords.filter(({serverName,player}) => [
       serverName,player.currentName,player.userId,player.discordId,player.steamDisplayName,
       player.discordDisplayName,...(player.discordRoles ?? []),...player.nameHistory.map(x=>x.name),
     ].some(value=>value?.toLowerCase().includes(query)))
-  },[records,search])
+  },[displayedRecords,search])
   return <>
     <div className="global-player-toolbar"><div><span className="eyebrow">IDENTITY INTELLIGENCE</span><h1>Player Database</h1><p>Search linked player identities across every server you can access.</p></div><label><Search size={18}/><input value={search} onChange={e=>setSearch(e.target.value)} placeholder="Search name, Steam, Discord, role…"/></label></div>
-    <div className="player-db-summary"><div><strong>{records.length}</strong><span>KNOWN PLAYERS</span></div><div><strong>{records.filter(x=>x.player.discordId).length}</strong><span>DISCORD LINKS</span></div><div><strong>{new Set(records.map(x=>x.serverId)).size}</strong><span>SERVERS</span></div><button className={issues.length ? 'identity-health bad' : 'identity-health'} onClick={()=>setShowHealth(!showHealth)}><strong>{issues.length || 'OK'}</strong><span>LINK HEALTH</span></button></div>
-    {showHealth && <section className="identity-health-panel">
+    <nav className="page-tabs database-tabs"><button className={tab==='players'?'active':''} onClick={()=>setTab('players')}>All players <span>{records.length}</span></button><button className={tab==='watchlist'?'active':''} onClick={()=>setTab('watchlist')}>Watchlist <span>{records.filter(x=>x.player.moderationHistory.some(item=>item.type==='watchlist')).length}</span></button><button className={tab==='links'?'active':''} onClick={()=>setTab('links')}>Identity links <span className={issues.length?'bad-count':''}>{issues.length||'OK'}</span></button></nav>
+    <div className="player-db-summary"><div><strong>{records.length}</strong><span>KNOWN PLAYERS</span></div><div><strong>{records.filter(x=>x.player.discordId).length}</strong><span>DISCORD LINKS</span></div><div><strong>{new Set(records.map(x=>x.serverId)).size}</strong><span>SERVERS</span></div><div><strong>{records.filter(x=>x.player.moderationHistory.length).length}</strong><span>MODERATED</span></div></div>
+    {tab==='links' && <section className="identity-health-panel">
       <header><div><span className="eyebrow">DISCORD LINKS.CSV</span><h3>Identity-link health</h3></div><span className={`tag ${issues.length ? 'red' : ''}`}>{issues.length ? `${issues.length} ISSUE${issues.length === 1 ? '' : 'S'}` : 'HEALTHY'}</span></header>
       {!issues.length && <p>All {health.length} configured links use valid, unique Steam and Discord IDs.</p>}
       {issues.map(item=><div className="identity-health-row" key={`${item.serverId}:${item.line}`}>
         <span>{item.serverName}</span><code>LINE {item.line}</code><code>{item.steamId || 'missing Steam ID'}</code><code>{item.discordId || 'missing Discord ID'}</code><strong>{item.issue}</strong>
       </div>)}
     </section>}
-    <div className="global-player-grid">{filtered.map(record => {
+    {tab!=='links'&&<div className="global-player-grid">{filtered.map(record => {
       const player=record.player
       return <button className="global-player-card" key={`${record.serverId}:${player.id}`} onClick={()=>setSelected(record)}>
         <div className="dual-avatar">{player.steamAvatarUrl ? <img src={player.steamAvatarUrl} alt=""/> : <UserRound/>}{player.discordAvatarUrl && <img src={player.discordAvatarUrl} alt=""/>}</div>
         <div><span className="eyebrow">{record.serverName}</span><h3>{player.currentName}</h3><p>{player.steamDisplayName ?? player.userId}</p><p>{player.discordDisplayName ?? (player.discordId ? `Discord ${player.discordId}` : 'Discord not linked')}</p></div>
         <span className="tag">{playtime(player.playtimeSeconds)}</span>
       </button>
-    })}</div>
-    {!filtered.length && <div className="empty-mini">No matching players found.</div>}
+    })}</div>}
+    {tab!=='links'&&!filtered.length && <div className="empty-mini">No matching players found.</div>}
     {selected && <GlobalProfileModal record={selected} close={()=>setSelected(null)} onError={onError} onUpdated={updated=>{const player={...selected.player,...updated};setSelected({...selected,player});setRecords(records.map(x=>x.serverId===selected.serverId&&x.player.id===player.id?{...x,player}:x))}}/>}
   </>
 }
