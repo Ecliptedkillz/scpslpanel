@@ -165,7 +165,7 @@ function Panel({ user, onLogout }: { user: User; onLogout: () => void }) {
         {page === 'schedules' && <SchedulesPage servers={servers} onError={setError}/>}
         {page === 'audit' && <AuditPage/>}
         {page === 'admins' && <AdminManagerPage user={user} servers={servers} onError={setError}/>}
-        {page === 'settings' && <SettingsPage/>}
+        {page === 'settings' && <SettingsPage user={user} onError={setError}/>}
       </div>
     </main>
   </div>
@@ -514,8 +514,23 @@ function AdminManagerPage({ user, servers, onError }: { user: User; servers: Ser
   </>
 }
 
-function SettingsPage() {
-  return <><PageTitle eyebrow="SYSTEM" title="Panel settings"/><section className="settings-grid"><article className="panel"><FileCode2 size={22}/><h2>Configuration</h2><p>Panel settings live in <code>appsettings.json</code>. Environment variables can override production values.</p></article><article className="panel"><Shield size={22}/><h2>Security</h2><p>Use HTTPS before exposing the panel publicly and keep the owner password secure.</p></article><article className="panel"><Activity size={22}/><h2>Access control</h2><p>Administrators and their server permissions are managed in the dedicated Admin Manager tab.</p></article></section></>
+function SettingsPage({ user, onError }: { user: User; onError: (e: string) => void }) {
+  const [password, setPassword] = useState('')
+  const [confirmPassword, setConfirmPassword] = useState('')
+  const [saved, setSaved] = useState(false)
+  const [busy, setBusy] = useState(false)
+  const changePassword = async (event: FormEvent) => {
+    event.preventDefault(); setSaved(false)
+    if (password.length < 8) return onError('Password must be at least 8 characters.')
+    if (password !== confirmPassword) return onError('The passwords do not match.')
+    setBusy(true)
+    try {
+      await api('/users/me/password', { method: 'PUT', body: JSON.stringify({ username: user.username, password }) })
+      setPassword(''); setConfirmPassword(''); setSaved(true)
+    } catch (e) { onError(e instanceof Error ? e.message : 'Unable to change password') }
+    finally { setBusy(false) }
+  }
+  return <><PageTitle eyebrow="SYSTEM" title="Panel settings"/><section className="settings-grid"><form className="panel" onSubmit={changePassword}><Shield size={22}/><h2>Change my password</h2><p>Signed in as <strong>{user.username}</strong>.</p><label>NEW PASSWORD<input type="password" minLength={8} required value={password} onChange={e => setPassword(e.target.value)} autoComplete="new-password"/></label><label>CONFIRM PASSWORD<input type="password" minLength={8} required value={confirmPassword} onChange={e => setConfirmPassword(e.target.value)} autoComplete="new-password"/></label>{saved && <p className="success-message">Password changed successfully.</p>}<button className="primary wide" disabled={busy}>{busy ? 'SAVING…' : 'CHANGE PASSWORD'}</button></form><article className="panel"><FileCode2 size={22}/><h2>Configuration</h2><p>Panel settings live in <code>appsettings.json</code>. Environment variables can override production values.</p></article><article className="panel"><Activity size={22}/><h2>Access control</h2><p>Administrators and their server permissions are managed in the dedicated Admin Manager tab.</p></article></section></>
 }
 
 function Table({ headers, children }: { headers: string[]; children: React.ReactNode }) {
