@@ -13,7 +13,7 @@ public sealed record ServerSnapshot(
 
 public sealed record PlayerInfo(
     string Id, string Nickname, string UserId, string IpAddress, string Role, int Ping,
-    DateTimeOffset ConnectedAt);
+    DateTimeOffset ConnectedAt, long SessionSeconds = 0, bool IsMuted = false);
 
 public sealed record BanEntry(
     Guid Id, string Target, string DisplayName, string Reason, string IssuedBy,
@@ -29,7 +29,8 @@ public sealed record ScheduleEntry(
 public sealed record PanelUser(
     Guid Id, string Username, string PasswordHash, string Role, bool Enabled,
     DateTimeOffset CreatedAt, IReadOnlyList<Guid>? ServerIds = null,
-    IReadOnlyList<string>? Permissions = null);
+    IReadOnlyList<string>? Permissions = null, IReadOnlyList<ServerAccessGrant>? ServerAccess = null);
+public sealed record ServerAccessGrant(Guid ServerId, IReadOnlyList<string> Permissions);
 
 public sealed record PluginEntry(
     string Name, string Version, string Framework, bool Enabled, string Path);
@@ -45,7 +46,7 @@ public sealed record ServerCreateRequest(
 public sealed record LoginRequest(string Username, string Password);
 public sealed record AccountRequest(
     string Username, string? Password, bool Enabled, IReadOnlyList<Guid> ServerIds,
-    IReadOnlyList<string> Permissions);
+    IReadOnlyList<string> Permissions, IReadOnlyList<ServerAccessGrant>? ServerAccess = null);
 public sealed record CommandRequest(string Command);
 public sealed record ModerationRequest(string PlayerId, string? Reason, int? DurationMinutes);
 public sealed record ConfigFileRequest(string Content);
@@ -53,7 +54,9 @@ public sealed record PluginActionRequest(string Path, string Action);
 public sealed record PluginConfigRequest(string Path, string Content);
 public sealed record ScheduleRequest(
     Guid ServerId, string Name, string Cron, string Action, bool Enabled, int WarningSeconds = 0);
-public sealed record BridgePlayerReport(int PlayerId, string DisplayName, string UserId, string IpAddress, string Role);
+public sealed record BridgePlayerReport(
+    int PlayerId, string DisplayName, string UserId, string IpAddress, string Role,
+    int Ping = 0, long SessionSeconds = 0, bool IsMuted = false);
 public sealed record BridgeHeartbeat(string BridgeVersion, string ApiVersion, string RoundState, int MaxPlayers, IReadOnlyList<BridgePlayerReport> Players);
 public sealed record BridgeStatus(bool Connected, DateTimeOffset? LastSeenAt, string? BridgeVersion, string? ApiVersion, string? RoundState, int MaxPlayers, IReadOnlyList<PlayerInfo> Players);
 public sealed record PlayerNameEntry(string Name, DateTimeOffset FirstSeenAt, DateTimeOffset LastSeenAt);
@@ -80,3 +83,17 @@ public sealed record BackupEntry(
     Guid Id, Guid ServerId, DateTimeOffset CreatedAt, string FileName, long SizeBytes, string Actor);
 public sealed record RestartCountdownRequest(int Seconds, string? Message);
 public sealed record RestartCountdownStatus(Guid ServerId, DateTimeOffset DueAt, string Message, string Actor);
+public sealed record BridgeCommand(
+    Guid Id, string Type, string? PlayerId, string? Reason, int? DurationSeconds,
+    string? Message, DateTimeOffset CreatedAt);
+public sealed record BridgeCommandResult(bool Success, string? Message);
+public sealed record BridgeEventRequest(
+    string Type, DateTimeOffset At, string? PlayerId = null, string? UserId = null,
+    string? DisplayName = null, string? Detail = null, int? DurationSeconds = null);
+public sealed record ServerActivityEntry(
+    Guid Id, Guid ServerId, DateTimeOffset At, string Type, string? PlayerId,
+    string? UserId, string? DisplayName, string Detail);
+public sealed record RoundHistoryEntry(
+    Guid Id, Guid ServerId, DateTimeOffset StartedAt, DateTimeOffset? EndedAt,
+    string? LeadingTeam, long? DurationSeconds);
+public sealed record AnnouncementRequest(string Message, int DurationSeconds);

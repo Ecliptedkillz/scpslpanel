@@ -60,6 +60,8 @@ export interface Player {
   role: string
   ping: number
   connectedAt: string
+  sessionSeconds: number
+  isMuted: boolean
 }
 
 export interface BridgeStatus {

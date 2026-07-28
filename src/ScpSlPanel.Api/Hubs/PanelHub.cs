@@ -14,9 +14,11 @@ public sealed class PanelHub(JsonStore store) : Hub
         if (!Guid.TryParse(Context.User?.FindFirstValue(ClaimTypes.NameIdentifier), out var userId))
             throw new HubException("Unauthorized.");
         var user = (await store.ReadAsync<PanelUser>("users")).FirstOrDefault(x => x.Id == userId && x.Enabled);
+        var grant = user?.ServerAccess?.FirstOrDefault(x => x.ServerId == serverId);
+        var permissions = grant?.Permissions ?? user?.Permissions;
         if (user is null || (user.Role != "Owner"
-            && (!(user.ServerIds?.Contains(serverId) ?? false)
-                || !(user.Permissions?.Contains("console", StringComparer.OrdinalIgnoreCase) ?? false))))
+            && (!(grant is not null || (user.ServerIds?.Contains(serverId) ?? false))
+                || !(permissions?.Contains("console", StringComparer.OrdinalIgnoreCase) ?? false))))
             throw new HubException("You do not have console access for this server.");
         await Groups.AddToGroupAsync(Context.ConnectionId, $"server:{serverId}");
     }

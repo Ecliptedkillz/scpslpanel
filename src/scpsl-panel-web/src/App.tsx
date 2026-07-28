@@ -9,8 +9,9 @@ import { api, ApiError } from './api'
 import type { AuditEntry, Ban, BridgeSetup, BridgeStatus, Overview, Player, Schedule, Server } from './types'
 
 type Page = 'overview' | 'servers' | 'server' | 'bans' | 'schedules' | 'audit' | 'admins' | 'settings'
-type ServerTab = 'overview' | 'monitoring' | 'console' | 'players' | 'player-history' | 'restarts' | 'plugins' | 'files' | 'maintenance'
-type User = { username: string; role: string; serverIds: string[]; permissions: string[] }
+type ServerTab = 'overview' | 'monitoring' | 'console' | 'players' | 'player-history' | 'activity' | 'restarts' | 'plugins' | 'files' | 'maintenance'
+type ServerAccessGrant = { serverId: string; permissions: string[] }
+type User = { username: string; role: string; serverIds: string[]; permissions: string[]; serverAccess?: ServerAccessGrant[] }
 type ThemeMode = 'dark' | 'light' | 'system'
 
 const nav: { page: Page; label: string; icon: typeof LayoutDashboard }[] = [
@@ -26,7 +27,7 @@ const nav: { page: Page; label: string; icon: typeof LayoutDashboard }[] = [
 const fmtBytes = (bytes: number) => bytes ? `${(bytes / 1024 / 1024).toFixed(0)} MB` : '0 MB'
 const fmtState = (state: unknown) => typeof state === 'string' ? state.toUpperCase() : 'UNKNOWN'
 const topLevelPages = new Set<Page>(['overview', 'servers', 'bans', 'schedules', 'audit', 'admins', 'settings'])
-const serverTabs = new Set<ServerTab>(['overview', 'monitoring', 'console', 'players', 'player-history', 'restarts', 'plugins', 'files', 'maintenance'])
+const serverTabs = new Set<ServerTab>(['overview', 'monitoring', 'console', 'players', 'player-history', 'activity', 'restarts', 'plugins', 'files', 'maintenance'])
 const readRoute = () => {
   const parts = window.location.pathname.split('/').filter(Boolean).map(decodeURIComponent)
   if (parts.length >= 2 && serverTabs.has(parts[1] as ServerTab))
@@ -183,7 +184,7 @@ function Panel({ user, onLogout, theme, setTheme }: { user: User; onLogout: () =
       <div className="content">
         {page === 'overview' && <OverviewPage data={overview} navigatePage={navigatePage} openServer={openServer}/>}
         {page === 'servers' && <ServersPage servers={servers} refresh={load} openServer={openServer} onError={setError}/>}
-        {page === 'server' && <ServerWorkspace server={selectedServer} tab={serverTab} setTab={navigateServerTab} refresh={load} back={() => navigatePage('servers')} onError={setError}/>}
+        {page === 'server' && <ServerWorkspace user={user} server={selectedServer} tab={serverTab} setTab={navigateServerTab} refresh={load} back={() => navigatePage('servers')} onError={setError}/>}
         {page === 'bans' && <BansPage onError={setError}/>}
         {page === 'schedules' && <SchedulesPage servers={servers} onError={setError}/>}
         {page === 'audit' && <AuditPage/>}
@@ -267,7 +268,7 @@ function AddServerModal({ close, saved, onError }: { close: () => void; saved: (
   </form></div>
 }
 
-function ServerWorkspace({ server, tab, setTab, refresh, back, onError }: { server?: Server; tab: ServerTab; setTab: (tab: ServerTab) => void; refresh: () => void; back: () => void; onError: (e: string) => void }) {
+function ServerWorkspace({ user, server, tab, setTab, refresh, back, onError }: { user: User; server?: Server; tab: ServerTab; setTab: (tab: ServerTab) => void; refresh: () => void; back: () => void; onError: (e: string) => void }) {
   const [busy, setBusy] = useState(false)
   if (!server) return <EmptyPage icon={ServerIcon} title="Server not found" text="The selected server was removed or is no longer available."><button onClick={back}>BACK TO SERVERS</button></EmptyPage>
   const action = async (name: string) => {
@@ -277,16 +278,19 @@ function ServerWorkspace({ server, tab, setTab, refresh, back, onError }: { serv
     catch (error) { onError(error instanceof Error ? error.message : 'Server action failed') }
     finally { setBusy(false) }
   }
-  const tabs: { id: ServerTab; label: string; icon: typeof LayoutDashboard }[] = [
-    { id: 'overview', label: 'Overview', icon: LayoutDashboard },
-    { id: 'monitoring', label: 'Monitoring', icon: Activity },
-    { id: 'console', label: 'Console', icon: Terminal },
-    { id: 'players', label: 'Live Players', icon: Users },
-    { id: 'player-history', label: 'Player Database', icon: History },
-    { id: 'restarts', label: 'Restarts', icon: RotateCcw },
-    { id: 'plugins', label: 'Plugins', icon: Plug },
-    { id: 'files', label: 'Files & Config', icon: FolderOpen },
-    { id: 'maintenance', label: 'Maintenance', icon: Settings },
+  const permissions = user.role === 'Owner' ? null : user.serverAccess?.find(x => x.serverId === server.id)?.permissions ?? user.permissions
+  const allowed = (permission: string) => permissions === null || permissions.includes(permission)
+  const tabs: { id: ServerTab; label: string; icon: typeof LayoutDashboard; permission: string }[] = [
+    { id: 'overview', label: 'Overview', icon: LayoutDashboard, permission: 'view' },
+    { id: 'monitoring', label: 'Monitoring', icon: Activity, permission: 'monitoring' },
+    { id: 'console', label: 'Console', icon: Terminal, permission: 'console' },
+    { id: 'players', label: 'Live Players', icon: Users, permission: 'players' },
+    { id: 'player-history', label: 'Player Database', icon: History, permission: 'players.history' },
+    { id: 'activity', label: 'Activity & Rounds', icon: Activity, permission: 'monitoring' },
+    { id: 'restarts', label: 'Restarts', icon: RotateCcw, permission: 'server.restart' },
+    { id: 'plugins', label: 'Plugins', icon: Plug, permission: 'plugins' },
+    { id: 'files', label: 'Files & Config', icon: FolderOpen, permission: 'config' },
+    { id: 'maintenance', label: 'Maintenance', icon: Settings, permission: 'maintenance' },
   ]
   return <>
     <button className="back-button" onClick={back}><ArrowLeft size={15}/> ALL SERVERS</button>
@@ -294,18 +298,19 @@ function ServerWorkspace({ server, tab, setTab, refresh, back, onError }: { serv
       <div className={`server-state ${server.state}`}><Gamepad2 size={25}/></div>
       <div><span className="eyebrow">MANAGED INSTANCE</span><h1>{server.name}</h1><span className={`state-label ${server.state}`}><span/> {fmtState(server.state)}</span></div>
       <div className="server-hero-actions">
-        <button disabled={busy || server.state === 'online'} onClick={() => action('start')}><Play size={15}/> START</button>
-        <button disabled={busy || server.state === 'offline'} onClick={() => action('restart')}><RotateCcw size={15}/> RESTART</button>
-        <button disabled={busy || server.state === 'offline'} className="danger" onClick={() => action('stop')}><Square size={14}/> STOP</button>
+        {allowed('server.start') && <button disabled={busy || server.state === 'online'} onClick={() => action('start')}><Play size={15}/> START</button>}
+        {allowed('server.restart') && <button disabled={busy || server.state === 'offline'} onClick={() => action('restart')}><RotateCcw size={15}/> RESTART</button>}
+        {allowed('server.stop') && <button disabled={busy || server.state === 'offline'} className="danger" onClick={() => action('stop')}><Square size={14}/> STOP</button>}
       </div>
     </section>
-    <div className="server-tabs">{tabs.map(item => <button key={item.id} className={tab === item.id ? 'active' : ''} onClick={() => setTab(item.id)}><item.icon size={16}/>{item.label}</button>)}</div>
+    <div className="server-tabs">{tabs.filter(item => allowed(item.permission)).map(item => <button key={item.id} className={tab === item.id ? 'active' : ''} onClick={() => setTab(item.id)}><item.icon size={16}/>{item.label}</button>)}</div>
     <div className="server-tab-content">
       {tab === 'overview' && <ServerOverview server={server} setTab={setTab}/>}
       {tab === 'monitoring' && <MonitoringPage server={server} onError={onError}/>}
       {tab === 'console' && <ConsolePage servers={[server]} selected={server.id} setSelected={() => {}} onError={onError} embedded/>}
-      {tab === 'players' && <ServerPlayers server={server} onError={onError} initialMode="live"/>}
-      {tab === 'player-history' && <ServerPlayers server={server} onError={onError} initialMode="history"/>}
+      {tab === 'players' && <ServerPlayers server={server} onError={onError} initialMode="live" canManage={allowed('players.manage')} canAnnounce={allowed('announcements')}/>}
+      {tab === 'player-history' && <ServerPlayers server={server} onError={onError} initialMode="history" canManage={allowed('players.manage')} canAnnounce={allowed('announcements')}/>}
+      {tab === 'activity' && <ServerActivityPage server={server} onError={onError}/>}
       {tab === 'restarts' && <RestartManagerPage server={server} onError={onError}/>}
       {tab === 'plugins' && <PluginsPage servers={[server]} selected={server.id} setSelected={() => {}} onError={onError} embedded/>}
       {tab === 'files' && <ServerFiles server={server} onError={onError}/>}
@@ -379,7 +384,7 @@ function MaintenancePage({ server, onError }: { server: Server; onError: (value:
   return <section className="maintenance-layout"><article className="panel"><div className="panel-head"><div><span className="eyebrow">SAFE OPERATIONS</span><h2>Update and backup</h2></div></div><div className="maintenance-actions"><button onClick={() => run('backups')} disabled={!!busy}><Save/><div><strong>CREATE BACKUP</strong><span>Archive server configuration files</span></div></button><button onClick={() => run('update')} disabled={!!busy || server.state !== 'offline'}><RefreshCw/><div><strong>RUN UPDATE</strong><span>{server.state === 'offline' ? 'Backup, then execute update command' : 'Stop the server before updating'}</span></div></button></div></article><article className="panel"><div className="panel-head"><div><span className="eyebrow">RECOVERY</span><h2>Available backups</h2></div></div>{backups.map(item => <div className="backup-row" key={item.id}><FileCode2/><div><strong>{item.fileName}</strong><small>{new Date(item.createdAt).toLocaleString()} · {fmtBytes(item.sizeBytes)} · {item.actor}</small></div><a className="manage-button" href={`/api/servers/${server.id}/backups/${encodeURIComponent(item.fileName)}`}>DOWNLOAD</a></div>)}{!backups.length && <EmptyMini text="No backups created yet."/ >}</article></section>
 }
 
-function ServerPlayers({ server, onError, initialMode = 'live' }: { server: Server; onError: (error: string) => void; initialMode?: 'live' | 'history' }) {
+function ServerPlayers({ server, onError, initialMode = 'live', canManage = true, canAnnounce = true }: { server: Server; onError: (error: string) => void; initialMode?: 'live' | 'history'; canManage?: boolean; canAnnounce?: boolean }) {
   type PlayerRecord = { id: string; userId: string; lastIpAddress: string; currentName: string; firstConnectedAt: string; lastConnectedAt: string; playtimeSeconds: number; connections: number; nameHistory: { name: string; firstSeenAt: string; lastSeenAt: string }[]; moderationHistory: { id: string; type: string; reason: string; actor: string; at: string; durationMinutes: number | null }[]; notes: { id: string; text: string; actor: string; at: string }[] }
   const [status, setStatus] = useState<BridgeStatus | null>(null)
   const [setup, setSetup] = useState<BridgeSetup | null>(null)
@@ -387,6 +392,7 @@ function ServerPlayers({ server, onError, initialMode = 'live' }: { server: Serv
   const [history, setHistory] = useState<PlayerRecord[]>([])
   const [profile, setProfile] = useState<PlayerRecord | null>(null)
   const [note, setNote] = useState('')
+  const [announcement, setAnnouncement] = useState('')
   const load = useCallback(async () => {
     try { setStatus(await api<BridgeStatus>(`/servers/${server.id}/players`)) }
     catch (error) { onError(error instanceof Error ? error.message : 'Unable to load players') }
@@ -399,7 +405,7 @@ function ServerPlayers({ server, onError, initialMode = 'live' }: { server: Serv
   }, [load, server.id])
   const loadHistory = useCallback(() => api<PlayerRecord[]>(`/servers/${server.id}/player-history`).then(setHistory).catch(error => onError(error.message)), [server.id, onError])
   useEffect(() => { if (mode === 'history') void loadHistory() }, [mode, loadHistory])
-  const moderate = async (player: Player, action: 'kick' | 'ban' | 'mute') => {
+  const moderate = async (player: Player, action: 'kick' | 'ban' | 'mute' | 'unmute') => {
     const reason = window.prompt(`Reason to ${action} ${player.nickname}:`, `Removed by ${action === 'kick' ? 'administrator' : 'moderator'}`)
     if (reason === null) return
     const durationMinutes = action === 'ban' ? Number(window.prompt('Ban duration in minutes:', '60') ?? 0) : null
@@ -415,7 +421,8 @@ function ServerPlayers({ server, onError, initialMode = 'live' }: { server: Serv
   if (mode === 'history') return <>{navigation}<PlayerHistoryView server={server} history={history} profile={profile} setProfile={setProfile} note={note} setNote={setNote} reload={loadHistory} onError={onError}/></>
   if (status?.connected) return <section className="players-panel">{navigation}
     <div className="bridge-banner connected"><div><span className="status-dot"/><strong>LABAPI BRIDGE CONNECTED</strong><small>v{status.bridgeVersion} · LabAPI {status.apiVersion} · heartbeat {status.lastSeenAt ? fmtAgo(status.lastSeenAt) : 'now'}</small></div><span>{status.players.length}/{status.maxPlayers || '—'} PLAYERS</span></div>
-    <Table headers={['PLAYER','USER ID','ROLE','CONNECTED','ACTIONS']}>{status.players.map(player => <tr key={player.id}><td><strong>{player.nickname}</strong><small>Player #{player.id} · {player.ipAddress || 'Identity protected'}</small></td><td className="mono">{player.userId || 'Do Not Track'}</td><td><span className="tag">{player.role}</span></td><td>{fmtAgo(player.connectedAt)}</td><td><div className="row-actions"><button onClick={() => moderate(player, 'mute')}>MUTE</button><button onClick={() => moderate(player, 'kick')}>KICK</button><button className="danger" onClick={() => moderate(player, 'ban')}>BAN</button></div></td></tr>)}</Table>
+    {canAnnounce && <form className="announcement-bar" onSubmit={async event => { event.preventDefault(); if (!announcement.trim()) return; try { await api(`/servers/${server.id}/announcement`, {method:'POST', body:JSON.stringify({message:announcement,durationSeconds:10})}); setAnnouncement('') } catch(error) { onError(error instanceof Error ? error.message : 'Unable to send announcement') } }}><input value={announcement} onChange={e => setAnnouncement(e.target.value)} placeholder="Broadcast an announcement to every player…"/><button className="primary">ANNOUNCE</button></form>}
+    <Table headers={['PLAYER','USER ID','ROLE','PING / SESSION','VOICE','ACTIONS']}>{status.players.map(player => <tr key={player.id}><td><strong>{player.nickname}</strong><small>Player #{player.id} · {player.ipAddress || 'Identity protected'}</small></td><td className="mono">{player.userId || 'Do Not Track'}</td><td><span className="tag">{player.role}</span></td><td><strong>{player.ping || '—'} ms</strong><small>{formatPlaytime(player.sessionSeconds)}</small></td><td><span className={`tag ${player.isMuted ? 'red' : ''}`}>{player.isMuted ? 'MUTED' : 'OPEN'}</span></td><td>{canManage && <div className="row-actions"><button onClick={() => moderate(player, player.isMuted ? 'unmute' : 'mute')}>{player.isMuted ? 'UNMUTE' : 'MUTE'}</button><button onClick={() => moderate(player, 'kick')}>KICK</button><button className="danger" onClick={() => moderate(player, 'ban')}>BAN</button></div>}</td></tr>)}</Table>
     {!status.players.length && <EmptyMini text="Bridge connected. No players are currently online."/>}
   </section>
   const config = setup ? `panel_url: "${window.location.origin}"\nserver_id: "${setup.serverId}"\ntoken: "${setup.token}"\nheartbeat_seconds: 5\nrespect_do_not_track: true` : ''
@@ -429,6 +436,19 @@ function ServerPlayers({ server, onError, initialMode = 'live' }: { server: Serv
     </ol>
     <div className="integration-checks"><span className={server.state === 'online' ? 'ok' : ''}><i/>{server.state === 'online' ? 'Server process online' : 'Start the server process'}</span><span className={status?.connected ? 'ok' : ''}><i/>{status?.lastSeenAt ? `Last heartbeat ${fmtAgo(status.lastSeenAt)}` : 'Waiting for first heartbeat'}</span></div>
   </section></>
+}
+
+function ServerActivityPage({ server, onError }: { server: Server; onError: (error: string) => void }) {
+  type Event = { id: string; at: string; type: string; displayName: string | null; userId: string | null; detail: string }
+  type Round = { id: string; startedAt: string; endedAt: string | null; leadingTeam: string | null; durationSeconds: number | null }
+  const [events, setEvents] = useState<Event[]>([])
+  const [rounds, setRounds] = useState<Round[]>([])
+  const load = useCallback(async () => {
+    try { const [activity, history] = await Promise.all([api<Event[]>(`/servers/${server.id}/activity`), api<Round[]>(`/servers/${server.id}/rounds`)]); setEvents(activity); setRounds(history) }
+    catch(error) { onError(error instanceof Error ? error.message : 'Unable to load activity') }
+  }, [server.id, onError])
+  useEffect(() => { void load(); const timer = setInterval(load, 5000); return () => clearInterval(timer) }, [load])
+  return <section className="activity-round-grid"><article className="panel"><div className="panel-head"><div><span className="eyebrow">PLAYER EVENTS</span><h2>Join, leave & moderation</h2></div></div><Table headers={['TIME','EVENT','PLAYER','DETAIL']}>{events.map(item => <tr key={item.id}><td>{new Date(item.at).toLocaleString()}</td><td><span className={`tag ${['ban','kick','mute'].includes(item.type) ? 'red' : ''}`}>{item.type.toUpperCase()}</span></td><td><strong>{item.displayName || 'Server'}</strong><small>{item.userId || ''}</small></td><td>{item.detail || '—'}</td></tr>)}</Table>{!events.length && <EmptyMini text="Bridge events will appear here."/>}</article><article className="panel"><div className="panel-head"><div><span className="eyebrow">ROUND TIMELINE</span><h2>Round history</h2></div></div><Table headers={['STARTED','ENDED','DURATION','RESULT']}>{rounds.map(round => <tr key={round.id}><td>{new Date(round.startedAt).toLocaleString()}</td><td>{round.endedAt ? new Date(round.endedAt).toLocaleString() : 'IN PROGRESS'}</td><td>{round.durationSeconds == null ? '—' : formatPlaytime(round.durationSeconds)}</td><td>{round.leadingTeam || '—'}</td></tr>)}</Table>{!rounds.length && <EmptyMini text="Completed rounds will appear here."/>}</article></section>
 }
 
 type StoredPlayer = { id: string; userId: string; lastIpAddress: string; currentName: string; firstConnectedAt: string; lastConnectedAt: string; playtimeSeconds: number; connections: number; nameHistory: { name: string; firstSeenAt: string; lastSeenAt: string }[]; moderationHistory: { id: string; type: string; reason: string; actor: string; at: string; durationMinutes: number | null }[]; notes: { id: string; text: string; actor: string; at: string }[] }
@@ -590,41 +610,51 @@ function AuditPage() {
 }
 
 function AdminManagerPage({ user, servers, onError }: { user: User; servers: Server[]; onError: (e: string) => void }) {
-  type Account = { id: string; username: string; role: string; enabled: boolean; serverIds: string[]; permissions: string[] }
+  type Account = { id: string; username: string; role: string; enabled: boolean; serverIds: string[]; permissions: string[]; serverAccess?: ServerAccessGrant[] }
   const permissionOptions = [
     ['view', 'View server'], ['server.start', 'Start server'], ['server.stop', 'Stop server'],
     ['server.restart', 'Restart server'], ['console', 'View console and execute commands'],
     ['players', 'View live players'], ['players.history', 'View player database'],
     ['players.notes', 'Add player notes'], ['players.manage', 'Mute, kick and ban players'], ['plugins', 'View plugins'],
     ['plugins.manage', 'Load / unload / restart plugins'], ['config', 'Read and edit configuration'],
-    ['monitoring', 'View monitoring and incidents'], ['maintenance', 'Backups and server updates'],
+    ['monitoring', 'View monitoring and incidents'], ['announcements', 'Send remote announcements'],
+    ['maintenance', 'Backups and server updates'],
   ]
-  const blank = { id: '', username: '', password: '', enabled: true, serverIds: [] as string[], permissions: ['view'] as string[] }
+  const blank = { id: '', username: '', password: '', enabled: true, serverIds: [] as string[], permissions: [] as string[], serverAccess: [] as ServerAccessGrant[] }
   const [accounts, setAccounts] = useState<Account[]>([])
   const [form, setForm] = useState(blank)
   const [showModal, setShowModal] = useState(false)
+  const [scopeServer, setScopeServer] = useState('')
   const [busy, setBusy] = useState(false)
   const loadAccounts = () => { if (user.role === 'Owner') api<Account[]>('/users').then(setAccounts).catch(e => onError(e.message)) }
   useEffect(() => { loadAccounts() }, [])
   if (user.role !== 'Owner') return <><PageTitle eyebrow="ACCESS CONTROL" title="Admin Manager"/><section className="panel"><Shield size={22}/><h2>Owner access required</h2><p>Only the panel owner can manage administrator accounts.</p></section></>
-  const toggle = (key: 'serverIds' | 'permissions', value: string) =>
-    setForm({ ...form, [key]: form[key].includes(value) ? form[key].filter(x => x !== value) : [...form[key], value] })
+  const toggleServer = (serverId: string) => {
+    const exists = form.serverAccess.some(x => x.serverId === serverId)
+    setForm({...form, serverIds: exists ? form.serverIds.filter(x => x !== serverId) : [...form.serverIds, serverId],
+      serverAccess: exists ? form.serverAccess.filter(x => x.serverId !== serverId) : [...form.serverAccess, {serverId, permissions:['view']}]})
+    if (!exists) setScopeServer(serverId)
+  }
+  const togglePermission = (value: string) => setForm({...form, serverAccess: form.serverAccess.map(grant =>
+    grant.serverId !== scopeServer ? grant : {...grant, permissions:grant.permissions.includes(value) ? grant.permissions.filter(x => x !== value) : [...grant.permissions,value]} )})
   const edit = (account: Account) => {
-    setForm({ id: account.id, username: account.username, password: '', enabled: account.enabled, serverIds: account.serverIds, permissions: account.permissions })
+    const grants = account.serverAccess?.length ? account.serverAccess : account.serverIds.map(serverId => ({serverId, permissions:account.permissions}))
+    setForm({ id: account.id, username: account.username, password: '', enabled: account.enabled, serverIds: grants.map(x => x.serverId), permissions: [], serverAccess: grants })
+    setScopeServer(grants[0]?.serverId || '')
     setShowModal(true)
   }
-  const add = () => { setForm(blank); setShowModal(true) }
+  const add = () => { setForm(blank); setScopeServer(''); setShowModal(true) }
   const applyPreset = (name: 'viewer' | 'moderator' | 'manager' | 'full') => {
     const values = name === 'viewer' ? ['view', 'players', 'plugins']
       : name === 'moderator' ? ['view', 'console', 'players', 'players.history', 'players.notes', 'players.manage']
       : name === 'manager' ? ['view', 'server.start', 'server.stop', 'server.restart', 'console', 'players', 'players.history', 'players.notes', 'players.manage', 'plugins']
       : permissionOptions.map(([value]) => value)
-    setForm({ ...form, permissions: values })
+    setForm({ ...form, serverAccess: form.serverAccess.map(grant => grant.serverId === scopeServer ? {...grant,permissions:values} : grant) })
   }
   const save = async (event: FormEvent) => {
     event.preventDefault(); setBusy(true)
     try {
-      await api(form.id ? `/users/${form.id}` : '/users', { method: form.id ? 'PUT' : 'POST', body: JSON.stringify({ username: form.username, password: form.password || null, enabled: form.enabled, serverIds: form.serverIds, permissions: form.permissions }) })
+      await api(form.id ? `/users/${form.id}` : '/users', { method: form.id ? 'PUT' : 'POST', body: JSON.stringify({ username: form.username, password: form.password || null, enabled: form.enabled, serverIds: form.serverAccess.map(x => x.serverId), permissions: [], serverAccess: form.serverAccess }) })
       setForm(blank); setShowModal(false); loadAccounts()
     } catch (e) { onError(e instanceof Error ? e.message : 'Unable to save account') }
     finally { setBusy(false) }
@@ -636,9 +666,9 @@ function AdminManagerPage({ user, servers, onError }: { user: User; servers: Ser
   }
   return <><PageTitle eyebrow="ACCESS CONTROL" title="Admin Manager"/>
     <section className="admin-manager-card"><div className="admin-manager-head"><div><h2>All Admins <span>({accounts.length})</span></h2><p>Manage panel accounts, server access, and operational permissions.</p></div><button className="primary" onClick={add}><Plus size={15}/> ADD ADMIN</button></div>
-      <div className="admin-table-wrap"><table className="admin-table"><thead><tr><th>ADMIN</th><th>AUTH</th><th>SERVER ACCESS</th><th>PERMISSIONS</th><th>STATUS</th><th>ACTIONS</th></tr></thead><tbody>{accounts.map(account => <tr key={account.id}><td><div className="admin-identity"><div className="avatar">{account.username.slice(0,2).toUpperCase()}</div><div><strong>{account.username}</strong><small>{account.role}</small></div></div></td><td><span className="admin-auth" title="Password authentication">◆</span></td><td>{account.role === 'Owner' ? <span className="scope-all">ALL SERVERS</span> : <span>{account.serverIds.length} of {servers.length}</span>}</td><td>{account.role === 'Owner' ? <span className="scope-all">ALL PERMISSIONS</span> : <span>{account.permissions.length} permission{account.permissions.length === 1 ? '' : 's'}</span>}</td><td><span className={`tag ${account.enabled ? '' : 'red'}`}>{account.enabled ? 'ENABLED' : 'DISABLED'}</span></td><td><div className="admin-actions">{account.role === 'Owner' ? <span className="your-account">YOUR ACCOUNT</span> : <><button className="edit" onClick={() => edit(account)}>EDIT</button><button className="delete" onClick={() => remove(account)}>DELETE</button></>}</div></td></tr>)}</tbody></table></div>
+      <div className="admin-table-wrap"><table className="admin-table"><thead><tr><th>ADMIN</th><th>AUTH</th><th>SERVER ACCESS</th><th>PERMISSIONS</th><th>STATUS</th><th>ACTIONS</th></tr></thead><tbody>{accounts.map(account => { const grants = account.serverAccess?.length ? account.serverAccess : account.serverIds.map(serverId => ({serverId,permissions:account.permissions})); const permissionCount = new Set(grants.flatMap(x => x.permissions)).size; return <tr key={account.id}><td><div className="admin-identity"><div className="avatar">{account.username.slice(0,2).toUpperCase()}</div><div><strong>{account.username}</strong><small>{account.role}</small></div></div></td><td><span className="admin-auth" title="Password authentication">◆</span></td><td>{account.role === 'Owner' ? <span className="scope-all">ALL SERVERS</span> : <span>{grants.length} of {servers.length}</span>}</td><td>{account.role === 'Owner' ? <span className="scope-all">ALL PERMISSIONS</span> : <span>{permissionCount} permission type{permissionCount === 1 ? '' : 's'}</span>}</td><td><span className={`tag ${account.enabled ? '' : 'red'}`}>{account.enabled ? 'ENABLED' : 'DISABLED'}</span></td><td><div className="admin-actions">{account.role === 'Owner' ? <span className="your-account">YOUR ACCOUNT</span> : <><button className="edit" onClick={() => edit(account)}>EDIT</button><button className="delete" onClick={() => remove(account)}>DELETE</button></>}</div></td></tr>})}</tbody></table></div>
     </section>
-    {showModal && <div className="modal-backdrop"><form className="modal admin-modal" onSubmit={save}><div className="modal-head"><div><span className="eyebrow">{form.id ? 'EDIT ADMINISTRATOR' : 'NEW ADMINISTRATOR'}</span><h2>{form.id ? form.username : 'Add admin'}</h2><p>Choose exactly which servers and controls this account can access.</p></div><button type="button" className="icon-button" onClick={() => setShowModal(false)}><X size={18}/></button></div><div className="admin-modal-body"><div className="form-row"><label>USERNAME<input required value={form.username} onChange={e => setForm({...form, username:e.target.value})}/></label><label>{form.id ? 'NEW PASSWORD (OPTIONAL)' : 'PASSWORD'}<input required={!form.id} minLength={8} type="password" value={form.password} onChange={e => setForm({...form,password:e.target.value})}/></label></div><label className="check-row"><input type="checkbox" checked={form.enabled} onChange={e => setForm({...form,enabled:e.target.checked})}/> Account enabled</label><div className="preset-row"><span>PERMISSION PRESETS</span><button type="button" onClick={() => applyPreset('viewer')}>VIEWER</button><button type="button" onClick={() => applyPreset('moderator')}>MODERATOR</button><button type="button" onClick={() => applyPreset('manager')}>MANAGER</button><button type="button" onClick={() => applyPreset('full')}>FULL ACCESS</button></div><div className="admin-scope-grid"><section><span className="eyebrow">SERVER ACCESS</span>{servers.map(server => <label className="check-row" key={server.id}><input type="checkbox" checked={form.serverIds.includes(server.id)} onChange={() => toggle('serverIds',server.id)}/><span><strong>{server.name}</strong><small>{server.state}</small></span></label>)}</section><section><span className="eyebrow">PERMISSIONS</span>{permissionOptions.map(([value,label]) => <label className="check-row" key={value}><input type="checkbox" checked={form.permissions.includes(value)} onChange={() => toggle('permissions',value)}/>{label}</label>)}</section></div></div><div className="modal-actions"><button type="button" onClick={() => setShowModal(false)}>CANCEL</button><button className="primary" disabled={busy}><Save size={14}/> {busy ? 'SAVING…' : 'SAVE ADMIN'}</button></div></form></div>}
+    {showModal && <div className="modal-backdrop"><form className="modal admin-modal" onSubmit={save}><div className="modal-head"><div><span className="eyebrow">{form.id ? 'EDIT ADMINISTRATOR' : 'NEW ADMINISTRATOR'}</span><h2>{form.id ? form.username : 'Add admin'}</h2><p>Each assigned server has its own independent permission set.</p></div><button type="button" className="icon-button" onClick={() => setShowModal(false)}><X size={18}/></button></div><div className="admin-modal-body"><div className="form-row"><label>USERNAME<input required value={form.username} onChange={e => setForm({...form, username:e.target.value})}/></label><label>{form.id ? 'NEW PASSWORD (OPTIONAL)' : 'PASSWORD'}<input required={!form.id} minLength={8} type="password" value={form.password} onChange={e => setForm({...form,password:e.target.value})}/></label></div><label className="check-row"><input type="checkbox" checked={form.enabled} onChange={e => setForm({...form,enabled:e.target.checked})}/> Account enabled</label><div className="preset-row"><span>PRESET FOR SELECTED SERVER</span><button type="button" disabled={!scopeServer} onClick={() => applyPreset('viewer')}>VIEWER</button><button type="button" disabled={!scopeServer} onClick={() => applyPreset('moderator')}>MODERATOR</button><button type="button" disabled={!scopeServer} onClick={() => applyPreset('manager')}>MANAGER</button><button type="button" disabled={!scopeServer} onClick={() => applyPreset('full')}>FULL ACCESS</button></div><div className="admin-scope-grid"><section><span className="eyebrow">SERVER ACCESS</span>{servers.map(server => <div className={`server-grant-row ${scopeServer === server.id ? 'active' : ''}`} key={server.id}><label className="check-row"><input type="checkbox" checked={form.serverAccess.some(x => x.serverId === server.id)} onChange={() => toggleServer(server.id)}/><span><strong>{server.name}</strong><small>{server.state}</small></span></label>{form.serverAccess.some(x => x.serverId === server.id) && <button type="button" onClick={() => setScopeServer(server.id)}>EDIT PERMS</button>}</div>)}</section><section><span className="eyebrow">PERMISSIONS {scopeServer ? `· ${servers.find(x => x.id === scopeServer)?.name}` : ''}</span>{scopeServer ? permissionOptions.map(([value,label]) => <label className="check-row" key={value}><input type="checkbox" checked={form.serverAccess.find(x => x.serverId === scopeServer)?.permissions.includes(value) ?? false} onChange={() => togglePermission(value)}/>{label}</label>) : <EmptyMini text="Assign and select a server to configure its permissions."/>}</section></div></div><div className="modal-actions"><button type="button" onClick={() => setShowModal(false)}>CANCEL</button><button className="primary" disabled={busy}><Save size={14}/> {busy ? 'SAVING…' : 'SAVE ADMIN'}</button></div></form></div>}
   </>
 }
 

@@ -25,8 +25,10 @@ public sealed class BridgeStateService
                 player.UserId,
                 player.IpAddress,
                 player.Role,
-                0,
-                existing?.ConnectedAt ?? now);
+                player.Ping,
+                existing?.ConnectedAt ?? now.Subtract(TimeSpan.FromSeconds(Math.Max(0, player.SessionSeconds))),
+                player.SessionSeconds,
+                player.IsMuted);
         }).ToList();
         _states[serverId] = new State(now, heartbeat.BridgeVersion, heartbeat.ApiVersion,
             heartbeat.RoundState, heartbeat.MaxPlayers, players);
