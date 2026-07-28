@@ -336,3 +336,22 @@ table { width:100%; border-collapse:collapse; font-size:12.5px } th { text-align
 @media(min-width:1350px){.admin-modal-v2 .permission-groups{grid-template-columns:repeat(3,minmax(0,1fr))}.admin-modal-v2 .permission-group>div{grid-template-columns:1fr}}
 @media(max-width:1050px){.admin-modal-v2 .admin-scope-grid{grid-template-columns:230px minmax(0,1fr)!important}.admin-modal-v2 .permission-groups{grid-template-columns:1fr}.admin-modal-v2 .account-enabled-card{position:static;margin-top:10px}.admin-modal-v2 .admin-account-section .form-row{grid-template-columns:1fr 1fr}.admin-modal-v2 .admin-account-section .form-row:after{display:none}}
 @media(max-width:720px){.admin-modal-v2-backdrop{padding:0!important}.admin-modal.admin-modal-v2{width:100vw!important;height:100vh!important;border-radius:0}.admin-modal-v2 .admin-modal-body{overflow:auto!important}.admin-modal-v2 .admin-scope-grid{display:flex;flex-direction:column}.admin-modal-v2 .admin-server-selector,.admin-modal-v2 .admin-permission-selector{height:auto;overflow:visible}.admin-modal-v2 .admin-account-section .form-row{grid-template-columns:1fr}.admin-modal-v2 .permission-group>div{grid-template-columns:1fr}.admin-modal-v2 .admin-modal-actions{position:sticky;bottom:0}}
+
+/* Admin modal: compact shell, full-width internal permission workspace */
+.admin-modal-v2-backdrop{padding:24px!important;align-items:center!important}
+.admin-modal.admin-modal-v2{width:min(1180px,calc(100vw - 48px))!important;height:min(860px,calc(100vh - 48px))!important;border-radius:10px!important}
+.admin-modal-v2 .admin-modal-body{overflow:auto!important}
+.admin-modal-v2 .account-enabled-card{position:static;margin:12px 0 0}
+.admin-modal-v2 .admin-account-section .form-row{grid-template-columns:1fr 1fr;max-width:none}
+.admin-modal-v2 .admin-account-section .form-row:after{display:none}
+.admin-modal-v2 .admin-access-section{display:block;min-height:0}
+.admin-modal-v2 .admin-scope-grid{display:flex!important;flex-direction:column;min-height:0;height:auto;gap:12px}
+.admin-modal-v2 .admin-server-selector{flex:none;width:100%;height:auto;min-height:0;overflow:visible;padding:10px 12px}
+.admin-modal-v2 .admin-server-selector .selector-head{padding:2px 3px 9px}
+.admin-modal-v2 .admin-server-selector>.server-grant-row{display:inline-grid;width:min(340px,100%);margin:0 8px 0 0;vertical-align:top}
+.admin-modal-v2 .admin-permission-selector{flex:none;width:100%;height:auto;min-height:0;overflow:visible;padding:17px 18px}
+.admin-modal-v2 .permission-selector-head{align-items:center}
+.admin-modal-v2 .permission-groups{grid-template-columns:repeat(2,minmax(0,1fr));width:100%}
+.admin-modal-v2 .permission-group>div{grid-template-columns:repeat(2,minmax(0,1fr))}
+@media(min-width:1100px){.admin-modal-v2 .permission-groups{grid-template-columns:repeat(3,minmax(0,1fr))}.admin-modal-v2 .permission-group>div{grid-template-columns:1fr}}
+@media(max-width:760px){.admin-modal-v2-backdrop{padding:10px!important}.admin-modal.admin-modal-v2{width:calc(100vw - 20px)!important;height:calc(100vh - 20px)!important;border-radius:8px!important}.admin-modal-v2 .admin-account-section .form-row{grid-template-columns:1fr}.admin-modal-v2 .permission-groups,.admin-modal-v2 .permission-group>div{grid-template-columns:1fr}.admin-modal-v2 .permission-presets{flex-wrap:wrap}.admin-modal-v2 .permission-presets>span{width:100%;margin-bottom:3px}.admin-modal-v2 .permission-tools{flex-direction:column}.admin-modal-v2 .admin-modal-actions{position:relative}}
