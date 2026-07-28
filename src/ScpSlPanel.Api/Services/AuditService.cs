@@ -18,4 +18,20 @@ public sealed class AuditService(JsonStore store, NotificationService notificati
 
     public async Task<IReadOnlyList<AuditEntry>> RecentAsync(int count = 50) =>
         (await store.ReadAsync<AuditEntry>("audit")).Take(Math.Clamp(count, 1, 250)).ToList();
+
+    public async Task<IReadOnlyList<AuditEntry>> SearchAsync(
+        int count, string? query, string? actor, string? action, DateTimeOffset? from, DateTimeOffset? to)
+    {
+        IEnumerable<AuditEntry> entries = await store.ReadAsync<AuditEntry>("audit");
+        if (!string.IsNullOrWhiteSpace(query))
+            entries = entries.Where(x => x.Target.Contains(query, StringComparison.OrdinalIgnoreCase)
+                || x.Detail.Contains(query, StringComparison.OrdinalIgnoreCase));
+        if (!string.IsNullOrWhiteSpace(actor))
+            entries = entries.Where(x => x.Actor.Contains(actor, StringComparison.OrdinalIgnoreCase));
+        if (!string.IsNullOrWhiteSpace(action))
+            entries = entries.Where(x => x.Action.Contains(action, StringComparison.OrdinalIgnoreCase));
+        if (from is not null) entries = entries.Where(x => x.At >= from);
+        if (to is not null) entries = entries.Where(x => x.At <= to);
+        return entries.Take(Math.Clamp(count, 1, 2000)).ToList();
+    }
 }

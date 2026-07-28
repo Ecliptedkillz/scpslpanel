@@ -4,7 +4,7 @@ using ScpSlPanel.Api.Infrastructure;
 
 namespace ScpSlPanel.Api.Services;
 
-public sealed class BridgeCommandService(JsonStore store)
+public sealed class BridgeCommandService(JsonStore store, OperationTracker operations)
 {
     private sealed record Pending(BridgeCommand Command, TaskCompletionSource<BridgeCommandResult> Completion);
     private readonly ConcurrentDictionary<Guid, ConcurrentDictionary<Guid, Pending>> _pending = new();
@@ -18,16 +18,23 @@ public sealed class BridgeCommandService(JsonStore store)
             message, DateTimeOffset.UtcNow);
         var completion = new TaskCompletionSource<BridgeCommandResult>(
             TaskCreationOptions.RunContinuationsAsynchronously);
+        var operation = await operations.StartAsync(serverId, type, playerId ?? message ?? "server",
+            "panel", "Waiting for the game-server bridge");
         _pending.GetOrAdd(serverId, _ => new())[command.Id] = new(command, completion);
         try
         {
             using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
             timeout.CancelAfter(TimeSpan.FromSeconds(30));
-            return await completion.Task.WaitAsync(timeout.Token);
+            var result = await completion.Task.WaitAsync(timeout.Token);
+            await operations.UpdateAsync(operation.Id, result.Success ? "completed" : "failed",
+                result.Message ?? (result.Success ? "Completed" : "Rejected by bridge"));
+            return result;
         }
         catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
         {
-            return new(false, "The game-server bridge did not confirm the command within 30 seconds. Rebuild and reinstall the latest bridge DLL if this continues.");
+            const string timeoutMessage = "The game-server bridge did not confirm the command within 30 seconds. Rebuild and reinstall the latest bridge DLL if this continues.";
+            await operations.UpdateAsync(operation.Id, "failed", timeoutMessage);
+            return new(false, timeoutMessage);
         }
         finally
         {

@@ -25,6 +25,39 @@ public sealed class DiscordBotService(
         }
     }
 
+    public async Task<DiscordDiagnostic> DiagnoseAsync()
+    {
+        var settings = await settingsService.GetAsync();
+        var issues = new List<string>();
+        if (_client?.ConnectionState != ConnectionState.Connected) issues.Add(_error ?? "Bot is not connected.");
+        SocketGuild? guild = null;
+        if (!ulong.TryParse(settings.DiscordGuildId, out var guildId))
+            issues.Add("Guild ID is missing or invalid.");
+        else
+        {
+            guild = _client?.GetGuild(guildId);
+            if (guild is null) issues.Add("Configured guild is not visible to the bot.");
+        }
+        var channels = new List<DiscordChannelDiagnostic>();
+        foreach (var item in new[] {
+            ("Notifications", settings.DiscordNotificationChannelId),
+            ("Moderation", settings.DiscordModerationChannelId),
+            ("Audit", settings.DiscordAuditChannelId) })
+        {
+            var channel = ulong.TryParse(item.Item2, out var channelId) ? guild?.GetTextChannel(channelId) : null;
+            var permissions = channel is null || guild?.CurrentUser is null
+                ? default : guild.CurrentUser.GetPermissions(channel);
+            channels.Add(new(item.Item1, item.Item2, channel is not null, channel?.Name,
+                channel is not null && permissions.ViewChannel,
+                channel is not null && permissions.SendMessages));
+            if (!string.IsNullOrWhiteSpace(item.Item2) && channel is null)
+                issues.Add($"{item.Item1} channel was not found in the configured guild.");
+            else if (channel is not null && (!permissions.ViewChannel || !permissions.SendMessages))
+                issues.Add($"Bot lacks View Channel or Send Messages in #{channel.Name}.");
+        }
+        return new(Status, settings.DiscordGuildId, guild is not null, guild?.Name, channels, issues);
+    }
+
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
         while (!stoppingToken.IsCancellationRequested)

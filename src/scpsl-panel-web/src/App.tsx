@@ -88,6 +88,10 @@ function useConfirmDialog(){
   return {ask,dialog}
 }
 
+function useUnsavedChanges(dirty:boolean){
+  useEffect(()=>{const handler=(event:BeforeUnloadEvent)=>{if(!dirty)return;event.preventDefault();event.returnValue=''};window.addEventListener('beforeunload',handler);return()=>window.removeEventListener('beforeunload',handler)},[dirty])
+}
+
 export function App() {
   const [theme, setTheme] = useState<ThemeMode>(() => (localStorage.getItem('scpcontrol-theme') as ThemeMode) || 'dark')
   const [user, setUser] = useState<User | null | undefined>(undefined)
@@ -95,6 +99,8 @@ export function App() {
     document.documentElement.dataset.density=localStorage.getItem('scpcontrol-density')||'comfortable'
     const accent=localStorage.getItem('scpcontrol-accent')
     if(accent) document.documentElement.style.setProperty('--red',accent)
+    document.documentElement.dataset.motion=localStorage.getItem('scpcontrol-motion')==='reduced'?'reduced':'full'
+    document.documentElement.style.setProperty('--console-font-size',`${localStorage.getItem('scpcontrol-console-size')||14}px`)
     const apply = () => {
       const resolved = theme === 'system'
         ? (window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark') : theme
@@ -158,6 +164,9 @@ function Panel({ user, onLogout, theme, setTheme }: { user: User; onLogout: () =
   const [serverTab, setServerTab] = useState<ServerTab>(initialRoute.tab)
   const [drawer, setDrawer] = useState(false)
   const [error, setError] = useState('')
+  const [success, setSuccess] = useState('')
+  const [activityOpen, setActivityOpen] = useState(false)
+  const [operations, setOperations] = useState<Array<{id:string;type:string;target:string;status:string;message:string;createdAt:string}>>([])
 
   const load = useCallback(async () => {
     try {
@@ -170,6 +179,13 @@ function Panel({ user, onLogout, theme, setTheme }: { user: User; onLogout: () =
     }
   }, [onLogout, selected])
   useEffect(() => { load(); const timer = setInterval(load, 5000); return () => clearInterval(timer) }, [load])
+  useEffect(() => {
+    const refresh = () => api<typeof operations>('/operations?take=30').then(setOperations).catch(() => {})
+    refresh(); const timer = setInterval(refresh, 3000)
+    const notify = (event: Event) => { setSuccess((event as CustomEvent<string>).detail); setTimeout(() => setSuccess(''), 4000) }
+    window.addEventListener('panel-success', notify)
+    return () => { clearInterval(timer); window.removeEventListener('panel-success', notify) }
+  }, [])
   useEffect(() => {
     const onPopState = () => {
       const route = readRoute()
@@ -208,8 +224,10 @@ function Panel({ user, onLogout, theme, setTheme }: { user: User; onLogout: () =
       <div className="aside-bottom"><div className="system-line"><span className="status-dot"/>System operational</div><div className="profile"><div className="avatar">{user.username.slice(0, 2).toUpperCase()}</div><div><strong>{user.username}</strong><span>{user.role}</span></div><button onClick={logout} title="Log out"><LogOut size={17}/></button></div></div>
     </aside>
     <main className="workspace">
-      <header><button className="mobile-menu" onClick={() => setDrawer(!drawer)}>{drawer ? <X/> : <Menu/>}</button><div><span className="crumb">SCP CONTROL / </span>{page === 'server' ? selectedServer?.name.toUpperCase() ?? 'SERVER' : nav.find(x => x.page === page)?.label.toUpperCase()}</div><div className="header-right"><span className="live-pill"><span className="status-dot"/> LIVE</span><ThemeButton theme={theme} setTheme={setTheme}/><button className="icon-button" onClick={load}><RefreshCw size={17}/></button></div></header>
+      <header><button className="mobile-menu" onClick={() => setDrawer(!drawer)}>{drawer ? <X/> : <Menu/>}</button><div><span className="crumb">SCP CONTROL / </span>{page === 'server' ? selectedServer?.name.toUpperCase() ?? 'SERVER' : nav.find(x => x.page === page)?.label.toUpperCase()}</div><div className="header-right"><span className="live-pill"><span className="status-dot"/> LIVE</span><button className="icon-button operation-trigger" title="Recent operations" onClick={() => setActivityOpen(!activityOpen)}><Activity size={17}/>{operations.some(x=>x.status==='queued'||x.status==='running')&&<span/>}</button><ThemeButton theme={theme} setTheme={setTheme}/><button className="icon-button" onClick={load}><RefreshCw size={17}/></button></div></header>
       {error && <div className="toast error">{error}<button onClick={() => setError('')}><X size={15}/></button></div>}
+      {success && <div className="toast success">{success}<button onClick={() => setSuccess('')}><X size={15}/></button></div>}
+      {activityOpen && <aside className="operation-drawer"><div className="operation-head"><div><span className="eyebrow">ACTIVITY</span><h2>Recent operations</h2></div><button className="icon-button" onClick={()=>setActivityOpen(false)}><X/></button></div>{operations.map(item=><div className={`operation-row ${item.status}`} key={item.id}><span className="operation-state"/><div><strong>{item.type} · {item.target}</strong><p>{item.message}</p><small>{new Date(item.createdAt).toLocaleString()}</small></div><b>{item.status}</b></div>)}{!operations.length&&<EmptyMini text="No recent operations."/>}</aside>}
       <div className="content">
         {page === 'overview' && <OverviewPage data={overview} navigatePage={navigatePage} openServer={openServer}/>}
         {page === 'servers' && <ServersPage user={user} servers={servers} refresh={load} openServer={openServer} onError={setError}/>}
@@ -254,7 +272,16 @@ function OverviewPage({ data, navigatePage, openServer }: { data: Overview | nul
         {data.recentActivity.length ? <div className="activity-list">{data.recentActivity.slice(0, 6).map(entry => <div className="activity-row" key={entry.id}><div className="event-icon"><Command size={16}/></div><div><strong>{entry.action}</strong><p>{entry.actor} · {entry.target}</p></div><time>{fmtAgo(entry.at)}</time></div>)}</div> : <EmptyMini text="Activity will appear here."/>}
       </article>
     </section>
+    <StaffDashboard/>
   </>
+}
+
+function StaffDashboard(){
+  type Data={watchlisted:number;failedOperations:number;bridgeIssues:Array<{id:string;name:string}>;recentModeration:Array<{currentName:string;type:string;reason:string;actor:string;at:string}>}
+  const [data,setData]=useState<Data|null>(null)
+  useEffect(()=>{api<Data>('/staff-dashboard').then(setData).catch(()=>{})},[])
+  if(!data)return null
+  return <section className="panel staff-dashboard"><div className="panel-head"><div><span className="eyebrow">STAFF WORKSPACE</span><h2>Attention required</h2></div></div><div className="staff-summary"><div><strong>{data.watchlisted}</strong><span>WATCHLISTED PLAYERS</span></div><div><strong>{data.bridgeIssues.length}</strong><span>BRIDGE ISSUES</span></div><div><strong>{data.failedOperations}</strong><span>FAILED OPERATIONS</span></div></div>{data.bridgeIssues.map(x=><p className="error" key={x.id}>Bridge disconnected: {x.name}</p>)}<div className="activity-list">{data.recentModeration.map((x,index)=><div className="activity-row" key={`${x.at}:${index}`}><span className="tag red">{x.type}</span><div><strong>{x.currentName}</strong><p>{x.reason} · {x.actor}</p></div><time>{fmtAgo(x.at)}</time></div>)}</div></section>
 }
 
 function ServersPage({ user, servers, refresh, openServer, onError }: { user: User; servers: Server[]; refresh: () => void; openServer: (id: string) => void; onError: (e: string) => void }) {
@@ -414,16 +441,18 @@ function MaintenancePage({ server, onError }: { server: Server; onError: (value:
   type Backup = { id: string; createdAt: string; fileName: string; sizeBytes: number; actor: string }
   const [backups, setBackups] = useState<Backup[]>([])
   const [busy, setBusy] = useState('')
+  const confirmation=useConfirmDialog()
   const load = useCallback(() => api<Backup[]>(`/servers/${server.id}/backups`).then(setBackups).catch(e => onError(e.message)), [server.id, onError])
   useEffect(() => { void load() }, [load])
   const run = async (action: 'backups' | 'update') => {
-    if (action === 'update' && !window.confirm(`Run the configured update command for ${server.name}? A backup will be created first.`)) return
+    if (action === 'update' && !await confirmation.ask('Run server update?',`Run the configured update command for ${server.name}? A backup will be created first.`,'BACK UP & UPDATE')) return
     setBusy(action)
-    try { await api(`/servers/${server.id}/${action}`, {method:'POST'}); load() }
+    try { await api(`/servers/${server.id}/${action}`, {method:'POST'}); await load(); window.dispatchEvent(new CustomEvent('panel-success',{detail:action==='update'?'Server update completed.':'Backup created.'})) }
     catch(e) { onError(e instanceof Error ? e.message : `Unable to run ${action}`) }
     finally { setBusy('') }
   }
-  return <section className="maintenance-layout"><article className="panel"><div className="panel-head"><div><span className="eyebrow">SAFE OPERATIONS</span><h2>Update and backup</h2></div></div><div className="maintenance-actions"><button onClick={() => run('backups')} disabled={!!busy}><Save/><div><strong>CREATE BACKUP</strong><span>Archive server configuration files</span></div></button><button onClick={() => run('update')} disabled={!!busy || server.state !== 'offline'}><RefreshCw/><div><strong>RUN UPDATE</strong><span>{server.state === 'offline' ? 'Backup, then execute update command' : 'Stop the server before updating'}</span></div></button></div></article><article className="panel"><div className="panel-head"><div><span className="eyebrow">RECOVERY</span><h2>Available backups</h2></div></div>{backups.map(item => <div className="backup-row" key={item.id}><FileCode2/><div><strong>{item.fileName}</strong><small>{new Date(item.createdAt).toLocaleString()} · {fmtBytes(item.sizeBytes)} · {item.actor}</small></div><a className="manage-button" href={`/api/servers/${server.id}/backups/${encodeURIComponent(item.fileName)}`}>DOWNLOAD</a></div>)}{!backups.length && <EmptyMini text="No backups created yet."/ >}</article></section>
+  const restore=async(item:Backup)=>{if(!await confirmation.ask('Restore this backup?',`This overwrites configuration files for ${server.name}. A safety backup is created first.`,'RESTORE BACKUP'))return;setBusy(item.id);try{await api(`/servers/${server.id}/backups/${encodeURIComponent(item.fileName)}/restore`,{method:'POST'});await load();window.dispatchEvent(new CustomEvent('panel-success',{detail:`Restored ${item.fileName}.`}))}catch(e){onError(e instanceof Error?e.message:'Restore failed')}finally{setBusy('')}}
+  return <section className="maintenance-layout">{confirmation.dialog}<article className="panel"><div className="panel-head"><div><span className="eyebrow">SAFE OPERATIONS</span><h2>Update and backup</h2></div></div><div className="maintenance-actions"><button onClick={() => run('backups')} disabled={!!busy}><Save/><div><strong>CREATE BACKUP</strong><span>Archive server configuration files</span></div></button><button onClick={() => run('update')} disabled={!!busy || server.state !== 'offline'}><RefreshCw/><div><strong>RUN UPDATE</strong><span>{server.state === 'offline' ? 'Backup, then execute update command' : 'Stop the server before updating'}</span></div></button></div></article><article className="panel"><div className="panel-head"><div><span className="eyebrow">RECOVERY</span><h2>Available backups</h2></div></div>{backups.map(item => <div className="backup-row" key={item.id}><FileCode2/><div><strong>{item.fileName}</strong><small>{new Date(item.createdAt).toLocaleString()} · {fmtBytes(item.sizeBytes)} · {item.actor}</small></div><div className="row-actions"><a className="manage-button" href={`/api/servers/${server.id}/backups/${encodeURIComponent(item.fileName)}`}>DOWNLOAD</a><button className="danger" disabled={!!busy||server.state!=='offline'} title={server.state!=='offline'?'Stop server before restoring':''} onClick={()=>restore(item)}>RESTORE</button></div></div>)}{!backups.length && <EmptyMini text="No backups created yet."/ >}</article></section>
 }
 
 function ServerPlayers({ server, onError, initialMode = 'live', moderation = {kick:true,mute:true,ban:true}, canAnnounce = true }: { server: Server; onError: (error: string) => void; initialMode?: 'live' | 'history'; moderation?: {kick:boolean;mute:boolean;ban:boolean}; canAnnounce?: boolean }) {
@@ -571,7 +600,7 @@ function SchedulesPage({ servers, onError }: { servers: Server[]; onError: (e: s
   const load = () => api<Schedule[]>('/schedules').then(setItems).catch(e => onError(e.message))
   useEffect(() => { void load() }, [])
   return <><PageTitle eyebrow="AUTOMATION" title="Scheduler"/>
-    <section className="split-grid schedule-grid"><form className="panel form-panel" onSubmit={async e => { e.preventDefault(); try { await api('/schedules', { method: 'POST', body: JSON.stringify(form) }); load() } catch (x) { onError(x instanceof Error ? x.message : 'Failed') } }}><div className="panel-head"><div><span className="eyebrow">NEW AUTOMATION</span><h2>Create schedule</h2></div></div><label>SERVER<select required value={form.serverId} onChange={e => setForm({...form, serverId: e.target.value})}><option value="">Choose instance</option>{servers.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}</select></label><label>NAME<input value={form.name} onChange={e => setForm({...form, name:e.target.value})}/></label><div className="form-row"><label>CRON EXPRESSION<input value={form.cron} onChange={e => setForm({...form,cron:e.target.value})}/></label><label>ACTION<select value={form.action} onChange={e => setForm({...form,action:e.target.value})}><option>restart</option><option>start</option><option>stop</option></select></label></div>{form.action === 'restart' && <label>PLAYER WARNING COUNTDOWN<select value={form.warningSeconds} onChange={e => setForm({...form,warningSeconds:Number(e.target.value)})}><option value="0">No warning</option><option value="60">1 minute</option><option value="300">5 minutes</option><option value="600">10 minutes</option><option value="1800">30 minutes</option></select></label>}<button className="primary">CREATE SCHEDULE</button></form>
+    <section className="split-grid schedule-grid"><form className="panel form-panel" onSubmit={async e => { e.preventDefault(); try { await api('/schedules', { method: 'POST', body: JSON.stringify(form) }); load(); window.dispatchEvent(new CustomEvent('panel-success',{detail:'Maintenance schedule created.'})) } catch (x) { onError(x instanceof Error ? x.message : 'Failed') } }}><div className="panel-head"><div><span className="eyebrow">NEW AUTOMATION</span><h2>Create schedule</h2></div></div><label>SERVER<select required value={form.serverId} onChange={e => setForm({...form, serverId: e.target.value})}><option value="">Choose instance</option>{servers.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}</select></label><label>NAME<input value={form.name} onChange={e => setForm({...form, name:e.target.value})}/></label><div className="form-row"><label>CRON EXPRESSION<input value={form.cron} onChange={e => setForm({...form,cron:e.target.value})}/></label><label>ACTION<select value={form.action} onChange={e => setForm({...form,action:e.target.value})}><option value="restart">Warned restart</option><option value="start">Start</option><option value="stop">Stop</option><option value="backup">Create backup</option><option value="update">Backup and update</option><option value="backup-update-restart">Backup, update and start</option></select></label></div>{form.action === 'restart' && <label>PLAYER WARNING COUNTDOWN<select value={form.warningSeconds} onChange={e => setForm({...form,warningSeconds:Number(e.target.value)})}><option value="0">No warning</option><option value="60">1 minute</option><option value="300">5 minutes</option><option value="600">10 minutes</option><option value="1800">30 minutes</option></select></label>}<p className="muted">Updates require the server to already be offline. Backups are created automatically before every update.</p><button className="primary">CREATE SCHEDULE</button></form>
     <article className="panel"><div className="panel-head"><div><span className="eyebrow">AUTOMATION QUEUE</span><h2>Active schedules</h2></div></div>{items.length ? <div className="schedule-list">{items.map(x => <div className="schedule-row" key={x.id}><div className="event-icon"><CalendarClock size={17}/></div><div><strong>{x.name}</strong><p>{x.cron} · {x.action}</p></div><span className="tag">{x.enabled ? 'ENABLED' : 'PAUSED'}</span><button className="icon-button" onClick={async () => { await api(`/schedules/${x.id}`, { method: 'DELETE' }); load() }}><X size={16}/></button></div>)}</div> : <EmptyMini text="No scheduled actions."/ >}</article></section>
   </>
 }
@@ -580,13 +609,15 @@ function PluginsPage({ servers, selected, setSelected, onError, embedded = false
   type Plugin = { name: string; version: string; framework: string; enabled: boolean; path: string; configPaths: string[] }
   const [plugins, setPlugins] = useState<Plugin[]>([])
   const [busy, setBusy] = useState('')
-  const [config, setConfig] = useState<{ plugin: string; path: string; content: string } | null>(null)
+  const [config, setConfig] = useState<{ plugin: string; path: string; content: string; originalContent: string } | null>(null)
+  useUnsavedChanges(!!config&&config.content!==config.originalContent)
+  const confirmation=useConfirmDialog()
   const load = useCallback(() => {
     if (selected) api<Plugin[]>(`/plugins/${selected}`).then(setPlugins).catch(e => onError(e.message))
   }, [selected])
   useEffect(() => { load() }, [load])
   const action = async (plugin: Plugin, name: 'load' | 'unload' | 'restart') => {
-    if (!selected || !window.confirm(`${name.toUpperCase()} ${plugin.name}? This performs a clean game-server restart.`)) return
+    if (!selected || !await confirmation.ask(`${name.toUpperCase()} plugin?`,`${name.toUpperCase()} ${plugin.name}? This performs a clean game-server restart.`,`${name.toUpperCase()} PLUGIN`)) return
     setBusy(plugin.path)
     try {
       await api(`/plugins/${selected}/action`, { method: 'POST', body: JSON.stringify({ path: plugin.path, action: name }) })
@@ -598,7 +629,7 @@ function PluginsPage({ servers, selected, setSelected, onError, embedded = false
     if (!selected || !path) return
     try {
       const value = await api<{ path: string; content: string }>(`/plugins/${selected}/config?path=${encodeURIComponent(path)}`)
-      setConfig({ plugin: plugin.name, ...value })
+      setConfig({ plugin: plugin.name, ...value, originalContent:value.content })
     } catch (e) { onError(e instanceof Error ? e.message : 'Unable to open plugin configuration') }
   }
   const saveConfig = async () => {
@@ -606,10 +637,12 @@ function PluginsPage({ servers, selected, setSelected, onError, embedded = false
     setBusy(config.path)
     try {
       await api(`/plugins/${selected}/config`, { method: 'PUT', body: JSON.stringify({ path: config.path, content: config.content }) })
+      setConfig({...config,originalContent:config.content})
+      window.dispatchEvent(new CustomEvent('panel-success',{detail:'Plugin configuration saved.'}))
     } catch (e) { onError(e instanceof Error ? e.message : 'Unable to save plugin configuration') }
     finally { setBusy('') }
   }
-  return <>{!embedded && <PageTitle eyebrow="EXTENSIONS" title="Plugin inventory"><select value={selected ?? ''} onChange={e => setSelected(e.target.value)}><option value="">Select server</option>{servers.map(x => <option value={x.id} key={x.id}>{x.name}</option>)}</select></PageTitle>}
+  return <>{confirmation.dialog}{!embedded && <PageTitle eyebrow="EXTENSIONS" title="Plugin inventory"><select value={selected ?? ''} onChange={e => setSelected(e.target.value)}><option value="">Select server</option>{servers.map(x => <option value={x.id} key={x.id}>{x.name}</option>)}</select></PageTitle>}
     <Table headers={['PLUGIN','FRAMEWORK','VERSION','STATUS','ACTIONS']}>{plugins.map(x => <tr key={x.path}><td><strong>{x.name}</strong><small className="mono">{x.path}</small></td><td><span className="tag">{x.framework}</span></td><td>{x.version}</td><td><span className={`tag ${x.enabled ? '' : 'red'}`}>{x.enabled ? 'LOADED' : 'UNLOADED'}</span></td><td><div className="row-actions"><button disabled={busy === x.path} onClick={() => action(x, x.enabled ? 'unload' : 'load')}>{x.enabled ? 'UNLOAD' : 'LOAD'}</button><button disabled={busy === x.path || !x.enabled} onClick={() => action(x, 'restart')}><RefreshCw size={11}/> RESTART</button><button disabled={!x.configPaths?.length} onClick={() => openConfig(x)}><FileCode2 size={11}/> CONFIG {x.configPaths?.length ? `(${x.configPaths.length})` : ''}</button></div></td></tr>)}</Table>{!plugins.length && <EmptyPage icon={Plug} title="No plugins detected" text="LabAPI, EXILED and NWAPI plugin folders are scanned automatically."/>}
     {config && <section className="plugin-config"><div className="plugin-config-head"><div><span className="eyebrow">PLUGIN CONFIGURATION</span><h2>{config.plugin}</h2><label>CONFIG FILE<select value={config.path} onChange={e => { const plugin = plugins.find(x => x.name === config.plugin); if (plugin) void openConfig(plugin, e.target.value) }}>{plugins.find(x => x.name === config.plugin)?.configPaths.map(path => <option key={path} value={path}>{path.split(/[\\/]/).pop()}</option>)}</select></label><small className="mono">{config.path}</small></div><button className="icon-button" onClick={() => setConfig(null)}><X size={16}/></button></div><textarea className="code-editor" value={config.content} onChange={e => setConfig({ ...config, content: e.target.value })} spellCheck={false}/><div className="plugin-config-actions"><span>Save changes, then restart the plugin to apply them.</span><button className="primary" disabled={busy === config.path} onClick={saveConfig}><Save size={14}/> SAVE CONFIG</button></div></section>}
   </>
@@ -617,8 +650,11 @@ function PluginsPage({ servers, selected, setSelected, onError, embedded = false
 
 function AuditPage() {
   const [entries, setEntries] = useState<AuditEntry[]>([])
-  useEffect(() => { api<AuditEntry[]>('/audit?take=250').then(setEntries) }, [])
-  return <><PageTitle eyebrow="SECURITY RECORD" title="Audit log"/><Table headers={['TIME','ACTOR','ACTION','TARGET','DETAIL']}>{entries.map(x => <tr key={x.id}><td>{new Date(x.at).toLocaleString()}</td><td><strong>{x.actor}</strong></td><td><span className="tag">{x.action}</span></td><td>{x.target}</td><td>{x.detail}</td></tr>)}</Table>{!entries.length && <EmptyMini text="No activity recorded."/>}</>
+  const [filters,setFilters]=useState({query:'',actor:'',action:''})
+  const params=()=>new URLSearchParams({take:'500',...filters}).toString()
+  const load=()=>api<AuditEntry[]>(`/audit?${params()}`).then(setEntries)
+  useEffect(() => { void load() }, [])
+  return <><PageTitle eyebrow="SECURITY RECORD" title="Audit log"><a className="manage-button" href={`/api/audit/export?${params()}`}>EXPORT CSV</a></PageTitle><div className="panel audit-filters"><input placeholder="Search target or details" value={filters.query} onChange={e=>setFilters({...filters,query:e.target.value})}/><input placeholder="Actor" value={filters.actor} onChange={e=>setFilters({...filters,actor:e.target.value})}/><input placeholder="Action" value={filters.action} onChange={e=>setFilters({...filters,action:e.target.value})}/><button className="primary" onClick={load}>FILTER</button></div><Table headers={['TIME','ACTOR','ACTION','TARGET','DETAIL']}>{entries.map(x => <tr key={x.id}><td>{new Date(x.at).toLocaleString()}</td><td><strong>{x.actor}</strong></td><td><span className="tag">{x.action}</span></td><td>{x.target}</td><td>{x.detail}</td></tr>)}</Table>{!entries.length && <EmptyMini text="No matching activity."/>}</>
 }
 
 function AdminManagerPage({ user, servers, onError }: { user: User; servers: Server[]; onError: (e: string) => void }) {
@@ -641,6 +677,7 @@ function AdminManagerPage({ user, servers, onError }: { user: User; servers: Ser
   const [showModal, setShowModal] = useState(false)
   const [scopeServer, setScopeServer] = useState('')
   const [busy, setBusy] = useState(false)
+  const confirmation=useConfirmDialog()
   const loadAccounts = () => { if (user.role === 'Owner') api<Account[]>('/users').then(setAccounts).catch(e => onError(e.message)) }
   useEffect(() => { loadAccounts() }, [])
   if (user.role !== 'Owner') return <><PageTitle eyebrow="ACCESS CONTROL" title="Admin Manager"/><section className="panel"><Shield size={22}/><h2>Owner access required</h2><p>Only the panel owner can manage administrator accounts.</p></section></>
@@ -683,11 +720,11 @@ function AdminManagerPage({ user, servers, onError }: { user: User; servers: Ser
     finally { setBusy(false) }
   }
   const remove = async (account: Account) => {
-    if (!confirm(`Delete ${account.username}? This cannot be undone.`)) return
+    if (!await confirmation.ask('Delete administrator?',`Delete ${account.username}? This cannot be undone.`,'DELETE ACCOUNT')) return
     try { await api(`/users/${account.id}`, { method: 'DELETE' }); loadAccounts() }
     catch (e) { onError(e instanceof Error ? e.message : 'Unable to delete account') }
   }
-  return <><PageTitle eyebrow="ACCESS CONTROL" title="Admin Manager"/>
+  return <>{confirmation.dialog}<PageTitle eyebrow="ACCESS CONTROL" title="Admin Manager"/>
     <section className="admin-manager-card"><div className="admin-manager-head"><div><h2>All Admins <span>({accounts.length})</span></h2><p>Manage panel accounts, server access, and operational permissions.</p></div><button className="primary" onClick={add}><Plus size={15}/> ADD ADMIN</button></div>
       <div className="admin-table-wrap"><table className="admin-table"><thead><tr><th>ADMIN</th><th>AUTH</th><th>SERVER ACCESS</th><th>PERMISSIONS</th><th>STATUS</th><th>ACTIONS</th></tr></thead><tbody>{accounts.map(account => { const grants = account.serverAccess?.length ? account.serverAccess : account.serverIds.map(serverId => ({serverId,permissions:account.permissions})); const permissionCount = new Set(grants.flatMap(x => x.permissions)).size; return <tr key={account.id}><td><div className="admin-identity"><div className="avatar">{account.username.slice(0,2).toUpperCase()}</div><div><strong>{account.username}</strong><small>{account.role}</small></div></div></td><td><span className="admin-auth" title="Password authentication">◆</span></td><td>{account.role === 'Owner' ? <span className="scope-all">ALL SERVERS</span> : <span>{grants.length} of {servers.length}</span>}</td><td>{account.role === 'Owner' ? <span className="scope-all">ALL PERMISSIONS</span> : <span>{permissionCount} permission type{permissionCount === 1 ? '' : 's'}</span>}</td><td><span className={`tag ${account.enabled ? '' : 'red'}`}>{account.enabled ? 'ENABLED' : 'DISABLED'}</span></td><td><div className="admin-actions">{account.role === 'Owner' ? <span className="your-account">YOUR ACCOUNT</span> : <><button className="edit" onClick={() => edit(account)}>EDIT</button><button className="delete" onClick={() => remove(account)}>DELETE</button></>}</div></td></tr>})}</tbody></table></div>
     </section>
@@ -724,15 +761,17 @@ const defaultIntegration: IntegrationSettings = {
 }
 
 function SettingsPage({ user, servers, onError }: { user: User; servers: Server[]; onError: (e: string) => void }) {
-  const [tab,setTab]=useState<'general'|'appearance'|'security'|'discord'|'alerts'|'delivery'>('general')
+  const [tab,setTab]=useState<'general'|'appearance'|'security'|'discord'|'diagnostics'|'updates'|'alerts'|'delivery'>('general')
   const tabs: Array<[typeof tab,string]>=[['general','General'],['security','Security']]
   tabs.splice(1,0,['appearance','Appearance'])
-  if(user.role==='Owner') tabs.push(['discord','Discord'],['alerts','Alert rules'],['delivery','Delivery log'])
+  if(user.role==='Owner') tabs.push(['discord','Discord'],['diagnostics','Diagnostics'],['updates','Update center'],['alerts','Alert rules'],['delivery','Delivery log'])
   return <><PageTitle eyebrow="SYSTEM" title="Settings"/><nav className="page-tabs settings-tabs">{tabs.map(([value,label])=><button key={value} className={tab===value?'active':''} onClick={()=>setTab(value)}>{label}</button>)}</nav><section className="settings-tab-content">
     {tab==='general'&&<article className="panel settings-section"><FileCode2 size={26}/><h2>Panel configuration</h2><p>Server access and permissions are managed in Admin Manager. Runtime settings are stored in <code>appsettings.json</code>.</p><div className="setting-info-row"><strong>Signed-in account</strong><span>{user.username}</span></div><div className="setting-info-row"><strong>Account role</strong><span>{user.role}</span></div><div className="setting-info-row"><strong>Registered servers</strong><span>{servers.length}</span></div></article>}
     {tab==='appearance'&&<AppearancePanel/>}
     {tab==='security'&&<div className="settings-grid"><SettingsBasePage user={user} onError={onError}/><TwoFactorPanel user={user} onError={onError}/></div>}
     {tab==='discord'&&user.role==='Owner'&&<DiscordBotPanel servers={servers} onError={onError}/>}
+    {tab==='diagnostics'&&user.role==='Owner'&&<DiscordDiagnosticsPanel onError={onError}/>}
+    {tab==='updates'&&user.role==='Owner'&&<UpdateCenterPanel onError={onError}/>}
     {tab==='alerts'&&user.role==='Owner'&&<AlertRulesPanel onError={onError}/>}
     {tab==='delivery'&&user.role==='Owner'&&<NotificationHistoryPanel onError={onError}/>}
   </section></>
@@ -741,20 +780,43 @@ function SettingsPage({ user, servers, onError }: { user: User; servers: Server[
 function AppearancePanel(){
   const [density,setDensity]=useState(()=>localStorage.getItem('scpcontrol-density')||'comfortable')
   const [accent,setAccent]=useState(()=>localStorage.getItem('scpcontrol-accent')||'#e44343')
+  const [reducedMotion,setReducedMotion]=useState(()=>localStorage.getItem('scpcontrol-motion')==='reduced')
+  const [consoleSize,setConsoleSize]=useState(()=>Number(localStorage.getItem('scpcontrol-console-size')||14))
   const applyDensity=(value:string)=>{setDensity(value);localStorage.setItem('scpcontrol-density',value);document.documentElement.dataset.density=value}
   const applyAccent=(value:string)=>{setAccent(value);localStorage.setItem('scpcontrol-accent',value);document.documentElement.style.setProperty('--red',value)}
   const accents=['#e44343','#f97316','#eab308','#22c55e','#06b6d4','#6366f1','#a855f7','#ec4899']
-  return <article className="panel settings-section appearance-panel"><Activity size={26}/><h2>Interface appearance</h2><p>Choose how much information fits on screen and personalize the panel accent.</p><section><span className="eyebrow">DISPLAY DENSITY</span><div className="choice-cards"><button className={density==='comfortable'?'active':''} onClick={()=>applyDensity('comfortable')}><strong>Comfortable</strong><small>Larger controls and generous spacing</small></button><button className={density==='compact'?'active':''} onClick={()=>applyDensity('compact')}><strong>Compact</strong><small>More rows and information on screen</small></button></div></section><section><span className="eyebrow">ACCENT COLOR</span><div className="accent-picker">{accents.map(color=><button key={color} className={accent===color?'active':''} style={{backgroundColor:color}} aria-label={`Use ${color}`} onClick={()=>applyAccent(color)}/>) }<label title="Custom accent"><input type="color" value={accent} onChange={e=>applyAccent(e.target.value)}/></label></div></section></article>
+  const applyMotion=(value:boolean)=>{setReducedMotion(value);localStorage.setItem('scpcontrol-motion',value?'reduced':'full');document.documentElement.dataset.motion=value?'reduced':'full'}
+  const applyConsoleSize=(value:number)=>{setConsoleSize(value);localStorage.setItem('scpcontrol-console-size',String(value));document.documentElement.style.setProperty('--console-font-size',`${value}px`)}
+  return <article className="panel settings-section appearance-panel"><Activity size={26}/><h2>Interface appearance</h2><p>Choose how much information fits on screen and personalize the panel accent.</p><section><span className="eyebrow">DISPLAY DENSITY</span><div className="choice-cards"><button className={density==='comfortable'?'active':''} onClick={()=>applyDensity('comfortable')}><strong>Comfortable</strong><small>Larger controls and generous spacing</small></button><button className={density==='compact'?'active':''} onClick={()=>applyDensity('compact')}><strong>Compact</strong><small>More rows and information on screen</small></button></div></section><section><span className="eyebrow">ACCENT COLOR</span><div className="accent-picker">{accents.map(color=><button key={color} className={accent===color?'active':''} style={{backgroundColor:color}} aria-label={`Use ${color}`} onClick={()=>applyAccent(color)}/>) }<label title="Custom accent"><input type="color" value={accent} onChange={e=>applyAccent(e.target.value)}/></label></div></section><section><span className="eyebrow">ACCESSIBILITY & CONSOLE</span><label className="check-row"><input type="checkbox" checked={reducedMotion} onChange={e=>applyMotion(e.target.checked)}/> Reduce interface motion</label><label>CONSOLE FONT SIZE ({consoleSize}px)<input type="range" min="12" max="20" value={consoleSize} onChange={e=>applyConsoleSize(Number(e.target.value))}/></label></section></article>
 }
 
 function TwoFactorPanel({user,onError}:{user:User;onError:(message:string)=>void}) {
   const [setup,setSetup]=useState<{secret:string;uri:string}|null>(null)
   const [code,setCode]=useState('')
-  return <article className="panel settings-password"><Shield size={26}/><h2>Two-factor authentication</h2><p>{user.twoFactorEnabled?'Two-factor authentication is enabled.':'Protect your account with a TOTP authenticator app.'}</p>
+  const [sessions,setSessions]=useState<Array<{id:string;createdAt:string;lastSeenAt:string;ipAddress:string;userAgent:string;current:boolean}>>([])
+  const confirmation=useConfirmDialog()
+  const loadSessions=()=>api<typeof sessions>('/auth/sessions').then(setSessions).catch(e=>onError(e.message))
+  useEffect(()=>{void loadSessions()},[])
+  return <article className="panel settings-password">{confirmation.dialog}<Shield size={26}/><h2>Two-factor authentication</h2><p>{user.twoFactorEnabled?'Two-factor authentication is enabled.':'Protect your account with a TOTP authenticator app.'}</p>
     {setup&&<div className="totp-setup"><div className="totp-qr"><QRCodeSVG value={setup.uri} size={210} level="M" marginSize={2}/><small>SCAN WITH GOOGLE AUTHENTICATOR</small></div><div><p>Open Google Authenticator, tap <strong>+</strong>, choose <strong>Scan a QR code</strong>, then enter the generated six-digit code below.</p><label>MANUAL SETUP SECRET<div className="input-action"><input readOnly value={setup.secret}/><button type="button" onClick={()=>void copyText(setup.secret)}>COPY</button></div></label><details><summary>Show setup URI</summary><small className="mono totp-uri">{setup.uri}</small></details></div></div>}
     <label>6-DIGIT CODE<input inputMode="numeric" maxLength={6} value={code} onChange={e=>setCode(e.target.value.replace(/\D/g,''))}/></label>
-    <div className="button-row">{!user.twoFactorEnabled&&!setup&&<button onClick={async()=>{try{setSetup(await api('/auth/2fa/setup',{method:'POST'}))}catch(e){onError(e instanceof Error?e.message:'Unable to begin setup')}}}>BEGIN SETUP</button>}{setup&&<button className="primary" onClick={async()=>{try{await api('/auth/2fa/confirm',{method:'POST',body:JSON.stringify({code})});location.reload()}catch(e){onError(e instanceof Error?e.message:'Invalid code')}}}>ENABLE 2FA</button>}{user.twoFactorEnabled&&<button className="danger" onClick={async()=>{try{await api('/auth/2fa/disable',{method:'POST',body:JSON.stringify({code})});location.reload()}catch(e){onError(e instanceof Error?e.message:'Invalid code')}}}>DISABLE 2FA</button>}<button className="danger" onClick={async()=>{if(!confirm('Sign out every session for this account?'))return;await api('/auth/sessions/revoke',{method:'POST'});location.reload()}}>REVOKE ALL SESSIONS</button></div>
+    <div className="button-row">{!user.twoFactorEnabled&&!setup&&<button onClick={async()=>{try{setSetup(await api('/auth/2fa/setup',{method:'POST'}))}catch(e){onError(e instanceof Error?e.message:'Unable to begin setup')}}}>BEGIN SETUP</button>}{setup&&<button className="primary" onClick={async()=>{try{await api('/auth/2fa/confirm',{method:'POST',body:JSON.stringify({code})});location.reload()}catch(e){onError(e instanceof Error?e.message:'Invalid code')}}}>ENABLE 2FA</button>}{user.twoFactorEnabled&&<button className="danger" onClick={async()=>{try{await api('/auth/2fa/disable',{method:'POST',body:JSON.stringify({code})});location.reload()}catch(e){onError(e instanceof Error?e.message:'Invalid code')}}}>DISABLE 2FA</button>}<button className="danger" onClick={async()=>{if(!await confirmation.ask('Revoke all sessions?','Every device, including this one, will be signed out.','REVOKE ALL'))return;await api('/auth/sessions/revoke',{method:'POST'});location.reload()}}>REVOKE ALL SESSIONS</button></div>
+    <div className="active-sessions"><span className="eyebrow">ACTIVE SESSIONS</span>{sessions.map(item=><div className="session-row" key={item.id}><div><strong>{item.current?'This device':'Signed-in device'}</strong><small>{item.ipAddress} · {new Date(item.lastSeenAt).toLocaleString()}</small><p>{item.userAgent}</p></div><button disabled={item.current} onClick={async()=>{if(await confirmation.ask('Revoke session?','This device will be signed out on its next request.','REVOKE')){await api(`/auth/sessions/${item.id}`,{method:'DELETE'});loadSessions()}}}>REVOKE</button></div>)}</div>
   </article>
+}
+
+function DiscordDiagnosticsPanel({onError}:{onError:(message:string)=>void}){
+  type Diagnostic={bot:{enabled:boolean;connected:boolean;botName?:string;error?:string};guildId:string;guildFound:boolean;guildName?:string;channels:Array<{purpose:string;channelId:string;found:boolean;name?:string;canView:boolean;canSend:boolean}>;issues:string[]}
+  const [data,setData]=useState<Diagnostic|null>(null)
+  const load=()=>api<Diagnostic>('/integrations/discord/diagnostics').then(setData).catch(e=>onError(e.message))
+  useEffect(()=>{void load()},[])
+  return <article className="panel settings-section"><Bot size={26}/><div className="panel-head"><div><h2>Discord diagnostics</h2><p>Live validation of the bot, guild, and delivery channels.</p></div><button onClick={load}><RefreshCw size={14}/> RUN CHECKS</button></div>{data&&<><div className="diagnostic-summary"><span className={`tag ${data.bot.connected?'':'red'}`}>{data.bot.connected?'BOT CONNECTED':'BOT OFFLINE'}</span><strong>{data.guildFound?data.guildName:'Guild not found'}</strong></div>{data.channels.map(x=><div className="diagnostic-row" key={x.purpose}><strong>{x.purpose}</strong><span>{x.found?`#${x.name}`:x.channelId||'Not configured'}</span><span className={`tag ${x.canView&&x.canSend?'':'red'}`}>{x.canView&&x.canSend?'READY':'CHECK ACCESS'}</span></div>)}{data.issues.map(issue=><p className="error" key={issue}>{issue}</p>)}</>}</article>
+}
+
+function UpdateCenterPanel({onError}:{onError:(message:string)=>void}){
+  const [data,setData]=useState<Record<string,string>|null>(null)
+  useEffect(()=>{api<Record<string,string>>('/system/versions').then(setData).catch(e=>onError(e.message))},[])
+  return <article className="panel settings-section"><RefreshCw size={26}/><h2>Update center</h2><p>Installed control-plane and runtime versions. Back up each server before applying updates.</p>{data&&Object.entries(data).map(([key,value])=><div className="setting-info-row" key={key}><strong>{key.replace(/([A-Z])/g,' $1')}</strong><code>{String(value)}</code></div>)}</article>
 }
 
 function NotificationHistoryPanel({onError}:{onError:(message:string)=>void}) {

@@ -6,6 +6,7 @@ namespace ScpSlPanel.Api.Services;
 public sealed class SchedulerService(
     JsonStore store, ServerManager servers, RestartCoordinator restarts,
     AuditService audit, OperationsDataService operations, NotificationService notifications,
+    MaintenanceService maintenance,
     ILogger<SchedulerService> logger) : BackgroundService
 {
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
@@ -31,6 +32,12 @@ public sealed class SchedulerService(
                                 if (item.WarningSeconds > 0)
                                     restarts.Schedule(item.ServerId, item.WarningSeconds, item.Name, "scheduler");
                                 else await servers.RestartAsync(item.ServerId, "scheduler");
+                                break;
+                            case "backup": await maintenance.BackupAsync(item.ServerId, "scheduler"); break;
+                            case "update": await maintenance.UpdateAsync(item.ServerId, "scheduler"); break;
+                            case "backup-update-restart":
+                                await maintenance.UpdateAsync(item.ServerId, "scheduler");
+                                await servers.StartAsync(item.ServerId, "scheduler");
                                 break;
                             default: await servers.CommandAsync(item.ServerId, item.Action, "scheduler"); break;
                         }

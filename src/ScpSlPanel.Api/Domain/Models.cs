@@ -50,6 +50,9 @@ public sealed record PanelUser(
     DateTimeOffset CreatedAt, IReadOnlyList<Guid>? ServerIds = null,
     IReadOnlyList<string>? Permissions = null, IReadOnlyList<ServerAccessGrant>? ServerAccess = null,
     string? TotpSecret = null, bool TotpEnabled = false, int SessionVersion = 0);
+public sealed record PanelSession(
+    Guid Id, Guid UserId, DateTimeOffset CreatedAt, DateTimeOffset LastSeenAt,
+    string IpAddress, string UserAgent, bool Revoked = false);
 public sealed record ServerAccessGrant(Guid ServerId, IReadOnlyList<string> Permissions);
 
 public sealed record PluginEntry(
@@ -121,6 +124,11 @@ public sealed record PanelIntegrationSettings(
     [property: JsonConverter(typeof(SnowflakeStringConverter))] string DiscordAuditChannelId = "",
     bool DiscordDailyReportEnabled = false, int DiscordDailyReportHourUtc = 12);
 public sealed record DiscordBotStatus(bool Enabled, bool Connected, string? BotName, string? Error);
+public sealed record DiscordChannelDiagnostic(
+    string Purpose, string ChannelId, bool Found, string? Name, bool CanView, bool CanSend);
+public sealed record DiscordDiagnostic(
+    DiscordBotStatus Bot, string GuildId, bool GuildFound, string? GuildName,
+    IReadOnlyList<DiscordChannelDiagnostic> Channels, IReadOnlyList<string> Issues);
 public sealed record DiscordRoleGrant(
     [property: JsonConverter(typeof(SnowflakeStringConverter))] string RoleId,
     Guid ServerId, IReadOnlyList<string> Permissions);
@@ -131,6 +139,9 @@ public sealed record NotificationDelivery(
     Guid Id, DateTimeOffset At, string Category, string Severity, string Title,
     string Message, string ChannelId, string Status, int Attempts, string? Error);
 public sealed record IdentityLinkRequest(string SteamId, string DiscordId);
+public sealed record OperationEntry(
+    Guid Id, Guid? ServerId, string Type, string Target, string Actor, string Status,
+    string Message, DateTimeOffset CreatedAt, DateTimeOffset UpdatedAt);
 public sealed record BackupEntry(
     Guid Id, Guid ServerId, DateTimeOffset CreatedAt, string FileName, long SizeBytes, string Actor);
 public sealed record RestartCountdownRequest(int Seconds, string? Message);

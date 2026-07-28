@@ -26,6 +26,7 @@ builder.Services.AddSingleton<PasswordService>();
 builder.Services.AddSingleton<TotpService>();
 builder.Services.AddSingleton<AuditService>();
 builder.Services.AddSingleton<BridgeStateService>();
+builder.Services.AddSingleton<OperationTracker>();
 builder.Services.AddSingleton<BridgeCommandService>();
 builder.Services.AddSingleton<PlayerDataService>();
 builder.Services.AddSingleton<DiscordLinkService>();
@@ -56,14 +57,24 @@ builder.Services.AddAuthentication(CookieAuthenticationDefaults.AuthenticationSc
     {
         var idValue = context.Principal?.FindFirstValue(ClaimTypes.NameIdentifier);
         var versionValue = context.Principal?.FindFirstValue("session_version");
-        if (!Guid.TryParse(idValue, out var id) || !int.TryParse(versionValue, out var version))
+        var sessionValue = context.Principal?.FindFirstValue("session_id");
+        if (!Guid.TryParse(idValue, out var id) || !int.TryParse(versionValue, out var version)
+            || !Guid.TryParse(sessionValue, out var sessionId))
         {
             context.RejectPrincipal();
             return;
         }
         var store = context.HttpContext.RequestServices.GetRequiredService<JsonStore>();
         var user = (await store.ReadAsync<PanelUser>("users")).FirstOrDefault(x => x.Id == id);
-        if (user is null || !user.Enabled || user.SessionVersion != version) context.RejectPrincipal();
+        var sessions = await store.ReadAsync<PanelSession>("sessions");
+        var sessionIndex = sessions.FindIndex(x => x.Id == sessionId && x.UserId == id && !x.Revoked);
+        if (user is null || !user.Enabled || user.SessionVersion != version || sessionIndex < 0)
+            context.RejectPrincipal();
+        else if (DateTimeOffset.UtcNow - sessions[sessionIndex].LastSeenAt > TimeSpan.FromMinutes(5))
+        {
+            sessions[sessionIndex] = sessions[sessionIndex] with { LastSeenAt = DateTimeOffset.UtcNow };
+            await store.WriteAsync("sessions", sessions);
+        }
     };
 });
 builder.Services.AddAuthorization(options =>
@@ -173,12 +184,24 @@ app.MapPost("/api/auth/login", async (LoginRequest request, JsonStore store, Pas
     if (user is null || !passwords.Verify(request.Password, user.PasswordHash)) return Results.Unauthorized();
     if (user.TotpEnabled && (string.IsNullOrWhiteSpace(user.TotpSecret) || !totp.Verify(user.TotpSecret, request.Code)))
         return Results.Json(new { error = "A valid two-factor authentication code is required.", requiresTwoFactor = true }, statusCode: 401);
-    var claims = new[] { new Claim(ClaimTypes.NameIdentifier, user.Id.ToString()), new Claim(ClaimTypes.Name, user.Username), new Claim(ClaimTypes.Role, user.Role), new Claim("session_version", user.SessionVersion.ToString()) };
+    var session = new PanelSession(Guid.NewGuid(), user.Id, DateTimeOffset.UtcNow, DateTimeOffset.UtcNow,
+        context.Connection.RemoteIpAddress?.ToString() ?? "unknown",
+        context.Request.Headers.UserAgent.ToString());
+    var sessions = await store.ReadAsync<PanelSession>("sessions");
+    sessions.Add(session);
+    await store.WriteAsync("sessions", sessions.Where(x => x.CreatedAt > DateTimeOffset.UtcNow.AddDays(-30)).TakeLast(5000));
+    var claims = new[] { new Claim(ClaimTypes.NameIdentifier, user.Id.ToString()), new Claim(ClaimTypes.Name, user.Username), new Claim(ClaimTypes.Role, user.Role), new Claim("session_version", user.SessionVersion.ToString()), new Claim("session_id", session.Id.ToString()) };
     await context.SignInAsync(CookieAuthenticationDefaults.AuthenticationScheme, new ClaimsPrincipal(new ClaimsIdentity(claims, CookieAuthenticationDefaults.AuthenticationScheme)));
     return Results.Ok(new { user.Id, user.Username, user.Role });
 }).RequireRateLimiting("login");
-app.MapPost("/api/auth/logout", async (HttpContext context) =>
+app.MapPost("/api/auth/logout", async (HttpContext context, JsonStore store) =>
 {
+    if (Guid.TryParse(context.User.FindFirstValue("session_id"), out var sessionId))
+    {
+        var sessions = await store.ReadAsync<PanelSession>("sessions");
+        var index = sessions.FindIndex(x => x.Id == sessionId);
+        if (index >= 0) { sessions[index] = sessions[index] with { Revoked = true }; await store.WriteAsync("sessions", sessions); }
+    }
     await context.SignOutAsync(CookieAuthenticationDefaults.AuthenticationScheme);
     return Results.NoContent();
 }).RequireAuthorization();
@@ -233,6 +256,26 @@ app.MapPost("/api/auth/sessions/revoke", async (ClaimsPrincipal principal, JsonS
     await context.SignOutAsync(CookieAuthenticationDefaults.AuthenticationScheme);
     return Results.NoContent();
 }).RequireAuthorization();
+app.MapGet("/api/auth/sessions", async (ClaimsPrincipal principal, JsonStore store) =>
+{
+    var userId = Guid.Parse(principal.FindFirstValue(ClaimTypes.NameIdentifier)!);
+    var currentId = principal.FindFirstValue("session_id");
+    return Results.Ok((await store.ReadAsync<PanelSession>("sessions"))
+        .Where(x => x.UserId == userId && !x.Revoked).OrderByDescending(x => x.LastSeenAt)
+        .Select(x => new { x.Id, x.CreatedAt, x.LastSeenAt, x.IpAddress, x.UserAgent, current = x.Id.ToString() == currentId }));
+}).RequireAuthorization();
+app.MapDelete("/api/auth/sessions/{id:guid}", async (Guid id, ClaimsPrincipal principal, JsonStore store, HttpContext context) =>
+{
+    var userId = Guid.Parse(principal.FindFirstValue(ClaimTypes.NameIdentifier)!);
+    var sessions = await store.ReadAsync<PanelSession>("sessions");
+    var index = sessions.FindIndex(x => x.Id == id && x.UserId == userId);
+    if (index < 0) return Results.NotFound();
+    sessions[index] = sessions[index] with { Revoked = true };
+    await store.WriteAsync("sessions", sessions);
+    if (principal.FindFirstValue("session_id") == id.ToString())
+        await context.SignOutAsync(CookieAuthenticationDefaults.AuthenticationScheme);
+    return Results.NoContent();
+}).RequireAuthorization();
 app.MapGet("/api/health", () => Results.Ok(new { status = "healthy", at = DateTimeOffset.UtcNow }));
 app.MapPost("/api/bridge/{serverId:guid}/heartbeat", async (
     Guid serverId, BridgeHeartbeat heartbeat, HttpContext context, ServerManager servers,
@@ -283,6 +326,29 @@ api.MapGet("/overview", async (ServerManager servers, AuditService audit, Claims
         snapshots.Sum(x => x.Players), snapshots.Sum(x => x.MemoryBytes), snapshots,
         user?.Role == "Owner" ? await audit.RecentAsync(12) : []);
 });
+api.MapGet("/staff-dashboard", async (JsonStore store, ServerManager servers, BridgeStateService bridge,
+    ClaimsPrincipal user, OperationTracker operations) =>
+{
+    var definitions = await servers.DefinitionsAsync();
+    var visible = new List<ServerDefinition>();
+    foreach (var server in definitions)
+        if (await Can(user, store, server.Id, "view")) visible.Add(server);
+    var ids = visible.Select(x => x.Id).ToHashSet();
+    var players = (await store.ReadAsync<PlayerRecord>("players")).Where(x => ids.Contains(x.ServerId)).ToList();
+    return Results.Ok(new
+    {
+        watchlisted = players.Count(x => x.ModerationHistory.Any(m => m.Type == "watchlist")),
+        recentModeration = players.SelectMany(player => player.ModerationHistory.Select(item => new
+            { player.CurrentName, player.ServerId, item.Type, item.Reason, item.Actor, item.At }))
+            .OrderByDescending(x => x.At).Take(8),
+        bridgeIssues = visible.Where(x => !bridge.Get(x.Id).Connected)
+            .Select(x => new { x.Id, x.Name }),
+        failedOperations = (await operations.ListAsync(100)).Count(x => x.Status == "failed"
+            && (x.ServerId is null || ids.Contains(x.ServerId.Value)))
+    });
+});
+api.MapGet("/operations", (int? take, OperationTracker operations) =>
+    operations.ListAsync(take ?? 100));
 api.MapGet("/servers", async (ServerManager servers, ClaimsPrincipal principal, JsonStore store) =>
 {
     var values = await servers.SnapshotsAsync();
@@ -586,7 +652,19 @@ api.MapDelete("/bans/{id:guid}", async (Guid id, JsonStore store, AuditService a
     await audit.AddAsync(Actor(user), "player.unban", bans[index].Target, bans[index].Reason);
     return Results.NoContent();
 }).RequireAuthorization("Owner");
-api.MapGet("/audit", (int? take, AuditService audit) => audit.RecentAsync(take ?? 100)).RequireAuthorization("Owner");
+api.MapGet("/audit", (int? take, string? query, string? actor, string? action,
+    DateTimeOffset? from, DateTimeOffset? to, AuditService audit) =>
+    audit.SearchAsync(take ?? 100, query, actor, action, from, to)).RequireAuthorization("Owner");
+api.MapGet("/audit/export", async (string? query, string? actor, string? action,
+    DateTimeOffset? from, DateTimeOffset? to, AuditService audit) =>
+{
+    var entries = await audit.SearchAsync(2000, query, actor, action, from, to);
+    static string Csv(string value) => $"\"{value.Replace("\"", "\"\"")}\"";
+    var lines = new[] { "Timestamp,Actor,Action,Target,Detail" }.Concat(entries.Select(x =>
+        $"{x.At:O},{Csv(x.Actor)},{Csv(x.Action)},{Csv(x.Target)},{Csv(x.Detail)}"));
+    return Results.File(System.Text.Encoding.UTF8.GetBytes(string.Join(Environment.NewLine, lines)),
+        "text/csv", $"scp-control-audit-{DateTime.UtcNow:yyyyMMdd-HHmmss}.csv");
+}).RequireAuthorization("Owner");
 api.MapGet("/schedules", (JsonStore store) => store.ReadAsync<ScheduleEntry>("schedules")).RequireAuthorization("Owner");
 api.MapPost("/schedules", async (ScheduleRequest request, JsonStore store, AuditService audit, ClaimsPrincipal user) =>
 {
@@ -782,6 +860,12 @@ api.MapPost("/servers/{id:guid}/backups", async (Guid id, MaintenanceService mai
     if (!await Can(user, store, id, "maintenance")) return Results.Forbid();
     return Results.Ok(await maintenance.BackupAsync(id, Actor(user)));
 });
+api.MapPost("/servers/{id:guid}/backups/{fileName}/restore", async (
+    Guid id, string fileName, MaintenanceService maintenance, ClaimsPrincipal user, JsonStore store) =>
+{
+    if (!await Can(user, store, id, "maintenance")) return Results.Forbid();
+    return Results.Ok(await maintenance.RestoreAsync(id, fileName, Actor(user)));
+});
 api.MapGet("/servers/{id:guid}/backups/{fileName}", async (Guid id, string fileName, OperationsDataService operations, ClaimsPrincipal user, JsonStore store) =>
 {
     if (!await Can(user, store, id, "maintenance")) return Results.Forbid();
@@ -805,6 +889,17 @@ api.MapPost("/integrations/discord/test", async (NotificationService notificatio
     await notifications.TestAsync();
     return Results.NoContent();
 }).RequireAuthorization("Owner");
+api.MapGet("/integrations/discord/diagnostics", (DiscordBotService bot) => bot.DiagnoseAsync())
+    .RequireAuthorization("Owner");
+api.MapGet("/system/versions", (BridgeStateService bridge) => Results.Ok(new
+{
+    panel = typeof(Program).Assembly.GetName().Version?.ToString() ?? "development",
+    bridge = typeof(BridgeStateService).Assembly.GetName().Version?.ToString() ?? "development",
+    runtime = System.Runtime.InteropServices.RuntimeInformation.FrameworkDescription,
+    operatingSystem = System.Runtime.InteropServices.RuntimeInformation.OSDescription,
+    architecture = System.Runtime.InteropServices.RuntimeInformation.ProcessArchitecture.ToString(),
+    serverTime = DateTimeOffset.UtcNow
+})).RequireAuthorization("Owner");
 api.MapGet("/integrations/notifications/history", (int? take, NotificationService notifications) =>
     notifications.HistoryAsync(take ?? 100)).RequireAuthorization("Owner");
 api.MapGet("/integrations/discord/bot/status", (DiscordBotService bot) =>

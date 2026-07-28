@@ -101,4 +101,27 @@ public sealed class OperationsDataService(JsonStore store)
 
     public string BackupPath(Guid serverId, string fileName) =>
         Path.Combine(store.StoragePath("backups", serverId.ToString("N")), Path.GetFileName(fileName));
+
+    public async Task RestoreBackupAsync(ServerDefinition server, string fileName)
+    {
+        var path = BackupPath(server.Id, fileName);
+        if (!File.Exists(path)) throw new FileNotFoundException("Backup not found.");
+        var root = Path.GetFullPath(server.WorkingDirectory)
+            .TrimEnd(Path.DirectorySeparatorChar) + Path.DirectorySeparatorChar;
+        using var archive = ZipFile.OpenRead(path);
+        foreach (var entry in archive.Entries)
+        {
+            var destination = Path.GetFullPath(Path.Combine(root, entry.FullName));
+            if (!destination.StartsWith(root, StringComparison.OrdinalIgnoreCase))
+                throw new InvalidDataException("The backup contains an unsafe path.");
+            if (string.IsNullOrEmpty(entry.Name))
+            {
+                Directory.CreateDirectory(destination);
+                continue;
+            }
+            Directory.CreateDirectory(Path.GetDirectoryName(destination)!);
+            entry.ExtractToFile(destination, true);
+        }
+        await Task.CompletedTask;
+    }
 }

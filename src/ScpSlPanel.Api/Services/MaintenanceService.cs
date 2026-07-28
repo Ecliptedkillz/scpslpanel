@@ -40,4 +40,17 @@ public sealed class MaintenanceService(
         await audit.AddAsync(actor, "server.update", server.Name, "Update completed");
         return output[^Math.Min(output.Length, 5000)..];
     }
+
+    public async Task<BackupEntry> RestoreAsync(Guid serverId, string fileName, string actor)
+    {
+        var server = await servers.FindAsync(serverId) ?? throw new KeyNotFoundException("Server not found.");
+        var snapshot = await servers.SnapshotAsync(serverId);
+        if (snapshot?.State != ServerState.Offline)
+            throw new InvalidOperationException("Stop the server before restoring a backup.");
+        var safetyBackup = await BackupAsync(serverId, actor);
+        await operations.RestoreBackupAsync(server, fileName);
+        await audit.AddAsync(actor, "server.backup.restore", server.Name,
+            $"Restored {Path.GetFileName(fileName)}; safety backup {safetyBackup.FileName}");
+        return safetyBackup;
+    }
 }
