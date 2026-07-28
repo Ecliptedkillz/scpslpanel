@@ -60,11 +60,13 @@ function GlobalProfileModal({record,close,onError,onUpdated}:{record:GlobalPlaye
   const player=record.player
   const [note,setNote]=useState('')
   const [discordId,setDiscordId]=useState(player.discordId ?? '')
+  const [pendingAction,setPendingAction]=useState<string|null>(null)
+  const [actionReason,setActionReason]=useState('')
   const risk=Math.min(100,player.moderationHistory.reduce((score,item)=>score+(item.type==='ban'?35:item.type==='kick'?20:item.type==='warning'?10:item.type==='watchlist'?25:5),0)+Math.max(0,player.nameHistory.length-2)*3)
-  const recordAction=async(type:string)=>{
-    const reason=prompt(`Reason for ${type}:`,`${type} added from global profile`)
-    if(reason===null)return
-    try{onUpdated(await api<StoredPlayer>(`/servers/${record.serverId}/player-history/${player.id}/actions`,{method:'POST',body:JSON.stringify({type,reason,durationMinutes:null})}))}catch(error){onError(error instanceof Error?error.message:'Unable to record action')}
+  const openAction=(type:string)=>{setPendingAction(type);setActionReason(`${type} added from global profile`)}
+  const recordAction=async()=>{
+    if(!pendingAction||!actionReason.trim())return
+    try{onUpdated(await api<StoredPlayer>(`/servers/${record.serverId}/player-history/${player.id}/actions`,{method:'POST',body:JSON.stringify({type:pendingAction,reason:actionReason,durationMinutes:null})}));setPendingAction(null)}catch(error){onError(error instanceof Error?error.message:'Unable to record action')}
   }
   const addNote=async()=>{
     if(!note.trim())return
@@ -84,11 +86,12 @@ function GlobalProfileModal({record,close,onError,onUpdated}:{record:GlobalPlaye
       <section><span className="eyebrow">DISCORD IDENTITY</span><strong>{player.discordDisplayName ?? (player.discordId ? 'Linked · profile unavailable' : 'Not linked')}</strong><code>{player.discordId ?? 'No Discord ID'}</code><div>{player.discordRoles?.map(role=><span className="tag" key={role}>{role}</span>)}</div>{player.discordId && !player.discordRoles?.length && <small className="identity-hint">Enable Guild Members intent to load server nickname and roles.</small>}</section>
     </div>
     <div className="profile-stats"><div><span>FIRST SEEN</span><strong>{new Date(player.firstConnectedAt).toLocaleDateString()}</strong></div><div><span>LAST SEEN</span><strong>{new Date(player.lastConnectedAt).toLocaleString()}</strong></div><div><span>PLAYTIME</span><strong>{playtime(player.playtimeSeconds)}</strong></div><div><span>RISK SCORE</span><strong className={risk>=40?'risk-high':''}>{risk}/100</strong></div></div>
-    <div className="global-profile-actions"><button onClick={()=>recordAction('warning')}>ADD WARNING</button><button onClick={()=>recordAction('watchlist')}>WATCHLIST</button><button onClick={()=>recordAction('allowlist')}>ALLOWLIST</button><input value={discordId} onChange={e=>setDiscordId(e.target.value.trim())} placeholder="Discord user ID"/><button onClick={saveLink}>SAVE DISCORD LINK</button><input value={note} onChange={e=>setNote(e.target.value)} placeholder="Private staff note"/><button className="primary" onClick={addNote}>ADD NOTE</button></div>
+    <div className="global-profile-actions"><button onClick={()=>openAction('warning')}>ADD WARNING</button><button onClick={()=>openAction('watchlist')}>WATCHLIST</button><button onClick={()=>openAction('allowlist')}>ALLOWLIST</button><input value={discordId} onChange={e=>setDiscordId(e.target.value.trim())} placeholder="Discord user ID"/><button onClick={saveLink}>SAVE DISCORD LINK</button><input value={note} onChange={e=>setNote(e.target.value)} placeholder="Private staff note"/><button className="primary" onClick={addNote}>ADD NOTE</button></div>
     <div className="global-profile-columns">
       <section><h3>KNOWN NAMES</h3>{player.nameHistory.slice().reverse().map(name=><div className="history-entry" key={name.name}><strong>{name.name}</strong><small>{new Date(name.lastSeenAt).toLocaleString()}</small></div>)}</section>
       <section><h3>MODERATION HISTORY</h3>{player.moderationHistory.slice().reverse().map(item=><div className="history-entry" key={item.id}><strong><span className="tag red">{item.type.toUpperCase()}</span> {item.reason}</strong><small>{item.actor} · {new Date(item.at).toLocaleString()}</small></div>)}{!player.moderationHistory.length && <div className="empty-mini">No moderation history.</div>}</section>
       <section><h3>STAFF NOTES</h3>{player.notes.slice().reverse().map(note=><div className="history-entry" key={note.id}><strong>{note.text}</strong><small>{note.actor} · {new Date(note.at).toLocaleString()}</small></div>)}{!player.notes.length && <div className="empty-mini">No staff notes.</div>}</section>
     </div>
+    {pendingAction&&<div className="modal-backdrop nested-modal"><form className="modal action-dialog" onSubmit={e=>{e.preventDefault();void recordAction()}}><header><div><span className="eyebrow">PLAYER ACTION</span><h2>{pendingAction.toUpperCase()}</h2><p>Record this action for <strong>{player.currentName}</strong>.</p></div><button type="button" className="icon-button" onClick={()=>setPendingAction(null)}><X/></button></header><label>REASON<textarea autoFocus required value={actionReason} onChange={e=>setActionReason(e.target.value)} /></label><footer><button type="button" onClick={()=>setPendingAction(null)}>CANCEL</button><button className="primary">CONFIRM {pendingAction.toUpperCase()}</button></footer></form></div>}
   </article></div>
 }

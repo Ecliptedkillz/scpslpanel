@@ -49,7 +49,10 @@ public sealed class DiscordBotService(
     private async Task ConnectAsync(string token)
     {
         await DisconnectAsync();
-        var client = new DiscordSocketClient(new DiscordSocketConfig { GatewayIntents = GatewayIntents.Guilds });
+        var client = new DiscordSocketClient(new DiscordSocketConfig {
+            GatewayIntents = GatewayIntents.Guilds | GatewayIntents.GuildMembers,
+            AlwaysDownloadUsers = true
+        });
         client.Log += message => { logger.Log((LogLevel)Math.Max(0, (int)LogLevel.Critical - (int)message.Severity), "{Message}", message.Message); return Task.CompletedTask; };
         client.Ready += RegisterCommandsAsync;
         client.SlashCommandExecuted += HandleCommandAsync;
@@ -73,9 +76,13 @@ public sealed class DiscordBotService(
     private async Task RegisterCommandsAsync()
     {
         var settings = await settingsService.GetAsync();
-        if (_client is null || !ulong.TryParse(settings.DiscordGuildId, out var guildId)) return;
+        if (_client is null || !ulong.TryParse(settings.DiscordGuildId, out var guildId))
+        {
+            _error = "The Discord guild ID is missing or invalid.";
+            return;
+        }
         var guild = _client.GetGuild(guildId);
-        if (guild is null) { _error = "The configured Discord guild was not found."; return; }
+        if (guild is null) { _error = $"Guild {settings.DiscordGuildId} was not found. Confirm the bot is installed in that server."; return; }
         var serverOption = new SlashCommandOptionBuilder().WithName("server").WithDescription("Registered server name").WithType(ApplicationCommandOptionType.String).WithRequired(true);
         var command = new SlashCommandBuilder().WithName("scp").WithDescription("SCP Control panel commands")
             .AddOption(new SlashCommandOptionBuilder().WithName("status").WithDescription("Show server status").WithType(ApplicationCommandOptionType.SubCommand))
@@ -91,6 +98,7 @@ public sealed class DiscordBotService(
             .AddOption(new SlashCommandOptionBuilder().WithName("announce").WithDescription("Send an in-game announcement").WithType(ApplicationCommandOptionType.SubCommand)
                 .AddOption(serverOption).AddOption("message", ApplicationCommandOptionType.String, "Announcement text", isRequired:true));
         await guild.BulkOverwriteApplicationCommandAsync([command.Build()]);
+        _error = null;
     }
 
     private static SlashCommandOptionBuilder Subcommand(string name, string description) =>
