@@ -151,7 +151,7 @@ public sealed class ServerManager(
             var process = new Process { StartInfo = start, EnableRaisingEvents = true };
             process.OutputDataReceived += (_, e) => PublishLine(id, "stdout", e.Data);
             process.ErrorDataReceived += (_, e) => PublishLine(id, "stderr", e.Data);
-            process.Exited += (_, _) => _ = OnExitedAsync(definition, runtime);
+            process.Exited += (_, _) => _ = OnExitedAsync(definition, runtime, process);
             if (!process.Start()) throw new InvalidOperationException("The server process did not start.");
             runtime.Process = process;
             runtime.StartedAt = DateTimeOffset.UtcNow;
@@ -181,7 +181,16 @@ public sealed class ServerManager(
                 catch (OperationCanceledException) { force = true; }
             }
         }
-        if (force && !process.HasExited) process.Kill(entireProcessTree: true);
+        if (force && !process.HasExited)
+        {
+            process.Kill(entireProcessTree: true);
+            using var killTimeout = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+            try { await process.WaitForExitAsync(killTimeout.Token); }
+            catch (OperationCanceledException)
+            {
+                throw new InvalidOperationException("The server process did not exit after it was terminated.");
+            }
+        }
         await audit.AddAsync(actor, force ? "server.kill" : "server.stop", definition.Name, "Stopped server");
     }
 
@@ -214,13 +223,24 @@ public sealed class ServerManager(
         line is null ? Task.CompletedTask : hub.Clients.Group($"server:{id}")
             .SendAsync("ConsoleLine", new { serverId = id, stream, line, at = DateTimeOffset.UtcNow });
 
-    private async Task OnExitedAsync(ServerDefinition definition, Runtime runtime)
+    private async Task OnExitedAsync(ServerDefinition definition, Runtime runtime, Process exitedProcess)
     {
-        var priorState = runtime.State;
-        var exitCode = runtime.Process?.ExitCode;
-        runtime.State = ServerState.Offline;
-        runtime.Process?.Dispose();
-        runtime.Process = null;
+        ServerState priorState;
+        int? exitCode;
+        lock (runtime)
+        {
+            if (!ReferenceEquals(runtime.Process, exitedProcess))
+            {
+                exitedProcess.Dispose();
+                return;
+            }
+            priorState = runtime.State;
+            try { exitCode = exitedProcess.ExitCode; }
+            catch { exitCode = null; }
+            runtime.State = ServerState.Offline;
+            runtime.Process = null;
+            exitedProcess.Dispose();
+        }
         await PublishLine(definition.Id, "system", $"Process exited with code {exitCode}.");
         await hub.Clients.All.SendAsync("ServerChanged", Snapshot(definition));
         if (definition.AutoRestart && priorState != ServerState.Stopping)
