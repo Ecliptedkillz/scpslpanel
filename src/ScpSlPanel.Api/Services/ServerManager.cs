@@ -153,6 +153,7 @@ public sealed class ServerManager(
                 throw new FileNotFoundException(
                     "LocalAdmin must use the dedicated server folder containing SCPSL.exe as its working directory.",
                     Path.Combine(definition.WorkingDirectory, "SCPSL.exe"));
+            if (isLocalAdmin) EnsureLocalAdminHeadlessConfig();
             var arguments = isLocalAdmin && string.IsNullOrWhiteSpace(definition.Arguments)
                 ? definition.QueryPort.ToString(System.Globalization.CultureInfo.InvariantCulture)
                 : definition.Arguments;
@@ -247,7 +248,10 @@ public sealed class ServerManager(
 
     public async Task RestartAsync(Guid id, string actor)
     {
-        await StopAsync(id, actor);
+        // LocalAdmin can crash while reading redirected console commands and may leave
+        // SCPSL.exe behind. A restart must replace the complete managed process tree.
+        await StopAsync(id, actor, force: true);
+        await Task.Delay(TimeSpan.FromMilliseconds(750));
         await StartAsync(id, actor);
     }
 
@@ -328,5 +332,29 @@ public sealed class ServerManager(
         {
             throw new InvalidOperationException("The previous server process is taking too long to stop.");
         }
+    }
+
+    private void EnsureLocalAdminHeadlessConfig()
+    {
+        var configDirectory = Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
+            "SCP Secret Laboratory", "config");
+        Directory.CreateDirectory(configDirectory);
+        var path = Path.Combine(configDirectory, "config_localadmin_global.txt");
+        var lines = File.Exists(path) ? File.ReadAllLines(path).ToList() : [];
+        var index = lines.FindIndex(line =>
+            line.TrimStart().StartsWith("la_no_set_cursor:", StringComparison.OrdinalIgnoreCase));
+        if (index >= 0)
+        {
+            if (lines[index].Trim().Equals("la_no_set_cursor: true", StringComparison.OrdinalIgnoreCase))
+                return;
+            lines[index] = "la_no_set_cursor: true";
+        }
+        else
+        {
+            lines.Add("la_no_set_cursor: true");
+        }
+        File.WriteAllLines(path, lines);
+        logger.LogInformation("Enabled headless LocalAdmin console mode in {ConfigPath}", path);
     }
 }
