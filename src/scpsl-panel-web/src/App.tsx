@@ -2,7 +2,7 @@ import { FormEvent, useCallback, useEffect, useRef, useState } from 'react'
 import {
   Activity, ArrowLeft, Ban as BanIcon, Bot, CalendarClock, ChevronRight, CircleGauge, Command,
   FileCode2, FolderOpen, Gamepad2, History, LayoutDashboard, LogOut, Menu, Play, Plug, Save,
-  Plus, RefreshCw, RotateCcw, Server as ServerIcon, Settings, Shield,
+  Plus, RefreshCw, RotateCcw, Search, Server as ServerIcon, Settings, Shield,
   Square, Sun, Moon, Terminal, Users, X,
 } from 'lucide-react'
 import { api, ApiError } from './api'
@@ -659,24 +659,21 @@ function AuditPage() {
 
 function AdminManagerPage({ user, servers, onError }: { user: User; servers: Server[]; onError: (e: string) => void }) {
   type Account = { id: string; username: string; role: string; enabled: boolean; serverIds: string[]; permissions: string[]; serverAccess?: ServerAccessGrant[] }
-  const permissionOptions = [
-    ['view', 'View server'], ['server.start', 'Start server'], ['server.stop', 'Stop server'],
-    ['server.restart', 'Restart server'], ['console.view', 'View console and download logs'],
-    ['console.write', 'Execute console commands'],
-    ['players', 'View live players'], ['players.history', 'View player database'],
-    ['players.notes', 'Add player notes'], ['players.actions', 'Warnings, watchlist and allowlist'],
-    ['players.mute', 'Mute and unmute players'], ['players.kick', 'Kick players'], ['players.ban', 'Ban players'],
-    ['plugins', 'View plugins'], ['plugins.manage', 'Load / unload / restart plugins'],
-    ['config.view', 'Read server and plugin configuration'], ['config.write', 'Edit server and plugin configuration'],
-    ['monitoring', 'View monitoring and incidents'], ['announcements', 'Send remote announcements'],
-    ['maintenance', 'Backups and server updates'],
+  const permissionGroups:AdminPermissionGroup[] = [
+    {name:'Server',description:'Visibility and process controls',items:[['view','View server'],['server.start','Start server'],['server.stop','Stop server'],['server.restart','Restart server']]},
+    {name:'Console',description:'Logs and remote commands',items:[['console.view','View console and download logs'],['console.write','Execute console commands']]},
+    {name:'Players',description:'Live players, profiles, and moderation',items:[['players','View live players'],['players.history','View player database'],['players.notes','Add player notes'],['players.actions','Warnings, watchlist and allowlist'],['players.mute','Mute and unmute players'],['players.kick','Kick players'],['players.ban','Ban players']]},
+    {name:'Configuration',description:'Plugins and configuration files',items:[['plugins','View plugins'],['plugins.manage','Load, unload, and restart plugins'],['config.view','Read configuration'],['config.write','Edit configuration']]},
+    {name:'Operations',description:'Monitoring, announcements, and maintenance',items:[['monitoring','View monitoring and incidents'],['announcements','Send remote announcements'],['maintenance','Backups and server updates']]},
   ]
+  const permissionOptions:ReadonlyArray<readonly [string,string]> = permissionGroups.flatMap(group=>group.items)
   const blank = { id: '', username: '', password: '', enabled: true, serverIds: [] as string[], permissions: [] as string[], serverAccess: [] as ServerAccessGrant[] }
   const [accounts, setAccounts] = useState<Account[]>([])
   const [form, setForm] = useState(blank)
   const [showModal, setShowModal] = useState(false)
   const [scopeServer, setScopeServer] = useState('')
   const [busy, setBusy] = useState(false)
+  const [permissionSearch,setPermissionSearch]=useState('')
   const confirmation=useConfirmDialog()
   const loadAccounts = () => { if (user.role === 'Owner') api<Account[]>('/users').then(setAccounts).catch(e => onError(e.message)) }
   useEffect(() => { loadAccounts() }, [])
@@ -689,6 +686,16 @@ function AdminManagerPage({ user, servers, onError }: { user: User; servers: Ser
   }
   const togglePermission = (value: string) => setForm({...form, serverAccess: form.serverAccess.map(grant =>
     grant.serverId !== scopeServer ? grant : {...grant, permissions:grant.permissions.includes(value) ? grant.permissions.filter(x => x !== value) : [...grant.permissions,value]} )})
+  const setScopedPermissions=(permissions:string[])=>setForm({...form,serverAccess:form.serverAccess.map(grant=>grant.serverId===scopeServer?{...grant,permissions:[...new Set(permissions)]}:grant)})
+  const togglePermissionGroup=(values:readonly string[])=>{
+    const selected=form.serverAccess.find(x=>x.serverId===scopeServer)?.permissions??[]
+    const allSelected=values.every(value=>selected.includes(value))
+    setScopedPermissions(allSelected?selected.filter(value=>!values.includes(value)):([...selected,...values]))
+  }
+  const copyPermissionsToAssigned=()=>{
+    const selected=form.serverAccess.find(x=>x.serverId===scopeServer)?.permissions??[]
+    setForm({...form,serverAccess:form.serverAccess.map(grant=>({...grant,permissions:[...selected]}))})
+  }
   const migratePermissions = (permissions: string[]) => [...new Set(permissions.flatMap(permission => {
     if (permission === 'lifecycle') return ['server.start', 'server.stop', 'server.restart']
     if (permission === 'console') return ['console.view', 'console.write']
@@ -703,7 +710,7 @@ function AdminManagerPage({ user, servers, onError }: { user: User; servers: Ser
     setScopeServer(grants[0]?.serverId || '')
     setShowModal(true)
   }
-  const add = () => { setForm(blank); setScopeServer(''); setShowModal(true) }
+  const add = () => { setForm(blank); setScopeServer(''); setPermissionSearch(''); setShowModal(true) }
   const applyPreset = (name: 'viewer' | 'moderator' | 'manager' | 'full') => {
     const values = name === 'viewer' ? ['view', 'players', 'plugins', 'config.view']
       : name === 'moderator' ? ['view', 'console.view', 'players', 'players.history', 'players.notes', 'players.actions', 'players.mute', 'players.kick']
@@ -724,12 +731,49 @@ function AdminManagerPage({ user, servers, onError }: { user: User; servers: Ser
     try { await api(`/users/${account.id}`, { method: 'DELETE' }); loadAccounts() }
     catch (e) { onError(e instanceof Error ? e.message : 'Unable to delete account') }
   }
+  const editorModal=showModal&&<AdminEditorModal form={form} setForm={setForm} servers={servers} scopeServer={scopeServer}
+    setScopeServer={setScopeServer} permissionGroups={permissionGroups} permissionOptions={permissionOptions}
+    permissionSearch={permissionSearch} setPermissionSearch={setPermissionSearch} toggleServer={toggleServer}
+    togglePermission={togglePermission} togglePermissionGroup={togglePermissionGroup}
+    setScopedPermissions={setScopedPermissions} copyPermissionsToAssigned={copyPermissionsToAssigned}
+    applyPreset={applyPreset} busy={busy} close={()=>setShowModal(false)} save={save}/>
   return <>{confirmation.dialog}<PageTitle eyebrow="ACCESS CONTROL" title="Admin Manager"/>
     <section className="admin-manager-card"><div className="admin-manager-head"><div><h2>All Admins <span>({accounts.length})</span></h2><p>Manage panel accounts, server access, and operational permissions.</p></div><button className="primary" onClick={add}><Plus size={15}/> ADD ADMIN</button></div>
       <div className="admin-table-wrap"><table className="admin-table"><thead><tr><th>ADMIN</th><th>AUTH</th><th>SERVER ACCESS</th><th>PERMISSIONS</th><th>STATUS</th><th>ACTIONS</th></tr></thead><tbody>{accounts.map(account => { const grants = account.serverAccess?.length ? account.serverAccess : account.serverIds.map(serverId => ({serverId,permissions:account.permissions})); const permissionCount = new Set(grants.flatMap(x => x.permissions)).size; return <tr key={account.id}><td><div className="admin-identity"><div className="avatar">{account.username.slice(0,2).toUpperCase()}</div><div><strong>{account.username}</strong><small>{account.role}</small></div></div></td><td><span className="admin-auth" title="Password authentication">◆</span></td><td>{account.role === 'Owner' ? <span className="scope-all">ALL SERVERS</span> : <span>{grants.length} of {servers.length}</span>}</td><td>{account.role === 'Owner' ? <span className="scope-all">ALL PERMISSIONS</span> : <span>{permissionCount} permission type{permissionCount === 1 ? '' : 's'}</span>}</td><td><span className={`tag ${account.enabled ? '' : 'red'}`}>{account.enabled ? 'ENABLED' : 'DISABLED'}</span></td><td><div className="admin-actions">{account.role === 'Owner' ? <span className="your-account">YOUR ACCOUNT</span> : <><button className="edit" onClick={() => edit(account)}>EDIT</button><button className="delete" onClick={() => remove(account)}>DELETE</button></>}</div></td></tr>})}</tbody></table></div>
     </section>
     {showModal && <div className="modal-backdrop"><form className="modal admin-modal" onSubmit={save}><div className="modal-head"><div><span className="eyebrow">{form.id ? 'EDIT ADMINISTRATOR' : 'NEW ADMINISTRATOR'}</span><h2>{form.id ? form.username : 'Add admin'}</h2><p>Each assigned server has its own independent permission set.</p></div><button type="button" className="icon-button" onClick={() => setShowModal(false)}><X size={18}/></button></div><div className="admin-modal-body"><div className="form-row"><label>USERNAME<input required value={form.username} onChange={e => setForm({...form, username:e.target.value})}/></label><label>{form.id ? 'NEW PASSWORD (OPTIONAL)' : 'PASSWORD'}<input required={!form.id} minLength={8} type="password" value={form.password} onChange={e => setForm({...form,password:e.target.value})}/></label></div><label className="check-row"><input type="checkbox" checked={form.enabled} onChange={e => setForm({...form,enabled:e.target.checked})}/> Account enabled</label><div className="preset-row"><span>PRESET FOR SELECTED SERVER</span><button type="button" disabled={!scopeServer} onClick={() => applyPreset('viewer')}>VIEWER</button><button type="button" disabled={!scopeServer} onClick={() => applyPreset('moderator')}>MODERATOR</button><button type="button" disabled={!scopeServer} onClick={() => applyPreset('manager')}>MANAGER</button><button type="button" disabled={!scopeServer} onClick={() => applyPreset('full')}>FULL ACCESS</button></div><div className="admin-scope-grid"><section><span className="eyebrow">SERVER ACCESS</span>{servers.map(server => <div className={`server-grant-row ${scopeServer === server.id ? 'active' : ''}`} key={server.id}><label className="check-row"><input type="checkbox" checked={form.serverAccess.some(x => x.serverId === server.id)} onChange={() => toggleServer(server.id)}/><span><strong>{server.name}</strong><small>{server.state}</small></span></label>{form.serverAccess.some(x => x.serverId === server.id) && <button type="button" onClick={() => setScopeServer(server.id)}>EDIT PERMS</button>}</div>)}</section><section><span className="eyebrow">PERMISSIONS {scopeServer ? `· ${servers.find(x => x.id === scopeServer)?.name}` : ''}</span>{scopeServer ? permissionOptions.map(([value,label]) => <label className="check-row" key={value}><input type="checkbox" checked={form.serverAccess.find(x => x.serverId === scopeServer)?.permissions.includes(value) ?? false} onChange={() => togglePermission(value)}/>{label}</label>) : <EmptyMini text="Assign and select a server to configure its permissions."/>}</section></div></div><div className="modal-actions"><button type="button" onClick={() => setShowModal(false)}>CANCEL</button><button className="primary" disabled={busy}><Save size={14}/> {busy ? 'SAVING…' : 'SAVE ADMIN'}</button></div></form></div>}
+    {editorModal}
   </>
+}
+
+type AdminEditorForm={id:string;username:string;password:string;enabled:boolean;serverIds:string[];permissions:string[];serverAccess:ServerAccessGrant[]}
+type AdminPermissionGroup={name:string;description:string;items:ReadonlyArray<readonly [string,string]>}
+function AdminEditorModal({form,setForm,servers,scopeServer,setScopeServer,permissionGroups,permissionOptions,
+  permissionSearch,setPermissionSearch,toggleServer,togglePermission,togglePermissionGroup,setScopedPermissions,
+  copyPermissionsToAssigned,applyPreset,busy,close,save}:{
+  form:AdminEditorForm;setForm:React.Dispatch<React.SetStateAction<AdminEditorForm>>;servers:Server[];
+  scopeServer:string;setScopeServer:(id:string)=>void;permissionGroups:ReadonlyArray<AdminPermissionGroup>;
+  permissionOptions:ReadonlyArray<readonly [string,string]>;permissionSearch:string;setPermissionSearch:(value:string)=>void;
+  toggleServer:(id:string)=>void;togglePermission:(value:string)=>void;togglePermissionGroup:(values:readonly string[])=>void;
+  setScopedPermissions:(values:string[])=>void;copyPermissionsToAssigned:()=>void;
+  applyPreset:(name:'viewer'|'moderator'|'manager'|'full')=>void;busy:boolean;close:()=>void;save:(event:FormEvent)=>Promise<void>
+}){
+  const selected=form.serverAccess.find(x=>x.serverId===scopeServer)?.permissions??[]
+  return <div className="modal-backdrop admin-modal-backdrop admin-modal-v2-backdrop"><form className="modal admin-modal admin-modal-v2" onSubmit={save}>
+    <div className="modal-head admin-modal-head"><div><span className="eyebrow">{form.id?'EDIT ADMINISTRATOR':'NEW ADMINISTRATOR'}</span><h2>{form.id?form.username:'Add administrator'}</h2><p>Assign servers and configure an independent permission set for each one.</p></div><button type="button" className="icon-button" onClick={close}><X size={18}/></button></div>
+    <div className="admin-modal-body">
+      <section className="admin-account-section"><div className="admin-section-title"><span>01</span><div><h3>Account details</h3><p>Login credentials and account availability.</p></div></div><div className="form-row"><label>USERNAME<input required value={form.username} onChange={e=>setForm({...form,username:e.target.value})}/></label><label>{form.id?'NEW PASSWORD (OPTIONAL)':'PASSWORD'}<input required={!form.id} minLength={8} type="password" value={form.password} onChange={e=>setForm({...form,password:e.target.value})}/></label></div><label className="account-enabled-card"><input type="checkbox" checked={form.enabled} onChange={e=>setForm({...form,enabled:e.target.checked})}/><span><strong>Account enabled</strong><small>Allow this administrator to sign in.</small></span></label></section>
+      <section className="admin-access-section"><div className="admin-section-title"><span>02</span><div><h3>Server access and permissions</h3><p>Select a server, then choose exactly what this administrator can do.</p></div></div><div className="admin-scope-grid">
+        <aside className="admin-server-selector"><div className="selector-head"><span className="eyebrow">ASSIGNED SERVERS</span><b>{form.serverAccess.length}/{servers.length}</b></div>{servers.map(server=>{const assigned=form.serverAccess.some(x=>x.serverId===server.id);return <button type="button" className={`server-grant-row ${scopeServer===server.id?'active':''} ${assigned?'assigned':''}`} key={server.id} onClick={()=>assigned&&setScopeServer(server.id)}><input type="checkbox" checked={assigned} onClick={e=>e.stopPropagation()} onChange={()=>toggleServer(server.id)}/><span><strong>{server.name}</strong><small><i className={`server-dot ${server.state}`}/>{server.state}</small></span><b>{assigned?(scopeServer===server.id?'EDITING':'EDIT'):'NO ACCESS'}</b></button>})}</aside>
+        <section className="admin-permission-selector">{scopeServer?<><div className="permission-selector-head"><div><span className="eyebrow">PERMISSIONS FOR</span><h3>{servers.find(x=>x.id===scopeServer)?.name}</h3><p>{selected.length} of {permissionOptions.length} selected</p></div><div className="permission-head-actions"><button type="button" onClick={()=>setScopedPermissions(permissionOptions.map(([value])=>value))}>SELECT ALL</button><button type="button" onClick={()=>setScopedPermissions([])}>CLEAR</button></div></div>
+          <div className="permission-presets"><span>QUICK PRESET</span><button type="button" onClick={()=>applyPreset('viewer')}>VIEWER</button><button type="button" onClick={()=>applyPreset('moderator')}>MODERATOR</button><button type="button" onClick={()=>applyPreset('manager')}>MANAGER</button><button type="button" onClick={()=>applyPreset('full')}>FULL ACCESS</button></div>
+          <div className="permission-tools"><label><Search size={15}/><input value={permissionSearch} onChange={e=>setPermissionSearch(e.target.value)} placeholder="Search permissions"/></label>{form.serverAccess.length>1&&<button type="button" onClick={copyPermissionsToAssigned}>COPY TO ALL ASSIGNED</button>}</div>
+          <div className="permission-groups">{permissionGroups.map(group=>{const visible=group.items.filter(([value,label])=>`${value} ${label}`.toLowerCase().includes(permissionSearch.toLowerCase()));if(!visible.length)return null;const allSelected=group.items.every(([value])=>selected.includes(value));return <section className="permission-group" key={group.name}><header><div><h4>{group.name}</h4><p>{group.description}</p></div><button type="button" className={allSelected?'selected':''} onClick={()=>togglePermissionGroup(group.items.map(([value])=>value))}>{allSelected?'CLEAR GROUP':'SELECT GROUP'}</button></header><div>{visible.map(([value,label])=><label className={`permission-option ${selected.includes(value)?'selected':''}`} key={value}><input type="checkbox" checked={selected.includes(value)} onChange={()=>togglePermission(value)}/><span><strong>{label}</strong><code>{value}</code></span>{['server.stop','console.write','players.kick','players.ban','plugins.manage','config.write','maintenance'].includes(value)&&<em>SENSITIVE</em>}</label>)}</div></section>})}</div>
+        </>:<div className="permission-empty"><Shield size={34}/><h3>Select an assigned server</h3><p>Enable a server on the left to configure its permissions.</p></div>}</section>
+      </div></section>
+    </div>
+    <div className="modal-actions admin-modal-actions"><div><strong>{form.serverAccess.length} server{form.serverAccess.length===1?'':'s'} assigned</strong><span>Changes take effect after saving.</span></div><button type="button" onClick={close}>CANCEL</button><button className="primary" disabled={busy||!form.serverAccess.length}><Save size={14}/>{busy?'SAVING…':'SAVE ADMINISTRATOR'}</button></div>
+  </form></div>
 }
 
 type IntegrationSettings = {
