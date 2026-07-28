@@ -355,3 +355,15 @@ table { width:100%; border-collapse:collapse; font-size:12.5px } th { text-align
 .admin-modal-v2 .permission-group>div{grid-template-columns:repeat(2,minmax(0,1fr))}
 @media(min-width:1100px){.admin-modal-v2 .permission-groups{grid-template-columns:repeat(3,minmax(0,1fr))}.admin-modal-v2 .permission-group>div{grid-template-columns:1fr}}
 @media(max-width:760px){.admin-modal-v2-backdrop{padding:10px!important}.admin-modal.admin-modal-v2{width:calc(100vw - 20px)!important;height:calc(100vh - 20px)!important;border-radius:8px!important}.admin-modal-v2 .admin-account-section .form-row{grid-template-columns:1fr}.admin-modal-v2 .permission-groups,.admin-modal-v2 .permission-group>div{grid-template-columns:1fr}.admin-modal-v2 .permission-presets{flex-wrap:wrap}.admin-modal-v2 .permission-presets>span{width:100%;margin-bottom:3px}.admin-modal-v2 .permission-tools{flex-direction:column}.admin-modal-v2 .admin-modal-actions{position:relative}}
+
+/* Final admin editor layout: bounded modal with side-by-side workspace */
+.admin-modal-v2-backdrop{padding:24px!important;align-items:center!important}
+.admin-modal.admin-modal-v2{width:min(1100px,calc(100vw - 48px))!important;height:min(820px,calc(100vh - 48px))!important;max-width:1100px!important;max-height:820px!important;border-radius:10px!important}
+.admin-modal-v2 .admin-modal-body{display:block!important;overflow:auto!important}
+.admin-modal-v2 .admin-access-section{display:block!important}
+.admin-modal-v2 .admin-scope-grid{display:grid!important;grid-template-columns:260px minmax(0,1fr)!important;width:100%!important;height:auto!important;min-height:430px!important;gap:14px!important}
+.admin-modal-v2 .admin-server-selector{width:100%!important;height:auto!important;min-height:430px!important;overflow:auto!important}
+.admin-modal-v2 .admin-server-selector>.server-grant-row{display:grid!important;width:100%!important;margin:0 0 8px!important}
+.admin-modal-v2 .admin-permission-selector{display:block!important;width:100%!important;height:auto!important;min-height:430px!important;overflow:visible!important}
+.admin-modal-v2 .permission-groups{display:grid!important;grid-template-columns:repeat(2,minmax(0,1fr))!important}
+@media(max-width:760px){.admin-modal-v2-backdrop{padding:10px!important}.admin-modal.admin-modal-v2{width:calc(100vw - 20px)!important;height:calc(100vh - 20px)!important}.admin-modal-v2 .admin-scope-grid{grid-template-columns:1fr!important}.admin-modal-v2 .admin-server-selector,.admin-modal-v2 .admin-permission-selector{min-height:0!important}.admin-modal-v2 .permission-groups{grid-template-columns:1fr!important}}
