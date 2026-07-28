@@ -486,31 +486,51 @@ function AuditPage() {
 function AdminManagerPage({ user, servers, onError }: { user: User; servers: Server[]; onError: (e: string) => void }) {
   type Account = { id: string; username: string; role: string; enabled: boolean; serverIds: string[]; permissions: string[] }
   const permissionOptions = [
-    ['view', 'View server'], ['lifecycle', 'Start / stop / restart'], ['console', 'View console and execute commands'],
+    ['view', 'View server'], ['server.start', 'Start server'], ['server.stop', 'Stop server'],
+    ['server.restart', 'Restart server'], ['console', 'View console and execute commands'],
     ['players', 'View players'], ['players.manage', 'Kick and ban players'], ['plugins', 'View plugins'],
     ['plugins.manage', 'Load / unload / restart plugins'], ['config', 'Read and edit configuration'],
   ]
   const blank = { id: '', username: '', password: '', enabled: true, serverIds: [] as string[], permissions: ['view'] as string[] }
   const [accounts, setAccounts] = useState<Account[]>([])
   const [form, setForm] = useState(blank)
+  const [showModal, setShowModal] = useState(false)
   const [busy, setBusy] = useState(false)
   const loadAccounts = () => { if (user.role === 'Owner') api<Account[]>('/users').then(setAccounts).catch(e => onError(e.message)) }
   useEffect(() => { loadAccounts() }, [])
   if (user.role !== 'Owner') return <><PageTitle eyebrow="ACCESS CONTROL" title="Admin Manager"/><section className="panel"><Shield size={22}/><h2>Owner access required</h2><p>Only the panel owner can manage administrator accounts.</p></section></>
   const toggle = (key: 'serverIds' | 'permissions', value: string) =>
     setForm({ ...form, [key]: form[key].includes(value) ? form[key].filter(x => x !== value) : [...form[key], value] })
-  const edit = (account: Account) => setForm({ id: account.id, username: account.username, password: '', enabled: account.enabled, serverIds: account.serverIds, permissions: account.permissions })
+  const edit = (account: Account) => {
+    setForm({ id: account.id, username: account.username, password: '', enabled: account.enabled, serverIds: account.serverIds, permissions: account.permissions })
+    setShowModal(true)
+  }
+  const add = () => { setForm(blank); setShowModal(true) }
+  const applyPreset = (name: 'viewer' | 'moderator' | 'manager' | 'full') => {
+    const values = name === 'viewer' ? ['view', 'players', 'plugins']
+      : name === 'moderator' ? ['view', 'console', 'players', 'players.manage']
+      : name === 'manager' ? ['view', 'server.start', 'server.stop', 'server.restart', 'console', 'players', 'players.manage', 'plugins']
+      : permissionOptions.map(([value]) => value)
+    setForm({ ...form, permissions: values })
+  }
   const save = async (event: FormEvent) => {
     event.preventDefault(); setBusy(true)
     try {
       await api(form.id ? `/users/${form.id}` : '/users', { method: form.id ? 'PUT' : 'POST', body: JSON.stringify({ username: form.username, password: form.password || null, enabled: form.enabled, serverIds: form.serverIds, permissions: form.permissions }) })
-      setForm(blank); loadAccounts()
+      setForm(blank); setShowModal(false); loadAccounts()
     } catch (e) { onError(e instanceof Error ? e.message : 'Unable to save account') }
     finally { setBusy(false) }
   }
-  return <><PageTitle eyebrow="ACCESS CONTROL" title={`Admin Manager · ${accounts.length}`}><button className="primary" onClick={() => setForm(blank)}><Plus size={15}/> ADD ADMIN</button></PageTitle>
-    <section className="access-grid"><article className="panel"><div className="panel-head"><div><span className="eyebrow">PANEL USERS</span><h2>Accounts</h2></div></div><div className="account-list">{accounts.map(account => <button key={account.id} className={form.id === account.id ? 'active' : ''} onClick={() => account.role !== 'Owner' && edit(account)}><div className="avatar">{account.username.slice(0,2).toUpperCase()}</div><div><strong>{account.username}</strong><small>{account.role} · {account.enabled ? 'Enabled' : 'Disabled'} · {account.serverIds.length || 'All'} server(s)</small></div><ChevronRight size={15}/></button>)}</div></article>
-    <form className="panel access-form" onSubmit={save}><div className="panel-head"><div><span className="eyebrow">{form.id ? 'EDIT OPERATOR' : 'NEW OPERATOR'}</span><h2>{form.id ? form.username : 'Create account'}</h2></div></div><div className="form-row"><label>USERNAME<input required value={form.username} onChange={e => setForm({...form, username:e.target.value})}/></label><label>{form.id ? 'NEW PASSWORD (OPTIONAL)' : 'PASSWORD'}<input required={!form.id} type="password" value={form.password} onChange={e => setForm({...form,password:e.target.value})}/></label></div><label className="check-row"><input type="checkbox" checked={form.enabled} onChange={e => setForm({...form,enabled:e.target.checked})}/> Account enabled</label><div className="access-section"><span className="eyebrow">SERVER ACCESS</span>{servers.map(server => <label className="check-row" key={server.id}><input type="checkbox" checked={form.serverIds.includes(server.id)} onChange={() => toggle('serverIds',server.id)}/>{server.name}</label>)}</div><div className="access-section"><span className="eyebrow">PERMISSIONS</span>{permissionOptions.map(([value,label]) => <label className="check-row" key={value}><input type="checkbox" checked={form.permissions.includes(value)} onChange={() => toggle('permissions',value)}/>{label}</label>)}</div><div className="account-actions">{form.id && <button type="button" className="danger" onClick={async () => { if (!confirm(`Delete ${form.username}?`)) return; await api(`/users/${form.id}`,{method:'DELETE'}); setForm(blank); loadAccounts() }}>DELETE</button>}<button className="primary" disabled={busy}><Save size={14}/> SAVE ACCOUNT</button></div></form></section>
+  const remove = async (account: Account) => {
+    if (!confirm(`Delete ${account.username}? This cannot be undone.`)) return
+    try { await api(`/users/${account.id}`, { method: 'DELETE' }); loadAccounts() }
+    catch (e) { onError(e instanceof Error ? e.message : 'Unable to delete account') }
+  }
+  return <><PageTitle eyebrow="ACCESS CONTROL" title="Admin Manager"/>
+    <section className="admin-manager-card"><div className="admin-manager-head"><div><h2>All Admins <span>({accounts.length})</span></h2><p>Manage panel accounts, server access, and operational permissions.</p></div><button className="primary" onClick={add}><Plus size={15}/> ADD ADMIN</button></div>
+      <div className="admin-table-wrap"><table className="admin-table"><thead><tr><th>ADMIN</th><th>AUTH</th><th>SERVER ACCESS</th><th>PERMISSIONS</th><th>STATUS</th><th>ACTIONS</th></tr></thead><tbody>{accounts.map(account => <tr key={account.id}><td><div className="admin-identity"><div className="avatar">{account.username.slice(0,2).toUpperCase()}</div><div><strong>{account.username}</strong><small>{account.role}</small></div></div></td><td><span className="admin-auth" title="Password authentication">◆</span></td><td>{account.role === 'Owner' ? <span className="scope-all">ALL SERVERS</span> : <span>{account.serverIds.length} of {servers.length}</span>}</td><td>{account.role === 'Owner' ? <span className="scope-all">ALL PERMISSIONS</span> : <span>{account.permissions.length} permission{account.permissions.length === 1 ? '' : 's'}</span>}</td><td><span className={`tag ${account.enabled ? '' : 'red'}`}>{account.enabled ? 'ENABLED' : 'DISABLED'}</span></td><td><div className="admin-actions">{account.role === 'Owner' ? <span className="your-account">YOUR ACCOUNT</span> : <><button className="edit" onClick={() => edit(account)}>EDIT</button><button className="delete" onClick={() => remove(account)}>DELETE</button></>}</div></td></tr>)}</tbody></table></div>
+    </section>
+    {showModal && <div className="modal-backdrop"><form className="modal admin-modal" onSubmit={save}><div className="modal-head"><div><span className="eyebrow">{form.id ? 'EDIT ADMINISTRATOR' : 'NEW ADMINISTRATOR'}</span><h2>{form.id ? form.username : 'Add admin'}</h2><p>Choose exactly which servers and controls this account can access.</p></div><button type="button" className="icon-button" onClick={() => setShowModal(false)}><X size={18}/></button></div><div className="admin-modal-body"><div className="form-row"><label>USERNAME<input required value={form.username} onChange={e => setForm({...form, username:e.target.value})}/></label><label>{form.id ? 'NEW PASSWORD (OPTIONAL)' : 'PASSWORD'}<input required={!form.id} minLength={8} type="password" value={form.password} onChange={e => setForm({...form,password:e.target.value})}/></label></div><label className="check-row"><input type="checkbox" checked={form.enabled} onChange={e => setForm({...form,enabled:e.target.checked})}/> Account enabled</label><div className="preset-row"><span>PERMISSION PRESETS</span><button type="button" onClick={() => applyPreset('viewer')}>VIEWER</button><button type="button" onClick={() => applyPreset('moderator')}>MODERATOR</button><button type="button" onClick={() => applyPreset('manager')}>MANAGER</button><button type="button" onClick={() => applyPreset('full')}>FULL ACCESS</button></div><div className="admin-scope-grid"><section><span className="eyebrow">SERVER ACCESS</span>{servers.map(server => <label className="check-row" key={server.id}><input type="checkbox" checked={form.serverIds.includes(server.id)} onChange={() => toggle('serverIds',server.id)}/><span><strong>{server.name}</strong><small>{server.state}</small></span></label>)}</section><section><span className="eyebrow">PERMISSIONS</span>{permissionOptions.map(([value,label]) => <label className="check-row" key={value}><input type="checkbox" checked={form.permissions.includes(value)} onChange={() => toggle('permissions',value)}/>{label}</label>)}</section></div></div><div className="modal-actions"><button type="button" onClick={() => setShowModal(false)}>CANCEL</button><button className="primary" disabled={busy}><Save size={14}/> {busy ? 'SAVING…' : 'SAVE ADMIN'}</button></div></form></div>}
   </>
 }
 

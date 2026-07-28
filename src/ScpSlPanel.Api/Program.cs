@@ -115,9 +115,12 @@ static async Task<PanelUser?> CurrentUser(ClaimsPrincipal principal, JsonStore s
 static async Task<bool> Can(ClaimsPrincipal principal, JsonStore store, Guid serverId, string permission)
 {
     var account = await CurrentUser(principal, store);
+    var permissions = account?.Permissions ?? [];
+    var legacyLifecycle = permission is "server.start" or "server.stop" or "server.restart"
+        && permissions.Contains("lifecycle", StringComparer.OrdinalIgnoreCase);
     return account is not null && (account.Role == "Owner"
         || ((account.ServerIds?.Contains(serverId) ?? false)
-            && (account.Permissions?.Contains(permission, StringComparer.OrdinalIgnoreCase) ?? false)));
+            && (permissions.Contains(permission, StringComparer.OrdinalIgnoreCase) || legacyLifecycle)));
 }
 
 app.MapPost("/api/auth/login", async (LoginRequest request, JsonStore store, PasswordService passwords, HttpContext context) =>
@@ -186,9 +189,9 @@ api.MapDelete("/servers/{id:guid}", async (Guid id, ServerManager servers, Audit
     await audit.AddAsync(Actor(user), "server.delete", id.ToString(), "Removed server definition");
     return Results.NoContent();
 }).RequireAuthorization("Owner");
-api.MapPost("/servers/{id:guid}/start", async (Guid id, ServerManager servers, ClaimsPrincipal user, JsonStore store) => { if (!await Can(user, store, id, "lifecycle")) return Results.Forbid(); await servers.StartAsync(id, Actor(user)); return Results.Accepted(); });
-api.MapPost("/servers/{id:guid}/stop", async (Guid id, ServerManager servers, ClaimsPrincipal user, JsonStore store) => { if (!await Can(user, store, id, "lifecycle")) return Results.Forbid(); await servers.StopAsync(id, Actor(user)); return Results.Accepted(); });
-api.MapPost("/servers/{id:guid}/restart", async (Guid id, ServerManager servers, ClaimsPrincipal user, JsonStore store) => { if (!await Can(user, store, id, "lifecycle")) return Results.Forbid(); await servers.RestartAsync(id, Actor(user)); return Results.Accepted(); });
+api.MapPost("/servers/{id:guid}/start", async (Guid id, ServerManager servers, ClaimsPrincipal user, JsonStore store) => { if (!await Can(user, store, id, "server.start")) return Results.Forbid(); await servers.StartAsync(id, Actor(user)); return Results.Accepted(); });
+api.MapPost("/servers/{id:guid}/stop", async (Guid id, ServerManager servers, ClaimsPrincipal user, JsonStore store) => { if (!await Can(user, store, id, "server.stop")) return Results.Forbid(); await servers.StopAsync(id, Actor(user)); return Results.Accepted(); });
+api.MapPost("/servers/{id:guid}/restart", async (Guid id, ServerManager servers, ClaimsPrincipal user, JsonStore store) => { if (!await Can(user, store, id, "server.restart")) return Results.Forbid(); await servers.RestartAsync(id, Actor(user)); return Results.Accepted(); });
 api.MapPost("/servers/{id:guid}/kill", async (Guid id, ServerManager servers, ClaimsPrincipal user) => { await servers.StopAsync(id, Actor(user), true); return Results.Accepted(); }).RequireAuthorization("Owner");
 api.MapPost("/servers/{id:guid}/command", async (Guid id, CommandRequest request, ServerManager servers, ClaimsPrincipal user, JsonStore store) => { if (!await Can(user, store, id, "console")) return Results.Forbid(); await servers.CommandAsync(id, request.Command, Actor(user)); return Results.Accepted(); });
 api.MapGet("/servers/{id:guid}/players", async (Guid id, BridgeStateService bridge, ClaimsPrincipal user, JsonStore store) =>
