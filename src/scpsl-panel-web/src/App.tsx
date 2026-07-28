@@ -666,8 +666,10 @@ type IntegrationSettings = {
   notifyHighMemory: boolean; highMemoryMb: number; alertCooldownMinutes: number
   crashMessage: string; bridgeOfflineMessage: string; highCpuMessage: string
   highMemoryMessage: string; restartFailureMessage: string; scheduleFailureMessage: string
-  discordBotEnabled: boolean; discordBotToken: string; discordGuildId: number; discordControlRoleIds: string
-  discordNotificationChannelId: number; steamWebApiKey: string
+  discordBotEnabled: boolean; discordBotToken: string; discordGuildId: string; discordControlRoleIds: string
+  discordNotificationChannelId: string; steamWebApiKey: string
+  discordModerationChannelId: string; discordAuditChannelId: string
+  discordRoleGrants: {roleId:string;serverId:string;permissions:string[]}[]
 }
 const defaultIntegration: IntegrationSettings = {
   discordWebhookUrl: '', notifyCrash: true, notifyRestart: true, notifyBridgeOffline: true,
@@ -679,8 +681,9 @@ const defaultIntegration: IntegrationSettings = {
   highMemoryMessage: '{server} memory usage is {memoryMb} MB (alert threshold: {thresholdMb} MB).',
   restartFailureMessage: '{server} failed to restart automatically: {error}',
   scheduleFailureMessage: "Schedule '{schedule}' failed for {server}: {error}",
-  discordBotEnabled: false, discordBotToken: '', discordGuildId: 0, discordControlRoleIds: '',
-  discordNotificationChannelId: 0, steamWebApiKey: '',
+  discordBotEnabled: false, discordBotToken: '', discordGuildId: '', discordControlRoleIds: '',
+  discordNotificationChannelId: '', steamWebApiKey: '',
+  discordModerationChannelId: '', discordAuditChannelId: '', discordRoleGrants: [],
 }
 
 function SettingsPage({ user, onError }: { user: User; onError: (e: string) => void }) {
@@ -704,7 +707,8 @@ function DiscordBotPanel({ onError }: { onError: (e: string) => void }) {
     <Bot size={26}/><h2>Discord bot</h2>
     <p><span className={`status-dot ${status?.connected ? '' : 'off'}`}/>{status?.connected ? `Connected as ${status.botName}` : status?.error || 'Not connected'}</p>
     <label className="check-row"><input type="checkbox" checked={settings.discordBotEnabled} onChange={e=>setSettings({...settings,discordBotEnabled:e.target.checked})}/> Enable embedded Discord bot</label>
-    <div className="form-row"><label>BOT TOKEN<input type="password" value={settings.discordBotToken} onChange={e=>setSettings({...settings,discordBotToken:e.target.value})}/></label><label>GUILD ID<input value={settings.discordGuildId || ''} onChange={e=>setSettings({...settings,discordGuildId:Number(e.target.value)})}/></label><label>NOTIFICATION CHANNEL ID<input value={settings.discordNotificationChannelId || ''} onChange={e=>setSettings({...settings,discordNotificationChannelId:Number(e.target.value)})}/></label><label>CONTROL ROLE IDS<input value={settings.discordControlRoleIds} onChange={e=>setSettings({...settings,discordControlRoleIds:e.target.value})} placeholder="123…, 456…"/></label><label>STEAM WEB API KEY<input type="password" value={settings.steamWebApiKey} onChange={e=>setSettings({...settings,steamWebApiKey:e.target.value})}/></label></div>
+    <div className="form-row"><label>BOT TOKEN<input type="password" value={settings.discordBotToken} onChange={e=>setSettings({...settings,discordBotToken:e.target.value})}/></label><label>GUILD ID<input value={settings.discordGuildId} onChange={e=>setSettings({...settings,discordGuildId:e.target.value.trim()})}/></label><label>TECHNICAL CHANNEL ID<input value={settings.discordNotificationChannelId} onChange={e=>setSettings({...settings,discordNotificationChannelId:e.target.value.trim()})}/></label><label>MODERATION CHANNEL ID<input value={settings.discordModerationChannelId} onChange={e=>setSettings({...settings,discordModerationChannelId:e.target.value.trim()})}/></label><label>AUDIT CHANNEL ID<input value={settings.discordAuditChannelId} onChange={e=>setSettings({...settings,discordAuditChannelId:e.target.value.trim()})}/></label><label>FULL CONTROL ROLE IDS<input value={settings.discordControlRoleIds} onChange={e=>setSettings({...settings,discordControlRoleIds:e.target.value})} placeholder="123…, 456…"/></label><label>STEAM WEB API KEY<input type="password" value={settings.steamWebApiKey} onChange={e=>setSettings({...settings,steamWebApiKey:e.target.value})}/></label></div>
+    <label>ROLE PERMISSION MAP<textarea value={(settings.discordRoleGrants ?? []).map(grant=>`${grant.roleId}:${grant.serverId}:${grant.permissions.join(',')}`).join('\n')} onChange={e=>setSettings({...settings,discordRoleGrants:e.target.value.split('\n').map(line=>{const [roleId,serverId,permissions='']=line.split(':');return {roleId:roleId.trim(),serverId,permissions:permissions.split(',').map(x=>x.trim()).filter(Boolean)}}).filter(x=>x.roleId&&x.serverId)})} placeholder="roleId:serverId:players.kick,players.mute&#10;roleId:serverId:server.restart"/></label>
     <p>Commands: <code>/scp status</code>, <code>players</code>, <code>start</code>, <code>stop</code>, <code>restart</code>, and <code>announce</code>. Control commands require Discord Administrator or one of the comma-separated role IDs.</p>
     <button className="primary">SAVE BOT SETTINGS</button>
   </form>

@@ -9,6 +9,7 @@ public sealed class MonitoringService(
     private readonly Dictionary<Guid, bool> _bridgeStates = [];
     private readonly Dictionary<(Guid ServerId, string Rule), DateTimeOffset> _lastAlerts = [];
     private readonly Dictionary<(Guid ServerId, string Rule), int> _consecutiveSamples = [];
+    private readonly HashSet<(Guid ServerId, string Rule)> _activeAlerts = [];
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
@@ -30,6 +31,9 @@ public sealed class MonitoringService(
                         if (settings.NotifyBridgeOffline)
                             await notifications.SendAsync($"{snapshot.Name}: bridge offline", message, "warning");
                     }
+                    else if (_bridgeStates.TryGetValue(snapshot.Id, out wasConnected) && !wasConnected && connected)
+                        await notifications.SendAsync($"{snapshot.Name}: bridge recovered",
+                            "The LabAPI bridge is connected again and live player telemetry has resumed.");
                     _bridgeStates[snapshot.Id] = connected;
 
                     await CheckThresholdAsync(snapshot, settings, "high-cpu",
@@ -61,10 +65,17 @@ public sealed class MonitoringService(
     {
         var key = (snapshot.Id, rule);
         _consecutiveSamples[key] = exceeded ? _consecutiveSamples.GetValueOrDefault(key) + 1 : 0;
+        if (!exceeded && _activeAlerts.Remove(key))
+        {
+            await notifications.SendAsync($"{snapshot.Name}: {rule} recovered",
+                $"The {rule.Replace('-', ' ')} condition has returned below its configured threshold.");
+            return;
+        }
         if (_consecutiveSamples[key] < 2) return;
         var cooldown = TimeSpan.FromMinutes(Math.Clamp(settings.AlertCooldownMinutes, 1, 1440));
         if (_lastAlerts.TryGetValue(key, out var last) && DateTimeOffset.UtcNow - last < cooldown) return;
         _lastAlerts[key] = DateTimeOffset.UtcNow;
+        _activeAlerts.Add(key);
         await operations.AddIncidentAsync(snapshot.Id, rule, message);
         await notifications.SendAsync(title, message, "warning");
     }

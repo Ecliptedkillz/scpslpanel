@@ -1,4 +1,22 @@
+using System.Text.Json;
+using System.Text.Json.Serialization;
+
 namespace ScpSlPanel.Api.Domain;
+
+public sealed class SnowflakeStringConverter : JsonConverter<string>
+{
+    public override string Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options) =>
+        reader.TokenType switch
+        {
+            JsonTokenType.String => reader.GetString() ?? "",
+            JsonTokenType.Number => reader.GetRawText(),
+            JsonTokenType.Null => "",
+            _ => throw new JsonException("Discord snowflake must be a string or number.")
+        };
+
+    public override void Write(Utf8JsonWriter writer, string value, JsonSerializerOptions options) =>
+        writer.WriteStringValue(value);
+}
 
 public enum ServerState { Offline, Starting, Online, Stopping, Faulted }
 
@@ -90,10 +108,20 @@ public sealed record PanelIntegrationSettings(
     string HighMemoryMessage = "{server} memory usage is {memoryMb} MB (alert threshold: {thresholdMb} MB).",
     string RestartFailureMessage = "{server} failed to restart automatically: {error}",
     string ScheduleFailureMessage = "Schedule '{schedule}' failed for {server}: {error}",
-    bool DiscordBotEnabled = false, string DiscordBotToken = "", ulong DiscordGuildId = 0,
-    string DiscordControlRoleIds = "", ulong DiscordNotificationChannelId = 0,
-    string SteamWebApiKey = "");
+    bool DiscordBotEnabled = false, string DiscordBotToken = "",
+    [property: JsonConverter(typeof(SnowflakeStringConverter))] string DiscordGuildId = "",
+    string DiscordControlRoleIds = "",
+    [property: JsonConverter(typeof(SnowflakeStringConverter))] string DiscordNotificationChannelId = "",
+    string SteamWebApiKey = "", IReadOnlyList<DiscordRoleGrant>? DiscordRoleGrants = null,
+    [property: JsonConverter(typeof(SnowflakeStringConverter))] string DiscordModerationChannelId = "",
+    [property: JsonConverter(typeof(SnowflakeStringConverter))] string DiscordAuditChannelId = "");
 public sealed record DiscordBotStatus(bool Enabled, bool Connected, string? BotName, string? Error);
+public sealed record DiscordRoleGrant(
+    [property: JsonConverter(typeof(SnowflakeStringConverter))] string RoleId,
+    Guid ServerId, IReadOnlyList<string> Permissions);
+public sealed record IdentityLinkHealth(
+    Guid ServerId, string ServerName, int Line, string SteamId, string DiscordId,
+    bool Valid, string? Issue);
 public sealed record BackupEntry(
     Guid Id, Guid ServerId, DateTimeOffset CreatedAt, string FileName, long SizeBytes, string Actor);
 public sealed record RestartCountdownRequest(int Seconds, string? Message);

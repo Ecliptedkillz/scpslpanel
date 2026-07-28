@@ -381,6 +381,15 @@ api.MapGet("/players/global", async (
     }
     return Results.Ok(results);
 });
+api.MapGet("/players/identity-health", async (
+    DiscordLinkService discordLinks, ServerManager servers, ClaimsPrincipal user, JsonStore store) =>
+{
+    var results = new List<IdentityLinkHealth>();
+    foreach (var server in await servers.DefinitionsAsync())
+        if (await Can(user, store, server.Id, "players.history"))
+            results.AddRange(discordLinks.Health(server));
+    return Results.Ok(results);
+});
 api.MapPost("/servers/{id:guid}/player-history/{playerId:guid}/notes", async (
     Guid id, Guid playerId, PlayerNoteRequest request, PlayerDataService players,
     ClaimsPrincipal user, JsonStore store) =>
@@ -695,10 +704,10 @@ api.MapPost("/servers/{id:guid}/update", async (Guid id, MaintenanceService main
     if (!await Can(user, store, id, "maintenance")) return Results.Forbid();
     return Results.Ok(new { output = await maintenance.UpdateAsync(id, Actor(user)) });
 });
-api.MapGet("/integrations", (NotificationService notifications) => notifications.GetAsync()).RequireAuthorization("Owner");
+api.MapGet("/integrations", (NotificationService notifications) => notifications.ForClientAsync()).RequireAuthorization("Owner");
 api.MapPut("/integrations", async (PanelIntegrationSettings request, NotificationService notifications, AuditService audit, ClaimsPrincipal user) =>
 {
-    await notifications.SaveAsync(request);
+    await notifications.SaveFromClientAsync(request);
     await audit.AddAsync(Actor(user), "integrations.update", "Discord", "Notification settings changed");
     return Results.NoContent();
 }).RequireAuthorization("Owner");

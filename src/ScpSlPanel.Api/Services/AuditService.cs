@@ -13,7 +13,7 @@ public sealed class AuditService(JsonStore store, NotificationService notificati
         await store.WriteAsync("audit", entries);
         var settings = await notifications.GetAsync();
         if (settings.NotifyAdminActions && actor != "scheduler")
-            await notifications.SendAsync($"Admin action: {action}", $"**{actor}** → **{target}**\n{detail}");
+            await notifications.SendAsync($"Admin action: {action}", $"**{actor}** → **{target}**\n{detail}", category: "audit");
     }
 
     public async Task<IReadOnlyList<AuditEntry>> RecentAsync(int count = 50) =>
