@@ -22,12 +22,12 @@ public sealed class BridgeCommandService(JsonStore store)
         try
         {
             using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-            timeout.CancelAfter(TimeSpan.FromSeconds(12));
+            timeout.CancelAfter(TimeSpan.FromSeconds(30));
             return await completion.Task.WaitAsync(timeout.Token);
         }
         catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
         {
-            return new(false, "The game-server bridge did not confirm the command within 12 seconds.");
+            return new(false, "The game-server bridge did not confirm the command within 30 seconds. Rebuild and reinstall the latest bridge DLL if this continues.");
         }
         finally
         {

@@ -313,7 +313,7 @@ function ServerWorkspace({ user, server, tab, setTab, refresh, back, onError }: 
     { id: 'files', label: 'Files & Config', icon: FolderOpen, permission: 'config.view' },
     { id: 'maintenance', label: 'Maintenance', icon: Settings, permission: 'maintenance' },
   ]
-  return <>
+  return <div className="server-workspace">
     <button className="back-button" onClick={back}><ArrowLeft size={15}/> ALL SERVERS</button>
     <section className="server-hero">
       <div className={`server-state ${server.state}`}><Gamepad2 size={25}/></div>
@@ -337,7 +337,7 @@ function ServerWorkspace({ user, server, tab, setTab, refresh, back, onError }: 
       {tab === 'files' && <ServerConfigEditor serverId={server.id} canWrite={allowed('config.write')} onError={onError}/>}
       {tab === 'maintenance' && <MaintenancePage server={server} onError={onError}/>}
     </div>
-  </>
+  </div>
 }
 
 function ServerOverview({ server, setTab }: { server: Server; setTab: (tab: ServerTab) => void }) {
@@ -413,6 +413,10 @@ function ServerPlayers({ server, onError, initialMode = 'live', moderation = {ki
   const [profile, setProfile] = useState<StoredPlayer | null>(null)
   const [note, setNote] = useState('')
   const [announcement, setAnnouncement] = useState('')
+  const [moderationDialog,setModerationDialog]=useState<{player:Player;action:'kick'|'ban'|'mute'|'unmute'}|null>(null)
+  const [moderationReason,setModerationReason]=useState('')
+  const [banMinutes,setBanMinutes]=useState(60)
+  const [moderationBusy,setModerationBusy]=useState(false)
   const load = useCallback(async () => {
     try { setStatus(await api<BridgeStatus>(`/servers/${server.id}/players`)) }
     catch (error) { onError(error instanceof Error ? error.message : 'Unable to load players') }
@@ -426,24 +430,32 @@ function ServerPlayers({ server, onError, initialMode = 'live', moderation = {ki
   }, [initialMode, load, server.id])
   const loadHistory = useCallback(() => api<StoredPlayer[]>(`/servers/${server.id}/player-history`).then(setHistory).catch(error => onError(error.message)), [server.id, onError])
   useEffect(() => { if (initialMode === 'history') void loadHistory() }, [initialMode, loadHistory])
-  const moderate = async (player: Player, action: 'kick' | 'ban' | 'mute' | 'unmute') => {
-    const reason = window.prompt(`Reason to ${action} ${player.nickname}:`, `Removed by ${action === 'kick' ? 'administrator' : 'moderator'}`)
-    if (reason === null) return
-    const durationMinutes = action === 'ban' ? Number(window.prompt('Ban duration in minutes:', '60') ?? 0) : null
-    if (action === 'ban' && (!durationMinutes || durationMinutes < 1)) return
+  const openModeration = (player:Player,action:'kick'|'ban'|'mute'|'unmute') => {
+    setModerationDialog({player,action})
+    setModerationReason(action==='kick'?'Removed by administrator':`${action} by moderator`)
+    setBanMinutes(60)
+  }
+  const moderate = async () => {
+    if(!moderationDialog||!moderationReason.trim())return
+    const {player,action}=moderationDialog
+    setModerationBusy(true)
     try {
       await api(`/servers/${server.id}/players/${player.id}/${action}`, {
         method: 'POST',
-        body: JSON.stringify({ playerId: player.id, reason, durationMinutes }),
+        body: JSON.stringify({ playerId: player.id, reason:moderationReason, durationMinutes:action==='ban'?banMinutes:null }),
       })
+      setModerationDialog(null)
+      void load()
     } catch (error) { onError(error instanceof Error ? error.message : `Unable to ${action} player`) }
+    finally { setModerationBusy(false) }
   }
   if (initialMode === 'history') return <PlayerHistoryView server={server} history={history} profile={profile} setProfile={setProfile} note={note} setNote={setNote} reload={loadHistory} onError={onError}/>
   if (status?.connected) return <section className="players-panel">
     <div className="bridge-banner connected"><div><span className="status-dot"/><strong>LABAPI BRIDGE CONNECTED</strong><small>v{status.bridgeVersion} · LabAPI {status.apiVersion} · heartbeat {status.lastSeenAt ? fmtAgo(status.lastSeenAt) : 'now'}</small></div><span>{status.players.length}/{status.maxPlayers || '—'} PLAYERS</span></div>
     {canAnnounce && <form className="announcement-bar" onSubmit={async event => { event.preventDefault(); if (!announcement.trim()) return; try { await api(`/servers/${server.id}/announcement`, {method:'POST', body:JSON.stringify({message:announcement,durationSeconds:10})}); setAnnouncement('') } catch(error) { onError(error instanceof Error ? error.message : 'Unable to send announcement') } }}><input value={announcement} onChange={e => setAnnouncement(e.target.value)} placeholder="Broadcast an announcement to every player…"/><button className="primary">ANNOUNCE</button></form>}
-    <Table headers={['PLAYER','USER ID','ROLE','PING / SESSION','VOICE','ACTIONS']}>{status.players.map(player => <tr key={player.id}><td><strong>{player.nickname}</strong><small>Player #{player.id} · {player.ipAddress || 'Identity protected'}</small></td><td className="mono">{player.userId || 'Do Not Track'}</td><td><span className="tag">{player.role}</span></td><td><strong>{player.ping || '—'} ms</strong><small>{formatPlaytime(player.sessionSeconds)}</small></td><td><span className={`tag ${player.isMuted ? 'red' : ''}`}>{player.isMuted ? 'MUTED' : 'OPEN'}</span></td><td><div className="row-actions">{moderation.mute && <button onClick={() => moderate(player, player.isMuted ? 'unmute' : 'mute')}>{player.isMuted ? 'UNMUTE' : 'MUTE'}</button>}{moderation.kick && <button onClick={() => moderate(player, 'kick')}>KICK</button>}{moderation.ban && <button className="danger" onClick={() => moderate(player, 'ban')}>BAN</button>}</div></td></tr>)}</Table>
+    <Table headers={['PLAYER','USER ID','ROLE','PING / SESSION','VOICE','ACTIONS']}>{status.players.map(player => <tr key={player.id}><td><strong>{player.nickname}</strong><small>Player #{player.id} · {player.ipAddress || 'Identity protected'}</small></td><td className="mono">{player.userId || 'Do Not Track'}</td><td><span className="tag">{player.role}</span></td><td><strong>{player.ping || '—'} ms</strong><small>{formatPlaytime(player.sessionSeconds)}</small></td><td><span className={`tag ${player.isMuted ? 'red' : ''}`}>{player.isMuted ? 'MUTED' : 'OPEN'}</span></td><td><div className="row-actions">{moderation.mute && <button onClick={() => openModeration(player, player.isMuted ? 'unmute' : 'mute')}>{player.isMuted ? 'UNMUTE' : 'MUTE'}</button>}{moderation.kick && <button onClick={() => openModeration(player, 'kick')}>KICK</button>}{moderation.ban && <button className="danger" onClick={() => openModeration(player, 'ban')}>BAN</button>}</div></td></tr>)}</Table>
     {!status.players.length && <EmptyMini text="Bridge connected. No players are currently online."/>}
+    {moderationDialog&&<div className="modal-backdrop"><form className="modal action-dialog moderation-dialog" onSubmit={e=>{e.preventDefault();void moderate()}}><header><div><span className="eyebrow">LIVE MODERATION</span><h2>{moderationDialog.action.toUpperCase()} PLAYER</h2><p>Apply this action to <strong>{moderationDialog.player.nickname}</strong>.</p></div><button type="button" className="icon-button" onClick={()=>setModerationDialog(null)}><X/></button></header><div className="action-dialog-body"><div className="moderation-target"><div className="avatar">{moderationDialog.player.nickname.slice(0,2).toUpperCase()}</div><div><strong>{moderationDialog.player.nickname}</strong><small>{moderationDialog.player.userId||`Player #${moderationDialog.player.id}`}</small></div></div><label>REASON<textarea autoFocus required value={moderationReason} onChange={e=>setModerationReason(e.target.value)}/></label>{moderationDialog.action==='ban'&&<label>BAN DURATION (MINUTES)<input type="number" min={1} max={525600} required value={banMinutes} onChange={e=>setBanMinutes(Number(e.target.value))}/></label>}<div className="action-warning"><Shield size={17}/><span>This command is sent through the LabAPI bridge and recorded in the audit and player history.</span></div></div><footer><button type="button" disabled={moderationBusy} onClick={()=>setModerationDialog(null)}>CANCEL</button><button className={moderationDialog.action==='ban'||moderationDialog.action==='kick'?'primary danger solid':'primary'} disabled={moderationBusy}>{moderationBusy?'WAITING FOR SERVER…':`CONFIRM ${moderationDialog.action.toUpperCase()}`}</button></footer></form></div>}
   </section>
   const config = setup ? `panel_url: "${window.location.origin}"\nserver_id: "${setup.serverId}"\ntoken: "${setup.token}"\nheartbeat_seconds: 5\nrespect_do_not_track: true` : ''
   return <section className="bridge-install">

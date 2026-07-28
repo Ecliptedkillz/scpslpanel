@@ -18,7 +18,9 @@ internal sealed class BridgeClient : IDisposable
     private readonly BridgeConfig _config;
     private readonly HttpClient _http = new();
     private readonly Timer _timer;
+    private readonly Timer _commandTimer;
     private readonly SemaphoreSlim _sendGate = new(1, 1);
+    private readonly SemaphoreSlim _pollGate = new(1, 1);
     private readonly object _snapshotGate = new();
     private readonly SynchronizationContext? _mainThread = SynchronizationContext.Current;
     private readonly Dictionary<int, DateTimeOffset> _sessions = new();
@@ -35,6 +37,8 @@ internal sealed class BridgeClient : IDisposable
         CaptureSnapshot();
         var interval = TimeSpan.FromSeconds(Math.Max(2, config.HeartbeatSeconds));
         _timer = new Timer(_ => Dispatch(() => CaptureSnapshot()), null, TimeSpan.Zero, interval);
+        _commandTimer = new Timer(_ => _ = PollCommandsAsync(), null,
+            TimeSpan.FromSeconds(1), TimeSpan.FromSeconds(1));
     }
 
     public void CaptureSnapshot(Player? excluded = null)
@@ -73,7 +77,6 @@ internal sealed class BridgeClient : IDisposable
         };
         lock (_snapshotGate) _snapshot = snapshot;
             _ = SendAsync();
-            _ = PollCommandsAsync();
     }
 
     public void SetRoundState(string state)
@@ -100,6 +103,7 @@ internal sealed class BridgeClient : IDisposable
     private async Task PollCommandsAsync()
     {
         if (_disposed || string.IsNullOrWhiteSpace(_config.PanelUrl)) return;
+        if (!await _pollGate.WaitAsync(0).ConfigureAwait(false)) return;
         try
         {
             var endpoint = Endpoint("commands");
@@ -117,6 +121,7 @@ internal sealed class BridgeClient : IDisposable
             }
         }
         catch (Exception exception) { Logger.Warn($"SCP Control command poll failed: {exception.Message}"); }
+        finally { _pollGate.Release(); }
     }
 
     private void ExecuteCommand(CommandPayload command)
@@ -265,7 +270,9 @@ internal sealed class BridgeClient : IDisposable
     {
         _disposed = true;
         _timer.Dispose();
+        _commandTimer.Dispose();
         _http.Dispose();
         _sendGate.Dispose();
+        _pollGate.Dispose();
     }
 }
