@@ -389,3 +389,13 @@ table { width:100%; border-collapse:collapse; font-size:12.5px } th { text-align
 .account-editor-permissions .permission-option{width:100%;grid-template-columns:18px minmax(0,1fr) auto}.account-editor-permissions .permission-option strong{white-space:normal}.account-editor-permissions .permission-option code{max-width:100%;overflow:hidden;text-overflow:ellipsis}
 @container (min-width:700px){.account-editor-permissions .permission-groups{grid-template-columns:repeat(2,minmax(0,1fr))!important}}
 @container (min-width:980px){.account-editor-permissions .permission-groups{grid-template-columns:repeat(3,minmax(0,1fr))!important}}
+
+/* Desktop administrator layout: fixed server rail + three permission columns. */
+@media(min-width:761px){
+  .account-editor-workspace{display:grid!important;grid-template-columns:220px minmax(0,1fr)!important;grid-template-areas:"servers permissions";align-items:start}
+  .account-editor-servers{display:block!important;grid-area:servers!important;grid-column:1!important;width:220px!important;min-width:220px!important}
+  .account-editor-permissions{display:block!important;grid-area:permissions!important;grid-column:2!important;width:100%!important;min-width:0!important}
+  .account-editor-permissions .permission-groups{display:grid!important;grid-template-columns:repeat(3,minmax(0,1fr))!important;gap:10px!important}
+  .account-editor-permissions .permission-group{min-width:0!important}
+  .account-editor-permissions .permission-group>div{display:grid!important;grid-template-columns:1fr!important}
+}
