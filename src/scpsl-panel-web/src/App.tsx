@@ -202,9 +202,13 @@ function OverviewPage({ data, navigatePage, openServer }: { data: Overview | nul
 
 function ServersPage({ servers, refresh, openServer, onError }: { servers: Server[]; refresh: () => void; openServer: (id: string) => void; onError: (e: string) => void }) {
   const [modal, setModal] = useState(false)
+  const [busyServer, setBusyServer] = useState<string | null>(null)
   const action = async (id: string, name: string) => {
-    try { await api(`/servers/${id}/${name}`, { method: 'POST' }); setTimeout(refresh, 600) }
+    if (busyServer) return
+    setBusyServer(id)
+    try { await api(`/servers/${id}/${name}`, { method: 'POST' }); await refresh() }
     catch (e) { onError(e instanceof Error ? e.message : 'Action failed') }
+    finally { setBusyServer(null) }
   }
   return <>
     <PageTitle eyebrow="INFRASTRUCTURE" title="Server fleet"><button className="primary" onClick={() => setModal(true)}><Plus size={16}/> REGISTER SERVER</button></PageTitle>
@@ -212,7 +216,7 @@ function ServersPage({ servers, refresh, openServer, onError }: { servers: Serve
       <div className="server-card-head"><div className={`server-state ${server.state}`}><Gamepad2/></div><div><h2>{server.name}</h2><span className={`state-label ${server.state}`}><span/> {server.state}</span></div><button className="manage-button" onClick={() => openServer(server.id)}>MANAGE <ChevronRight size={15}/></button></div>
       <div className="metric-strip"><div><span>PROCESS</span><strong>{server.processId ?? '—'}</strong></div><div><span>CPU</span><strong>{server.cpuPercent}%</strong></div><div><span>MEMORY</span><strong>{fmtBytes(server.memoryBytes)}</strong></div><div><span>PLAYERS</span><strong>{server.players}/{server.maxPlayers || '—'}</strong></div></div>
       {server.lastError && <p className="error">{server.lastError}</p>}
-      <div className="server-actions"><button disabled={server.state === 'online'} onClick={() => action(server.id, 'start')}><Play size={15}/> START</button><button disabled={server.state === 'offline'} onClick={() => action(server.id, 'restart')}><RotateCcw size={15}/> RESTART</button><button disabled={server.state === 'offline'} className="danger" onClick={() => action(server.id, 'stop')}><Square size={14}/> STOP</button></div>
+      <div className="server-actions"><button disabled={busyServer === server.id || server.state === 'online'} onClick={() => action(server.id, 'start')}><Play size={15}/> START</button><button disabled={busyServer === server.id || server.state === 'offline'} onClick={() => action(server.id, 'restart')}><RotateCcw size={15}/> RESTART</button><button disabled={busyServer === server.id || server.state === 'offline'} className="danger" onClick={() => action(server.id, 'stop')}><Square size={14}/> STOP</button></div>
     </article>)}</div>
     {!servers.length && <EmptyPage icon={ServerIcon} title="No servers registered" text="Connect your first SCP:SL dedicated server to begin operations."><button className="primary" onClick={() => setModal(true)}><Plus size={16}/> REGISTER SERVER</button></EmptyPage>}
     {modal && <AddServerModal close={() => setModal(false)} saved={() => { setModal(false); refresh() }} onError={onError}/>}
@@ -237,10 +241,14 @@ function AddServerModal({ close, saved, onError }: { close: () => void; saved: (
 }
 
 function ServerWorkspace({ server, tab, setTab, refresh, back, onError }: { server?: Server; tab: ServerTab; setTab: (tab: ServerTab) => void; refresh: () => void; back: () => void; onError: (e: string) => void }) {
+  const [busy, setBusy] = useState(false)
   if (!server) return <EmptyPage icon={ServerIcon} title="Server not found" text="The selected server was removed or is no longer available."><button onClick={back}>BACK TO SERVERS</button></EmptyPage>
   const action = async (name: string) => {
-    try { await api(`/servers/${server.id}/${name}`, { method: 'POST' }); setTimeout(refresh, 500) }
+    if (busy) return
+    setBusy(true)
+    try { await api(`/servers/${server.id}/${name}`, { method: 'POST' }); await refresh() }
     catch (error) { onError(error instanceof Error ? error.message : 'Server action failed') }
+    finally { setBusy(false) }
   }
   const tabs: { id: ServerTab; label: string; icon: typeof LayoutDashboard }[] = [
     { id: 'overview', label: 'Overview', icon: LayoutDashboard },
@@ -255,9 +263,9 @@ function ServerWorkspace({ server, tab, setTab, refresh, back, onError }: { serv
       <div className={`server-state ${server.state}`}><Gamepad2 size={25}/></div>
       <div><span className="eyebrow">MANAGED INSTANCE</span><h1>{server.name}</h1><span className={`state-label ${server.state}`}><span/> {fmtState(server.state)}</span></div>
       <div className="server-hero-actions">
-        <button disabled={server.state === 'online'} onClick={() => action('start')}><Play size={15}/> START</button>
-        <button disabled={server.state === 'offline'} onClick={() => action('restart')}><RotateCcw size={15}/> RESTART</button>
-        <button disabled={server.state === 'offline'} className="danger" onClick={() => action('stop')}><Square size={14}/> STOP</button>
+        <button disabled={busy || server.state === 'online'} onClick={() => action('start')}><Play size={15}/> START</button>
+        <button disabled={busy || server.state === 'offline'} onClick={() => action('restart')}><RotateCcw size={15}/> RESTART</button>
+        <button disabled={busy || server.state === 'offline'} className="danger" onClick={() => action('stop')}><Square size={14}/> STOP</button>
       </div>
     </section>
     <div className="server-tabs">{tabs.map(item => <button key={item.id} className={tab === item.id ? 'active' : ''} onClick={() => setTab(item.id)}><item.icon size={16}/>{item.label}</button>)}</div>

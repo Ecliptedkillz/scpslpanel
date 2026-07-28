@@ -20,6 +20,14 @@ public sealed class ServerManager(
         public long PreviousCpuTicks;
         public DateTimeOffset PreviousSample = DateTimeOffset.UtcNow;
         public bool StopInProgress;
+        public TaskCompletionSource StopCompletion = CreateCompletedStop();
+
+        private static TaskCompletionSource CreateCompletedStop()
+        {
+            var completion = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            completion.SetResult();
+            return completion;
+        }
     }
 
     private readonly ConcurrentDictionary<Guid, Runtime> _runtime = new();
@@ -132,6 +140,7 @@ public sealed class ServerManager(
     {
         var definition = await FindAsync(id) ?? throw new KeyNotFoundException("Server not found.");
         var runtime = _runtime.GetOrAdd(id, _ => new Runtime());
+        await WaitForStopAsync(runtime);
         lock (runtime)
         {
             if (runtime.StopInProgress)
@@ -183,6 +192,7 @@ public sealed class ServerManager(
             }
             catch (InvalidOperationException) { return; }
             runtime.StopInProgress = true;
+            runtime.StopCompletion = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
             runtime.State = ServerState.Stopping;
         }
         try
@@ -212,14 +222,17 @@ public sealed class ServerManager(
         }
         finally
         {
+            TaskCompletionSource stopCompletion;
             lock (runtime)
             {
                 if (ReferenceEquals(runtime.Process, process))
                     runtime.Process = null;
                 runtime.State = ServerState.Offline;
                 runtime.StopInProgress = false;
+                stopCompletion = runtime.StopCompletion;
             }
             process.Dispose();
+            stopCompletion.TrySetResult();
         }
     }
 
@@ -290,5 +303,21 @@ public sealed class ServerManager(
     {
         try { return process.HasExited; }
         catch (InvalidOperationException) { return true; }
+    }
+
+    private static async Task WaitForStopAsync(Runtime runtime)
+    {
+        Task waitTask;
+        lock (runtime)
+        {
+            if (!runtime.StopInProgress) return;
+            waitTask = runtime.StopCompletion.Task;
+        }
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(25));
+        try { await waitTask.WaitAsync(timeout.Token); }
+        catch (OperationCanceledException)
+        {
+            throw new InvalidOperationException("The previous server process is taking too long to stop.");
+        }
     }
 }
