@@ -106,6 +106,20 @@ static string EnsurePathInRoots(string requestedPath, IEnumerable<string> roots)
 static string NormalizePluginName(string value) =>
     string.Concat(value.Where(char.IsLetterOrDigit)).ToLowerInvariant();
 
+static async Task<PanelUser?> CurrentUser(ClaimsPrincipal principal, JsonStore store)
+{
+    if (!Guid.TryParse(principal.FindFirstValue(ClaimTypes.NameIdentifier), out var id)) return null;
+    return (await store.ReadAsync<PanelUser>("users")).FirstOrDefault(x => x.Id == id && x.Enabled);
+}
+
+static async Task<bool> Can(ClaimsPrincipal principal, JsonStore store, Guid serverId, string permission)
+{
+    var account = await CurrentUser(principal, store);
+    return account is not null && (account.Role == "Owner"
+        || ((account.ServerIds?.Contains(serverId) ?? false)
+            && (account.Permissions?.Contains(permission, StringComparer.OrdinalIgnoreCase) ?? false)));
+}
+
 app.MapPost("/api/auth/login", async (LoginRequest request, JsonStore store, PasswordService passwords, HttpContext context) =>
 {
     var user = (await store.ReadAsync<PanelUser>("users"))
@@ -120,7 +134,14 @@ app.MapPost("/api/auth/logout", async (HttpContext context) =>
     await context.SignOutAsync(CookieAuthenticationDefaults.AuthenticationScheme);
     return Results.NoContent();
 }).RequireAuthorization();
-app.MapGet("/api/auth/me", (ClaimsPrincipal user) => Results.Ok(new { username = user.Identity!.Name, role = user.FindFirstValue(ClaimTypes.Role) })).RequireAuthorization();
+app.MapGet("/api/auth/me", async (ClaimsPrincipal principal, JsonStore store) =>
+{
+    var user = await CurrentUser(principal, store);
+    return user is null ? Results.Unauthorized() : Results.Ok(new
+    {
+        user.Username, user.Role, serverIds = user.ServerIds ?? [], permissions = user.Permissions ?? []
+    });
+}).RequireAuthorization();
 app.MapGet("/api/health", () => Results.Ok(new { status = "healthy", at = DateTimeOffset.UtcNow }));
 app.MapPost("/api/bridge/{serverId:guid}/heartbeat", async (
     Guid serverId, BridgeHeartbeat heartbeat, HttpContext context, ServerManager servers,
@@ -134,15 +155,25 @@ app.MapPost("/api/bridge/{serverId:guid}/heartbeat", async (
 });
 
 var api = app.MapGroup("/api").RequireAuthorization();
-api.MapGet("/overview", async (ServerManager servers, AuditService audit) =>
+api.MapGet("/overview", async (ServerManager servers, AuditService audit, ClaimsPrincipal principal, JsonStore store) =>
 {
     var snapshots = await servers.SnapshotsAsync();
+    var user = await CurrentUser(principal, store);
+    if (user?.Role != "Owner")
+        snapshots = snapshots.Where(x => user?.ServerIds?.Contains(x.Id) == true).ToList();
     return new DashboardOverview(snapshots.Count(x => x.State == ServerState.Online), snapshots.Count,
-        snapshots.Sum(x => x.Players), snapshots.Sum(x => x.MemoryBytes), snapshots, await audit.RecentAsync(12));
+        snapshots.Sum(x => x.Players), snapshots.Sum(x => x.MemoryBytes), snapshots,
+        user?.Role == "Owner" ? await audit.RecentAsync(12) : []);
 });
-api.MapGet("/servers", (ServerManager servers) => servers.SnapshotsAsync());
-api.MapGet("/servers/{id:guid}", async (Guid id, ServerManager servers) =>
-    await servers.SnapshotAsync(id) is { } value ? Results.Ok(value) : Results.NotFound());
+api.MapGet("/servers", async (ServerManager servers, ClaimsPrincipal principal, JsonStore store) =>
+{
+    var values = await servers.SnapshotsAsync();
+    var user = await CurrentUser(principal, store);
+    return user?.Role == "Owner" ? values : values.Where(x => user?.ServerIds?.Contains(x.Id) == true);
+});
+api.MapGet("/servers/{id:guid}", async (Guid id, ServerManager servers, ClaimsPrincipal user, JsonStore store) =>
+    !await Can(user, store, id, "view") ? Results.Forbid()
+    : await servers.SnapshotAsync(id) is { } value ? Results.Ok(value) : Results.NotFound());
 api.MapPost("/servers", async (ServerCreateRequest request, ServerManager servers, AuditService audit, ClaimsPrincipal user) =>
 {
     var server = await servers.AddAsync(request);
@@ -155,12 +186,13 @@ api.MapDelete("/servers/{id:guid}", async (Guid id, ServerManager servers, Audit
     await audit.AddAsync(Actor(user), "server.delete", id.ToString(), "Removed server definition");
     return Results.NoContent();
 }).RequireAuthorization("Owner");
-api.MapPost("/servers/{id:guid}/start", async (Guid id, ServerManager servers, ClaimsPrincipal user) => { await servers.StartAsync(id, Actor(user)); return Results.Accepted(); });
-api.MapPost("/servers/{id:guid}/stop", async (Guid id, ServerManager servers, ClaimsPrincipal user) => { await servers.StopAsync(id, Actor(user)); return Results.Accepted(); });
-api.MapPost("/servers/{id:guid}/restart", async (Guid id, ServerManager servers, ClaimsPrincipal user) => { await servers.RestartAsync(id, Actor(user)); return Results.Accepted(); });
+api.MapPost("/servers/{id:guid}/start", async (Guid id, ServerManager servers, ClaimsPrincipal user, JsonStore store) => { if (!await Can(user, store, id, "lifecycle")) return Results.Forbid(); await servers.StartAsync(id, Actor(user)); return Results.Accepted(); });
+api.MapPost("/servers/{id:guid}/stop", async (Guid id, ServerManager servers, ClaimsPrincipal user, JsonStore store) => { if (!await Can(user, store, id, "lifecycle")) return Results.Forbid(); await servers.StopAsync(id, Actor(user)); return Results.Accepted(); });
+api.MapPost("/servers/{id:guid}/restart", async (Guid id, ServerManager servers, ClaimsPrincipal user, JsonStore store) => { if (!await Can(user, store, id, "lifecycle")) return Results.Forbid(); await servers.RestartAsync(id, Actor(user)); return Results.Accepted(); });
 api.MapPost("/servers/{id:guid}/kill", async (Guid id, ServerManager servers, ClaimsPrincipal user) => { await servers.StopAsync(id, Actor(user), true); return Results.Accepted(); }).RequireAuthorization("Owner");
-api.MapPost("/servers/{id:guid}/command", async (Guid id, CommandRequest request, ServerManager servers, ClaimsPrincipal user) => { await servers.CommandAsync(id, request.Command, Actor(user)); return Results.Accepted(); });
-api.MapGet("/servers/{id:guid}/players", (Guid id, BridgeStateService bridge) => Results.Ok(bridge.Get(id)));
+api.MapPost("/servers/{id:guid}/command", async (Guid id, CommandRequest request, ServerManager servers, ClaimsPrincipal user, JsonStore store) => { if (!await Can(user, store, id, "console")) return Results.Forbid(); await servers.CommandAsync(id, request.Command, Actor(user)); return Results.Accepted(); });
+api.MapGet("/servers/{id:guid}/players", async (Guid id, BridgeStateService bridge, ClaimsPrincipal user, JsonStore store) =>
+    !await Can(user, store, id, "players") ? Results.Forbid() : Results.Ok(bridge.Get(id)));
 api.MapGet("/servers/{id:guid}/bridge", async (Guid id, ServerManager servers, BridgeStateService bridge) =>
 {
     var token = await servers.EnsureBridgeTokenAsync(id);
@@ -172,20 +204,23 @@ api.MapPost("/servers/{id:guid}/bridge/regenerate", async (Guid id, ServerManage
     await audit.AddAsync(Actor(user), "bridge.token.regenerate", id.ToString(), "Regenerated LabAPI bridge token");
     return Results.Ok(new { serverId = id, token, endpoint = $"/api/bridge/{id}/heartbeat" });
 }).RequireAuthorization("Owner");
-api.MapPost("/servers/{id:guid}/players/{playerId}/kick", async (Guid id, string playerId, ModerationRequest request, ServerManager servers, ClaimsPrincipal user) =>
+api.MapPost("/servers/{id:guid}/players/{playerId}/kick", async (Guid id, string playerId, ModerationRequest request, ServerManager servers, ClaimsPrincipal user, JsonStore store) =>
 {
+    if (!await Can(user, store, id, "players.manage")) return Results.Forbid();
     await servers.CommandAsync(id, $"kick {playerId} {request.Reason ?? "Removed by panel"}", Actor(user));
     return Results.Accepted();
 });
-api.MapPost("/servers/{id:guid}/players/{playerId}/ban", async (Guid id, string playerId, ModerationRequest request, ServerManager servers, ClaimsPrincipal user) =>
+api.MapPost("/servers/{id:guid}/players/{playerId}/ban", async (Guid id, string playerId, ModerationRequest request, ServerManager servers, ClaimsPrincipal user, JsonStore store) =>
 {
+    if (!await Can(user, store, id, "players.manage")) return Results.Forbid();
     var duration = Math.Max(1, request.DurationMinutes ?? 60);
     await servers.CommandAsync(id, $"ban {playerId} {duration} {request.Reason ?? "Banned by panel"}", Actor(user));
     return Results.Accepted();
 });
 
-api.MapGet("/servers/{id:guid}/files/{**path}", async (Guid id, string path, ServerManager servers, JsonStore store) =>
+api.MapGet("/servers/{id:guid}/files/{**path}", async (Guid id, string path, ServerManager servers, JsonStore store, ClaimsPrincipal user) =>
 {
+    if (!await Can(user, store, id, "config")) return Results.Forbid();
     var server = await servers.FindAsync(id);
     if (server is null) return Results.NotFound();
     var full = store.ResolveSafePath(server.WorkingDirectory, path);
@@ -193,6 +228,7 @@ api.MapGet("/servers/{id:guid}/files/{**path}", async (Guid id, string path, Ser
 });
 api.MapPut("/servers/{id:guid}/files/{**path}", async (Guid id, string path, ConfigFileRequest request, ServerManager servers, JsonStore store, AuditService audit, ClaimsPrincipal user) =>
 {
+    if (!await Can(user, store, id, "config")) return Results.Forbid();
     var server = await servers.FindAsync(id);
     if (server is null) return Results.NotFound();
     var full = store.ResolveSafePath(server.WorkingDirectory, path);
@@ -200,9 +236,9 @@ api.MapPut("/servers/{id:guid}/files/{**path}", async (Guid id, string path, Con
     await File.WriteAllTextAsync(full, request.Content);
     await audit.AddAsync(Actor(user), "file.write", server.Name, path);
     return Results.NoContent();
-}).RequireAuthorization("Owner");
+});
 
-api.MapGet("/bans", (JsonStore store) => store.ReadAsync<BanEntry>("bans"));
+api.MapGet("/bans", (JsonStore store) => store.ReadAsync<BanEntry>("bans")).RequireAuthorization("Owner");
 api.MapPost("/bans", async (ModerationRequest request, JsonStore store, AuditService audit, ClaimsPrincipal user) =>
 {
     var bans = await store.ReadAsync<BanEntry>("bans");
@@ -212,7 +248,7 @@ api.MapPost("/bans", async (ModerationRequest request, JsonStore store, AuditSer
     await store.WriteAsync("bans", bans);
     await audit.AddAsync(Actor(user), "player.ban", request.PlayerId, entry.Reason);
     return Results.Created($"/api/bans/{entry.Id}", entry);
-});
+}).RequireAuthorization("Owner");
 api.MapDelete("/bans/{id:guid}", async (Guid id, JsonStore store, AuditService audit, ClaimsPrincipal user) =>
 {
     var bans = await store.ReadAsync<BanEntry>("bans");
@@ -222,9 +258,9 @@ api.MapDelete("/bans/{id:guid}", async (Guid id, JsonStore store, AuditService a
     await store.WriteAsync("bans", bans);
     await audit.AddAsync(Actor(user), "player.unban", bans[index].Target, bans[index].Reason);
     return Results.NoContent();
-});
-api.MapGet("/audit", (int? take, AuditService audit) => audit.RecentAsync(take ?? 100));
-api.MapGet("/schedules", (JsonStore store) => store.ReadAsync<ScheduleEntry>("schedules"));
+}).RequireAuthorization("Owner");
+api.MapGet("/audit", (int? take, AuditService audit) => audit.RecentAsync(take ?? 100)).RequireAuthorization("Owner");
+api.MapGet("/schedules", (JsonStore store) => store.ReadAsync<ScheduleEntry>("schedules")).RequireAuthorization("Owner");
 api.MapPost("/schedules", async (ScheduleRequest request, JsonStore store, AuditService audit, ClaimsPrincipal user) =>
 {
     var schedules = await store.ReadAsync<ScheduleEntry>("schedules");
@@ -241,8 +277,9 @@ api.MapDelete("/schedules/{id:guid}", async (Guid id, JsonStore store) =>
     await store.WriteAsync("schedules", schedules);
     return Results.NoContent();
 }).RequireAuthorization("Owner");
-api.MapGet("/plugins/{serverId:guid}", async (Guid serverId, ServerManager servers) =>
+api.MapGet("/plugins/{serverId:guid}", async (Guid serverId, ServerManager servers, ClaimsPrincipal user, JsonStore store) =>
 {
+    if (!await Can(user, store, serverId, "plugins")) return Results.Forbid();
     var server = await servers.FindAsync(serverId);
     if (server is null) return Results.NotFound();
     var configFiles = PluginConfigRoots(server).Where(Directory.Exists)
@@ -250,7 +287,11 @@ api.MapGet("/plugins/{serverId:guid}", async (Guid serverId, ServerManager serve
         .Where(path => path.EndsWith(".yml", StringComparison.OrdinalIgnoreCase)
             || path.EndsWith(".yaml", StringComparison.OrdinalIgnoreCase)
             || path.EndsWith(".json", StringComparison.OrdinalIgnoreCase)
-            || path.EndsWith(".txt", StringComparison.OrdinalIgnoreCase)).ToList();
+            || path.EndsWith(".txt", StringComparison.OrdinalIgnoreCase)
+            || path.EndsWith(".csv", StringComparison.OrdinalIgnoreCase)
+            || path.EndsWith(".toml", StringComparison.OrdinalIgnoreCase)
+            || path.EndsWith(".ini", StringComparison.OrdinalIgnoreCase)
+            || path.EndsWith(".cfg", StringComparison.OrdinalIgnoreCase)).ToList();
     var plugins = PluginRoots(server).Where(x => Directory.Exists(x.Path)).SelectMany(x =>
         Directory.EnumerateFiles(x.Path, "*", SearchOption.AllDirectories)
         .Where(path => path.EndsWith(".dll", StringComparison.OrdinalIgnoreCase)
@@ -264,16 +305,20 @@ api.MapGet("/plugins/{serverId:guid}", async (Guid serverId, ServerManager serve
             try { version = System.Reflection.AssemblyName.GetAssemblyName(path).Version?.ToString() ?? "unknown"; }
             catch { version = "unknown"; }
             var normalizedName = NormalizePluginName(name);
-            var config = configFiles.FirstOrDefault(file =>
+            var configs = configFiles.Where(file =>
                 NormalizePluginName(Path.GetFileNameWithoutExtension(file)).Contains(normalizedName)
-                || NormalizePluginName(Path.GetDirectoryName(file) ?? "").Contains(normalizedName));
-            return new { name, version, framework = x.Framework, enabled, path, configPath = config };
+                || NormalizePluginName(Path.GetDirectoryName(file) ?? "").Contains(normalizedName))
+                .OrderBy(file => file, StringComparer.OrdinalIgnoreCase).ToArray();
+            return new { name, version, framework = x.Framework, enabled, path, configPaths = configs };
         })).ToList();
     return Results.Ok(plugins.DistinctBy(plugin => plugin.path));
 });
 api.MapPost("/plugins/{serverId:guid}/action", async (
-    Guid serverId, PluginActionRequest request, ServerManager servers, AuditService audit, ClaimsPrincipal user) =>
+    Guid serverId, PluginActionRequest request, ServerManager servers, AuditService audit, ClaimsPrincipal user, JsonStore store) =>
 {
+    // Plugin process changes require the dedicated plugin-management permission.
+    if (!await Can(user, store, serverId, "plugins.manage"))
+        return Results.Forbid();
     var server = await servers.FindAsync(serverId);
     if (server is null) return Results.NotFound();
     var path = EnsurePathInRoots(request.Path, PluginRoots(server).Select(x => x.Path));
@@ -304,9 +349,10 @@ api.MapPost("/plugins/{serverId:guid}/action", async (
     }
     await audit.AddAsync(Actor(user), $"plugin.{action}", Path.GetFileName(path), "Applied with a clean server restart");
     return Results.Ok(new { restarted = true });
-}).RequireAuthorization("Owner");
-api.MapGet("/plugins/{serverId:guid}/config", async (Guid serverId, string path, ServerManager servers) =>
+});
+api.MapGet("/plugins/{serverId:guid}/config", async (Guid serverId, string path, ServerManager servers, ClaimsPrincipal user, JsonStore store) =>
 {
+    if (!await Can(user, store, serverId, "config")) return Results.Forbid();
     var server = await servers.FindAsync(serverId);
     if (server is null) return Results.NotFound();
     var safePath = EnsurePathInRoots(path, PluginConfigRoots(server));
@@ -315,8 +361,10 @@ api.MapGet("/plugins/{serverId:guid}/config", async (Guid serverId, string path,
         : Results.NotFound();
 });
 api.MapPut("/plugins/{serverId:guid}/config", async (
-    Guid serverId, PluginConfigRequest request, ServerManager servers, AuditService audit, ClaimsPrincipal user) =>
+    Guid serverId, PluginConfigRequest request, ServerManager servers, AuditService audit, ClaimsPrincipal user, JsonStore store) =>
 {
+    if (!await Can(user, store, serverId, "config"))
+        return Results.Forbid();
     var server = await servers.FindAsync(serverId);
     if (server is null) return Results.NotFound();
     var safePath = EnsurePathInRoots(request.Path, PluginConfigRoots(server));
@@ -324,19 +372,60 @@ api.MapPut("/plugins/{serverId:guid}/config", async (
     await File.WriteAllTextAsync(safePath, request.Content);
     await audit.AddAsync(Actor(user), "plugin.config", Path.GetFileName(safePath), "Configuration saved");
     return Results.NoContent();
-}).RequireAuthorization("Owner");
-api.MapGet("/users", (JsonStore store) => store.ReadAsync<PanelUser>("users")).RequireAuthorization("Owner");
-api.MapPost("/users", async (LoginRequest request, JsonStore store, PasswordService passwords, AuditService audit, ClaimsPrincipal actor) =>
+});
+api.MapGet("/users", async (JsonStore store) => (await store.ReadAsync<PanelUser>("users")).Select(user => new
 {
+    user.Id, user.Username, user.Role, user.Enabled, user.CreatedAt,
+    serverIds = user.ServerIds ?? [], permissions = user.Permissions ?? []
+})).RequireAuthorization("Owner");
+api.MapPost("/users", async (AccountRequest request, JsonStore store, PasswordService passwords, AuditService audit, ClaimsPrincipal actor) =>
+{
+    if (string.IsNullOrWhiteSpace(request.Password))
+        return Results.BadRequest(new { error = "A password is required for a new account." });
     var users = await store.ReadAsync<PanelUser>("users");
     if (users.Any(x => x.Username.Equals(request.Username, StringComparison.OrdinalIgnoreCase)))
         return Results.Conflict(new { error = "Username already exists." });
     var user = new PanelUser(Guid.NewGuid(), request.Username.Trim(), passwords.Hash(request.Password),
-        "Administrator", true, DateTimeOffset.UtcNow);
+        "Operator", request.Enabled, DateTimeOffset.UtcNow, request.ServerIds.Distinct().ToArray(),
+        request.Permissions.Distinct(StringComparer.OrdinalIgnoreCase).ToArray());
     users.Add(user);
     await store.WriteAsync("users", users);
     await audit.AddAsync(Actor(actor), "user.create", user.Username, user.Role);
     return Results.Created($"/api/users/{user.Id}", new { user.Id, user.Username, user.Role, user.Enabled });
+}).RequireAuthorization("Owner");
+api.MapPut("/users/{id:guid}", async (
+    Guid id, AccountRequest request, JsonStore store, PasswordService passwords,
+    AuditService audit, ClaimsPrincipal actor) =>
+{
+    var users = await store.ReadAsync<PanelUser>("users");
+    var index = users.FindIndex(x => x.Id == id);
+    if (index < 0) return Results.NotFound();
+    if (users[index].Role == "Owner") return Results.BadRequest(new { error = "The owner account cannot be changed here." });
+    if (users.Any(x => x.Id != id && x.Username.Equals(request.Username.Trim(), StringComparison.OrdinalIgnoreCase)))
+        return Results.Conflict(new { error = "Username already exists." });
+    var existing = users[index];
+    users[index] = existing with
+    {
+        Username = request.Username.Trim(),
+        PasswordHash = string.IsNullOrWhiteSpace(request.Password) ? existing.PasswordHash : passwords.Hash(request.Password),
+        Enabled = request.Enabled,
+        ServerIds = request.ServerIds.Distinct().ToArray(),
+        Permissions = request.Permissions.Distinct(StringComparer.OrdinalIgnoreCase).ToArray()
+    };
+    await store.WriteAsync("users", users);
+    await audit.AddAsync(Actor(actor), "user.update", users[index].Username, "Access permissions changed");
+    return Results.NoContent();
+}).RequireAuthorization("Owner");
+api.MapDelete("/users/{id:guid}", async (Guid id, JsonStore store, AuditService audit, ClaimsPrincipal actor) =>
+{
+    var users = await store.ReadAsync<PanelUser>("users");
+    var account = users.FirstOrDefault(x => x.Id == id);
+    if (account is null) return Results.NotFound();
+    if (account.Role == "Owner") return Results.BadRequest(new { error = "The owner account cannot be deleted." });
+    users.Remove(account);
+    await store.WriteAsync("users", users);
+    await audit.AddAsync(Actor(actor), "user.delete", account.Username, "Account removed");
+    return Results.NoContent();
 }).RequireAuthorization("Owner");
 api.MapPut("/users/me/password", async (LoginRequest request, JsonStore store, PasswordService passwords, AuditService audit, ClaimsPrincipal actor) =>
 {

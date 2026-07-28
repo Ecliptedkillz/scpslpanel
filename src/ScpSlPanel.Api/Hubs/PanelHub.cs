@@ -1,13 +1,25 @@
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.SignalR;
+using System.Security.Claims;
+using ScpSlPanel.Api.Domain;
+using ScpSlPanel.Api.Infrastructure;
 
 namespace ScpSlPanel.Api.Hubs;
 
 [Authorize]
-public sealed class PanelHub : Hub
+public sealed class PanelHub(JsonStore store) : Hub
 {
-    public Task JoinServer(Guid serverId) =>
-        Groups.AddToGroupAsync(Context.ConnectionId, $"server:{serverId}");
+    public async Task JoinServer(Guid serverId)
+    {
+        if (!Guid.TryParse(Context.User?.FindFirstValue(ClaimTypes.NameIdentifier), out var userId))
+            throw new HubException("Unauthorized.");
+        var user = (await store.ReadAsync<PanelUser>("users")).FirstOrDefault(x => x.Id == userId && x.Enabled);
+        if (user is null || (user.Role != "Owner"
+            && (!(user.ServerIds?.Contains(serverId) ?? false)
+                || !(user.Permissions?.Contains("console", StringComparer.OrdinalIgnoreCase) ?? false))))
+            throw new HubException("You do not have console access for this server.");
+        await Groups.AddToGroupAsync(Context.ConnectionId, $"server:{serverId}");
+    }
 
     public Task LeaveServer(Guid serverId) =>
         Groups.RemoveFromGroupAsync(Context.ConnectionId, $"server:{serverId}");

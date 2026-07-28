@@ -10,7 +10,7 @@ import type { AuditEntry, Ban, BridgeSetup, BridgeStatus, Overview, Player, Sche
 
 type Page = 'overview' | 'servers' | 'server' | 'bans' | 'schedules' | 'audit' | 'settings'
 type ServerTab = 'overview' | 'console' | 'players' | 'plugins' | 'files'
-type User = { username: string; role: string }
+type User = { username: string; role: string; serverIds: string[]; permissions: string[] }
 
 const nav: { page: Page; label: string; icon: typeof LayoutDashboard }[] = [
   { page: 'overview', label: 'Overview', icon: LayoutDashboard },
@@ -130,6 +130,7 @@ function Panel({ user, onLogout }: { user: User; onLogout: () => void }) {
     return () => window.removeEventListener('popstate', onPopState)
   }, [])
   const servers = overview?.servers ?? []
+  const visibleNav = user.role === 'Owner' ? nav : nav.filter(item => !['bans', 'schedules', 'audit'].includes(item.page))
   const selectedServer = servers.find(server => server.id === selected)
   const navigatePage = (nextPage: Page) => {
     setPage(nextPage)
@@ -149,7 +150,7 @@ function Panel({ user, onLogout }: { user: User; onLogout: () => void }) {
   return <div className="app-shell">
     <aside className={drawer ? 'open' : ''}>
       <div className="brand"><div className="brand-mark"><Shield size={24}/></div><div><strong>SCP CONTROL</strong><span>ADMINISTRATION</span></div></div>
-      <nav>{nav.map(item => <button key={item.page} className={page === item.page ? 'active' : ''} onClick={() => { navigatePage(item.page); setDrawer(false) }}><item.icon size={18}/>{item.label}</button>)}</nav>
+      <nav>{visibleNav.map(item => <button key={item.page} className={page === item.page ? 'active' : ''} onClick={() => { navigatePage(item.page); setDrawer(false) }}><item.icon size={18}/>{item.label}</button>)}</nav>
       <div className="aside-bottom"><div className="system-line"><span className="status-dot"/>System operational</div><div className="profile"><div className="avatar">{user.username.slice(0, 2).toUpperCase()}</div><div><strong>{user.username}</strong><span>{user.role}</span></div><button onClick={logout} title="Log out"><LogOut size={17}/></button></div></div>
     </aside>
     <main className="workspace">
@@ -162,7 +163,7 @@ function Panel({ user, onLogout }: { user: User; onLogout: () => void }) {
         {page === 'bans' && <BansPage onError={setError}/>}
         {page === 'schedules' && <SchedulesPage servers={servers} onError={setError}/>}
         {page === 'audit' && <AuditPage/>}
-        {page === 'settings' && <SettingsPage/>}
+        {page === 'settings' && <SettingsPage user={user} servers={servers} onError={setError}/>}
       </div>
     </main>
   </div>
@@ -436,7 +437,7 @@ function SchedulesPage({ servers, onError }: { servers: Server[]; onError: (e: s
 }
 
 function PluginsPage({ servers, selected, setSelected, onError, embedded = false }: { servers: Server[]; selected: string | null; setSelected: (id: string) => void; onError: (e: string) => void; embedded?: boolean }) {
-  type Plugin = { name: string; version: string; framework: string; enabled: boolean; path: string; configPath?: string }
+  type Plugin = { name: string; version: string; framework: string; enabled: boolean; path: string; configPaths: string[] }
   const [plugins, setPlugins] = useState<Plugin[]>([])
   const [busy, setBusy] = useState('')
   const [config, setConfig] = useState<{ plugin: string; path: string; content: string } | null>(null)
@@ -453,10 +454,10 @@ function PluginsPage({ servers, selected, setSelected, onError, embedded = false
     } catch (e) { onError(e instanceof Error ? e.message : 'Plugin action failed') }
     finally { setBusy('') }
   }
-  const openConfig = async (plugin: Plugin) => {
-    if (!selected || !plugin.configPath) return
+  const openConfig = async (plugin: Plugin, path = plugin.configPaths[0]) => {
+    if (!selected || !path) return
     try {
-      const value = await api<{ path: string; content: string }>(`/plugins/${selected}/config?path=${encodeURIComponent(plugin.configPath)}`)
+      const value = await api<{ path: string; content: string }>(`/plugins/${selected}/config?path=${encodeURIComponent(path)}`)
       setConfig({ plugin: plugin.name, ...value })
     } catch (e) { onError(e instanceof Error ? e.message : 'Unable to open plugin configuration') }
   }
@@ -469,8 +470,8 @@ function PluginsPage({ servers, selected, setSelected, onError, embedded = false
     finally { setBusy('') }
   }
   return <>{!embedded && <PageTitle eyebrow="EXTENSIONS" title="Plugin inventory"><select value={selected ?? ''} onChange={e => setSelected(e.target.value)}><option value="">Select server</option>{servers.map(x => <option value={x.id} key={x.id}>{x.name}</option>)}</select></PageTitle>}
-    <Table headers={['PLUGIN','FRAMEWORK','VERSION','STATUS','ACTIONS']}>{plugins.map(x => <tr key={x.path}><td><strong>{x.name}</strong><small className="mono">{x.path}</small></td><td><span className="tag">{x.framework}</span></td><td>{x.version}</td><td><span className={`tag ${x.enabled ? '' : 'red'}`}>{x.enabled ? 'LOADED' : 'UNLOADED'}</span></td><td><div className="row-actions"><button disabled={busy === x.path} onClick={() => action(x, x.enabled ? 'unload' : 'load')}>{x.enabled ? 'UNLOAD' : 'LOAD'}</button><button disabled={busy === x.path || !x.enabled} onClick={() => action(x, 'restart')}><RefreshCw size={11}/> RESTART</button><button disabled={!x.configPath} onClick={() => openConfig(x)}><FileCode2 size={11}/> CONFIG</button></div></td></tr>)}</Table>{!plugins.length && <EmptyPage icon={Plug} title="No plugins detected" text="LabAPI, EXILED and NWAPI plugin folders are scanned automatically."/>}
-    {config && <section className="plugin-config"><div className="plugin-config-head"><div><span className="eyebrow">PLUGIN CONFIGURATION</span><h2>{config.plugin}</h2><small className="mono">{config.path}</small></div><button className="icon-button" onClick={() => setConfig(null)}><X size={16}/></button></div><textarea className="code-editor" value={config.content} onChange={e => setConfig({ ...config, content: e.target.value })} spellCheck={false}/><div className="plugin-config-actions"><span>Save changes, then restart the plugin to apply them.</span><button className="primary" disabled={busy === config.path} onClick={saveConfig}><Save size={14}/> SAVE CONFIG</button></div></section>}
+    <Table headers={['PLUGIN','FRAMEWORK','VERSION','STATUS','ACTIONS']}>{plugins.map(x => <tr key={x.path}><td><strong>{x.name}</strong><small className="mono">{x.path}</small></td><td><span className="tag">{x.framework}</span></td><td>{x.version}</td><td><span className={`tag ${x.enabled ? '' : 'red'}`}>{x.enabled ? 'LOADED' : 'UNLOADED'}</span></td><td><div className="row-actions"><button disabled={busy === x.path} onClick={() => action(x, x.enabled ? 'unload' : 'load')}>{x.enabled ? 'UNLOAD' : 'LOAD'}</button><button disabled={busy === x.path || !x.enabled} onClick={() => action(x, 'restart')}><RefreshCw size={11}/> RESTART</button><button disabled={!x.configPaths?.length} onClick={() => openConfig(x)}><FileCode2 size={11}/> CONFIG {x.configPaths?.length ? `(${x.configPaths.length})` : ''}</button></div></td></tr>)}</Table>{!plugins.length && <EmptyPage icon={Plug} title="No plugins detected" text="LabAPI, EXILED and NWAPI plugin folders are scanned automatically."/>}
+    {config && <section className="plugin-config"><div className="plugin-config-head"><div><span className="eyebrow">PLUGIN CONFIGURATION</span><h2>{config.plugin}</h2><label>CONFIG FILE<select value={config.path} onChange={e => { const plugin = plugins.find(x => x.name === config.plugin); if (plugin) void openConfig(plugin, e.target.value) }}>{plugins.find(x => x.name === config.plugin)?.configPaths.map(path => <option key={path} value={path}>{path.split(/[\\/]/).pop()}</option>)}</select></label><small className="mono">{config.path}</small></div><button className="icon-button" onClick={() => setConfig(null)}><X size={16}/></button></div><textarea className="code-editor" value={config.content} onChange={e => setConfig({ ...config, content: e.target.value })} spellCheck={false}/><div className="plugin-config-actions"><span>Save changes, then restart the plugin to apply them.</span><button className="primary" disabled={busy === config.path} onClick={saveConfig}><Save size={14}/> SAVE CONFIG</button></div></section>}
   </>
 }
 
@@ -480,8 +481,35 @@ function AuditPage() {
   return <><PageTitle eyebrow="SECURITY RECORD" title="Audit log"/><Table headers={['TIME','ACTOR','ACTION','TARGET','DETAIL']}>{entries.map(x => <tr key={x.id}><td>{new Date(x.at).toLocaleString()}</td><td><strong>{x.actor}</strong></td><td><span className="tag">{x.action}</span></td><td>{x.target}</td><td>{x.detail}</td></tr>)}</Table>{!entries.length && <EmptyMini text="No activity recorded."/>}</>
 }
 
-function SettingsPage() {
-  return <><PageTitle eyebrow="SYSTEM" title="Panel settings"/><section className="settings-grid"><article className="panel"><FileCode2 size={22}/><h2>Configuration</h2><p>Panel settings live in <code>appsettings.json</code>. Environment variables can override every production value.</p></article><article className="panel"><Shield size={22}/><h2>Security</h2><p>Change the bootstrap password before exposing the panel. Place it behind HTTPS and restrict network access.</p></article><article className="panel"><Activity size={22}/><h2>Remote agents</h2><p>The process adapter is ready to be separated into authenticated per-node agents in the next deployment phase.</p></article></section></>
+function SettingsPage({ user, servers, onError }: { user: User; servers: Server[]; onError: (e: string) => void }) {
+  type Account = { id: string; username: string; role: string; enabled: boolean; serverIds: string[]; permissions: string[] }
+  const permissionOptions = [
+    ['view', 'View server'], ['lifecycle', 'Start / stop / restart'], ['console', 'View console and execute commands'],
+    ['players', 'View players'], ['players.manage', 'Kick and ban players'], ['plugins', 'View plugins'],
+    ['plugins.manage', 'Load / unload / restart plugins'], ['config', 'Read and edit configuration'],
+  ]
+  const blank = { id: '', username: '', password: '', enabled: true, serverIds: [] as string[], permissions: ['view'] as string[] }
+  const [accounts, setAccounts] = useState<Account[]>([])
+  const [form, setForm] = useState(blank)
+  const [busy, setBusy] = useState(false)
+  const loadAccounts = () => { if (user.role === 'Owner') api<Account[]>('/users').then(setAccounts).catch(e => onError(e.message)) }
+  useEffect(() => { loadAccounts() }, [])
+  if (user.role !== 'Owner') return <><PageTitle eyebrow="SYSTEM" title="Panel settings"/><section className="panel"><Shield size={22}/><h2>Your access</h2><p>Your account permissions are managed by the panel owner.</p></section></>
+  const toggle = (key: 'serverIds' | 'permissions', value: string) =>
+    setForm({ ...form, [key]: form[key].includes(value) ? form[key].filter(x => x !== value) : [...form[key], value] })
+  const edit = (account: Account) => setForm({ id: account.id, username: account.username, password: '', enabled: account.enabled, serverIds: account.serverIds, permissions: account.permissions })
+  const save = async (event: FormEvent) => {
+    event.preventDefault(); setBusy(true)
+    try {
+      await api(form.id ? `/users/${form.id}` : '/users', { method: form.id ? 'PUT' : 'POST', body: JSON.stringify({ username: form.username, password: form.password || null, enabled: form.enabled, serverIds: form.serverIds, permissions: form.permissions }) })
+      setForm(blank); loadAccounts()
+    } catch (e) { onError(e instanceof Error ? e.message : 'Unable to save account') }
+    finally { setBusy(false) }
+  }
+  return <><PageTitle eyebrow="ACCESS CONTROL" title="Accounts and permissions"><button className="primary" onClick={() => setForm(blank)}><Plus size={15}/> NEW ACCOUNT</button></PageTitle>
+    <section className="access-grid"><article className="panel"><div className="panel-head"><div><span className="eyebrow">PANEL USERS</span><h2>Accounts</h2></div></div><div className="account-list">{accounts.map(account => <button key={account.id} className={form.id === account.id ? 'active' : ''} onClick={() => account.role !== 'Owner' && edit(account)}><div className="avatar">{account.username.slice(0,2).toUpperCase()}</div><div><strong>{account.username}</strong><small>{account.role} · {account.enabled ? 'Enabled' : 'Disabled'} · {account.serverIds.length || 'All'} server(s)</small></div><ChevronRight size={15}/></button>)}</div></article>
+    <form className="panel access-form" onSubmit={save}><div className="panel-head"><div><span className="eyebrow">{form.id ? 'EDIT OPERATOR' : 'NEW OPERATOR'}</span><h2>{form.id ? form.username : 'Create account'}</h2></div></div><div className="form-row"><label>USERNAME<input required value={form.username} onChange={e => setForm({...form, username:e.target.value})}/></label><label>{form.id ? 'NEW PASSWORD (OPTIONAL)' : 'PASSWORD'}<input required={!form.id} type="password" value={form.password} onChange={e => setForm({...form,password:e.target.value})}/></label></div><label className="check-row"><input type="checkbox" checked={form.enabled} onChange={e => setForm({...form,enabled:e.target.checked})}/> Account enabled</label><div className="access-section"><span className="eyebrow">SERVER ACCESS</span>{servers.map(server => <label className="check-row" key={server.id}><input type="checkbox" checked={form.serverIds.includes(server.id)} onChange={() => toggle('serverIds',server.id)}/>{server.name}</label>)}</div><div className="access-section"><span className="eyebrow">PERMISSIONS</span>{permissionOptions.map(([value,label]) => <label className="check-row" key={value}><input type="checkbox" checked={form.permissions.includes(value)} onChange={() => toggle('permissions',value)}/>{label}</label>)}</div><div className="account-actions">{form.id && <button type="button" className="danger" onClick={async () => { if (!confirm(`Delete ${form.username}?`)) return; await api(`/users/${form.id}`,{method:'DELETE'}); setForm(blank); loadAccounts() }}>DELETE</button>}<button className="primary" disabled={busy}><Save size={14}/> SAVE ACCOUNT</button></div></form></section>
+  </>
 }
 
 function Table({ headers, children }: { headers: string[]; children: React.ReactNode }) {

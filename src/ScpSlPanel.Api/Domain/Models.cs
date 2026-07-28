@@ -28,7 +28,8 @@ public sealed record ScheduleEntry(
 
 public sealed record PanelUser(
     Guid Id, string Username, string PasswordHash, string Role, bool Enabled,
-    DateTimeOffset CreatedAt);
+    DateTimeOffset CreatedAt, IReadOnlyList<Guid>? ServerIds = null,
+    IReadOnlyList<string>? Permissions = null);
 
 public sealed record PluginEntry(
     string Name, string Version, string Framework, bool Enabled, string Path);
@@ -42,6 +43,9 @@ public sealed record ServerCreateRequest(
     bool AutoRestart, bool AutoStart, int QueryPort, string? UpdateCommand);
 
 public sealed record LoginRequest(string Username, string Password);
+public sealed record AccountRequest(
+    string Username, string? Password, bool Enabled, IReadOnlyList<Guid> ServerIds,
+    IReadOnlyList<string> Permissions);
 public sealed record CommandRequest(string Command);
 public sealed record ModerationRequest(string PlayerId, string? Reason, int? DurationMinutes);
 public sealed record ConfigFileRequest(string Content);
