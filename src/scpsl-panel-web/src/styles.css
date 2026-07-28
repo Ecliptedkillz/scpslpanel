@@ -37,8 +37,40 @@
   --input: #f7f8fa;
   --hover: #17203308;
   --code: #151a21;
+  scrollbar-color: #aeb7c3 var(--bg);
 }
+[data-theme="light"] *::-webkit-scrollbar-thumb { background:#aeb7c3 }
+[data-theme="light"] *::-webkit-scrollbar-thumb:hover { background:#8e99a8 }
+[data-theme="light"] *::-webkit-scrollbar-thumb:active { background:var(--red) }
 * { box-sizing: border-box }
+html {
+  scrollbar-color: #434c58 var(--bg);
+  scrollbar-width: thin;
+}
+*::-webkit-scrollbar { width:12px; height:12px }
+*::-webkit-scrollbar-track { background:var(--bg) }
+*::-webkit-scrollbar-thumb {
+  min-height:42px;
+  border:3px solid var(--bg);
+  border-radius:999px;
+  background:#434c58;
+}
+*::-webkit-scrollbar-thumb:hover { background:#5a6573 }
+*::-webkit-scrollbar-thumb:active { background:var(--red) }
+*::-webkit-scrollbar-corner { background:var(--bg) }
+.console-output,.code-editor,.config-snippet pre,.modal,.table-wrap {
+  scrollbar-color:#4e5865 transparent;
+  scrollbar-width:thin;
+}
+.console-output::-webkit-scrollbar,.code-editor::-webkit-scrollbar,
+.config-snippet pre::-webkit-scrollbar,.modal::-webkit-scrollbar,
+.table-wrap::-webkit-scrollbar { width:10px; height:10px }
+.console-output::-webkit-scrollbar-track,.code-editor::-webkit-scrollbar-track,
+.config-snippet pre::-webkit-scrollbar-track,.modal::-webkit-scrollbar-track,
+.table-wrap::-webkit-scrollbar-track { background:transparent }
+.console-output::-webkit-scrollbar-thumb,.code-editor::-webkit-scrollbar-thumb,
+.config-snippet pre::-webkit-scrollbar-thumb,.modal::-webkit-scrollbar-thumb,
+.table-wrap::-webkit-scrollbar-thumb { border:2px solid transparent; background-clip:padding-box }
 body { margin:0; min-width:320px; min-height:100vh; background:var(--bg); font-size:15px; line-height:1.45 }
 button, input, select, textarea { font: inherit }
 button { color: inherit; cursor: pointer }
