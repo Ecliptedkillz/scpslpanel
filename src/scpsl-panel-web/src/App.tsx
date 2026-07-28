@@ -61,6 +61,9 @@ const fmtAgo = (value: string) => {
   if (seconds < 86400) return `${Math.floor(seconds / 3600)}h ago`
   return `${Math.floor(seconds / 86400)}d ago`
 }
+const formatPlaytime = (seconds: number) => seconds >= 3600
+  ? `${Math.floor(seconds / 3600)}h ${Math.floor(seconds % 3600 / 60)}m`
+  : `${Math.floor(seconds / 60)}m`
 
 export function App() {
   const [user, setUser] = useState<User | null | undefined>(undefined)
@@ -302,8 +305,13 @@ function ServerOverview({ server, setTab }: { server: Server; setTab: (tab: Serv
 }
 
 function ServerPlayers({ server, onError }: { server: Server; onError: (error: string) => void }) {
+  type PlayerRecord = { id: string; userId: string; lastIpAddress: string; currentName: string; firstConnectedAt: string; lastConnectedAt: string; playtimeSeconds: number; connections: number; nameHistory: { name: string; firstSeenAt: string; lastSeenAt: string }[]; moderationHistory: { id: string; type: string; reason: string; actor: string; at: string; durationMinutes: number | null }[]; notes: { id: string; text: string; actor: string; at: string }[] }
   const [status, setStatus] = useState<BridgeStatus | null>(null)
   const [setup, setSetup] = useState<BridgeSetup | null>(null)
+  const [mode, setMode] = useState<'live' | 'history'>('live')
+  const [history, setHistory] = useState<PlayerRecord[]>([])
+  const [profile, setProfile] = useState<PlayerRecord | null>(null)
+  const [note, setNote] = useState('')
   const load = useCallback(async () => {
     try { setStatus(await api<BridgeStatus>(`/servers/${server.id}/players`)) }
     catch (error) { onError(error instanceof Error ? error.message : 'Unable to load players') }
@@ -314,7 +322,9 @@ function ServerPlayers({ server, onError }: { server: Server; onError: (error: s
     const timer = setInterval(load, 3000)
     return () => clearInterval(timer)
   }, [load, server.id])
-  const moderate = async (player: Player, action: 'kick' | 'ban') => {
+  const loadHistory = useCallback(() => api<PlayerRecord[]>(`/servers/${server.id}/player-history`).then(setHistory).catch(error => onError(error.message)), [server.id, onError])
+  useEffect(() => { if (mode === 'history') void loadHistory() }, [mode, loadHistory])
+  const moderate = async (player: Player, action: 'kick' | 'ban' | 'mute') => {
     const reason = window.prompt(`Reason to ${action} ${player.nickname}:`, `Removed by ${action === 'kick' ? 'administrator' : 'moderator'}`)
     if (reason === null) return
     const durationMinutes = action === 'ban' ? Number(window.prompt('Ban duration in minutes:', '60') ?? 0) : null
@@ -326,13 +336,15 @@ function ServerPlayers({ server, onError }: { server: Server; onError: (error: s
       })
     } catch (error) { onError(error instanceof Error ? error.message : `Unable to ${action} player`) }
   }
-  if (status?.connected) return <section className="players-panel">
+  const navigation = <div className="player-view-tabs"><button className={mode === 'live' ? 'active' : ''} onClick={() => setMode('live')}>LIVE PLAYERS</button><button className={mode === 'history' ? 'active' : ''} onClick={() => setMode('history')}>PLAYER DATABASE</button></div>
+  if (mode === 'history') return <>{navigation}<PlayerHistoryView server={server} history={history} profile={profile} setProfile={setProfile} note={note} setNote={setNote} reload={loadHistory} onError={onError}/></>
+  if (status?.connected) return <section className="players-panel">{navigation}
     <div className="bridge-banner connected"><div><span className="status-dot"/><strong>LABAPI BRIDGE CONNECTED</strong><small>v{status.bridgeVersion} · LabAPI {status.apiVersion} · heartbeat {status.lastSeenAt ? fmtAgo(status.lastSeenAt) : 'now'}</small></div><span>{status.players.length}/{status.maxPlayers || '—'} PLAYERS</span></div>
-    <Table headers={['PLAYER','USER ID','ROLE','CONNECTED','ACTIONS']}>{status.players.map(player => <tr key={player.id}><td><strong>{player.nickname}</strong><small>Player #{player.id} · {player.ipAddress || 'Identity protected'}</small></td><td className="mono">{player.userId || 'Do Not Track'}</td><td><span className="tag">{player.role}</span></td><td>{fmtAgo(player.connectedAt)}</td><td><div className="row-actions"><button onClick={() => moderate(player, 'kick')}>KICK</button><button className="danger" onClick={() => moderate(player, 'ban')}>BAN</button></div></td></tr>)}</Table>
+    <Table headers={['PLAYER','USER ID','ROLE','CONNECTED','ACTIONS']}>{status.players.map(player => <tr key={player.id}><td><strong>{player.nickname}</strong><small>Player #{player.id} · {player.ipAddress || 'Identity protected'}</small></td><td className="mono">{player.userId || 'Do Not Track'}</td><td><span className="tag">{player.role}</span></td><td>{fmtAgo(player.connectedAt)}</td><td><div className="row-actions"><button onClick={() => moderate(player, 'mute')}>MUTE</button><button onClick={() => moderate(player, 'kick')}>KICK</button><button className="danger" onClick={() => moderate(player, 'ban')}>BAN</button></div></td></tr>)}</Table>
     {!status.players.length && <EmptyMini text="Bridge connected. No players are currently online."/>}
   </section>
   const config = setup ? `panel_url: "${window.location.origin}"\nserver_id: "${setup.serverId}"\ntoken: "${setup.token}"\nheartbeat_seconds: 5\nrespect_do_not_track: true` : ''
-  return <section className="bridge-install">
+  return <>{navigation}<section className="bridge-install">
     <div className="bridge-install-intro"><div className="empty-icon"><Users size={28}/></div><div><span className="eyebrow">LABAPI BRIDGE REQUIRED</span><h2>Connect live players for {server.name}</h2><p>The bridge makes outbound heartbeat requests to this panel. No inbound game-server port is required.</p></div></div>
     <ol className="install-steps">
       <li><span>1</span><div><strong>Build the LabAPI bridge</strong><p>Run <code>build-bridge.bat</code> and enter the server's <code>SCPSL_Data\Managed</code> path.</p></div></li>
@@ -341,7 +353,12 @@ function ServerPlayers({ server, onError }: { server: Server; onError: (error: s
       <li><span>4</span><div><strong>Restart SCP:SL</strong><p>This page will switch to the live player table within a few seconds.</p></div></li>
     </ol>
     <div className="integration-checks"><span className={server.state === 'online' ? 'ok' : ''}><i/>{server.state === 'online' ? 'Server process online' : 'Start the server process'}</span><span className={status?.connected ? 'ok' : ''}><i/>{status?.lastSeenAt ? `Last heartbeat ${fmtAgo(status.lastSeenAt)}` : 'Waiting for first heartbeat'}</span></div>
-  </section>
+  </section></>
+}
+
+type StoredPlayer = { id: string; userId: string; lastIpAddress: string; currentName: string; firstConnectedAt: string; lastConnectedAt: string; playtimeSeconds: number; connections: number; nameHistory: { name: string; firstSeenAt: string; lastSeenAt: string }[]; moderationHistory: { id: string; type: string; reason: string; actor: string; at: string; durationMinutes: number | null }[]; notes: { id: string; text: string; actor: string; at: string }[] }
+function PlayerHistoryView({ server, history, profile, setProfile, note, setNote, reload, onError }: { server: Server; history: StoredPlayer[]; profile: StoredPlayer | null; setProfile: (value: StoredPlayer | null) => void; note: string; setNote: (value: string) => void; reload: () => void; onError: (value: string) => void }) {
+  return <section className="player-database"><div className="player-db-summary"><div><strong>{history.length}</strong><span>KNOWN PLAYERS</span></div><div><strong>{history.reduce((sum,x) => sum + x.connections, 0)}</strong><span>CONNECTIONS</span></div><div><strong>{history.reduce((sum,x) => sum + x.moderationHistory.length, 0)}</strong><span>MODERATION RECORDS</span></div></div><Table headers={['PLAYER','IDENTIFIER','FIRST CONNECTED','LAST CONNECTED','PLAYTIME','']}>{history.map(player => <tr key={player.id}><td><strong>{player.currentName}</strong><small>{player.nameHistory.length} known name{player.nameHistory.length === 1 ? '' : 's'}</small></td><td className="mono">{player.userId}</td><td>{new Date(player.firstConnectedAt).toLocaleString()}</td><td>{fmtAgo(player.lastConnectedAt)}</td><td>{formatPlaytime(player.playtimeSeconds)}</td><td><button className="manage-button" onClick={() => setProfile(player)}>VIEW PROFILE</button></td></tr>)}</Table>{!history.length && <EmptyMini text="Records will appear after LabAPI bridge heartbeats are received."/>}{profile && <div className="modal-backdrop"><div className="modal player-profile"><div className="modal-head"><div><span className="eyebrow">PLAYER PROFILE</span><h2>{profile.currentName}</h2><p className="mono">{profile.userId}</p></div><button className="icon-button" onClick={() => setProfile(null)}><X/></button></div><div className="profile-stats"><div><span>FIRST CONNECTED</span><strong>{new Date(profile.firstConnectedAt).toLocaleString()}</strong></div><div><span>LAST CONNECTED</span><strong>{new Date(profile.lastConnectedAt).toLocaleString()}</strong></div><div><span>PLAYTIME</span><strong>{formatPlaytime(profile.playtimeSeconds)}</strong></div><div><span>CONNECTIONS</span><strong>{profile.connections}</strong></div></div><div className="profile-columns"><section><h3>NAME HISTORY</h3>{profile.nameHistory.map(item => <div className="history-entry" key={item.name}><strong>{item.name}</strong><small>Last used {new Date(item.lastSeenAt).toLocaleString()}</small></div>)}</section><section><h3>MODERATION HISTORY</h3>{profile.moderationHistory.slice().reverse().map(item => <div className="history-entry" key={item.id}><strong><span className="tag red">{item.type.toUpperCase()}</span> {item.reason}</strong><small>{item.actor} · {new Date(item.at).toLocaleString()}</small></div>)}{!profile.moderationHistory.length && <EmptyMini text="No moderation history."/>}</section></div><section className="profile-notes"><h3>STAFF NOTES</h3>{profile.notes.slice().reverse().map(item => <div className="history-entry" key={item.id}><strong>{item.text}</strong><small>{item.actor} · {new Date(item.at).toLocaleString()}</small></div>)}<form onSubmit={async event => { event.preventDefault(); if (!note.trim()) return; try { const updated = await api<StoredPlayer>(`/servers/${server.id}/player-history/${profile.id}/notes`, { method:'POST', body:JSON.stringify({text:note}) }); setProfile(updated); setNote(''); reload() } catch(error) { onError(error instanceof Error ? error.message : 'Unable to add note') } }}><input value={note} onChange={event => setNote(event.target.value)} placeholder="Add a private staff note…"/><button className="primary">ADD NOTE</button></form></section></div></div>}</section>
 }
 
 function ServerFiles({ server, onError }: { server: Server; onError: (error: string) => void }) {
@@ -488,7 +505,8 @@ function AdminManagerPage({ user, servers, onError }: { user: User; servers: Ser
   const permissionOptions = [
     ['view', 'View server'], ['server.start', 'Start server'], ['server.stop', 'Stop server'],
     ['server.restart', 'Restart server'], ['console', 'View console and execute commands'],
-    ['players', 'View players'], ['players.manage', 'Kick and ban players'], ['plugins', 'View plugins'],
+    ['players', 'View live players'], ['players.history', 'View player database'],
+    ['players.notes', 'Add player notes'], ['players.manage', 'Mute, kick and ban players'], ['plugins', 'View plugins'],
     ['plugins.manage', 'Load / unload / restart plugins'], ['config', 'Read and edit configuration'],
   ]
   const blank = { id: '', username: '', password: '', enabled: true, serverIds: [] as string[], permissions: ['view'] as string[] }
@@ -508,8 +526,8 @@ function AdminManagerPage({ user, servers, onError }: { user: User; servers: Ser
   const add = () => { setForm(blank); setShowModal(true) }
   const applyPreset = (name: 'viewer' | 'moderator' | 'manager' | 'full') => {
     const values = name === 'viewer' ? ['view', 'players', 'plugins']
-      : name === 'moderator' ? ['view', 'console', 'players', 'players.manage']
-      : name === 'manager' ? ['view', 'server.start', 'server.stop', 'server.restart', 'console', 'players', 'players.manage', 'plugins']
+      : name === 'moderator' ? ['view', 'console', 'players', 'players.history', 'players.notes', 'players.manage']
+      : name === 'manager' ? ['view', 'server.start', 'server.stop', 'server.restart', 'console', 'players', 'players.history', 'players.notes', 'players.manage', 'plugins']
       : permissionOptions.map(([value]) => value)
     setForm({ ...form, permissions: values })
   }

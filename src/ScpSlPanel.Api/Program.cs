@@ -23,6 +23,7 @@ builder.Services.AddSingleton<JsonStore>();
 builder.Services.AddSingleton<PasswordService>();
 builder.Services.AddSingleton<AuditService>();
 builder.Services.AddSingleton<BridgeStateService>();
+builder.Services.AddSingleton<PlayerDataService>();
 builder.Services.AddSingleton<ServerManager>();
 builder.Services.AddHostedService<BootstrapService>();
 builder.Services.AddHostedService<SchedulerService>();
@@ -148,11 +149,12 @@ app.MapGet("/api/auth/me", async (ClaimsPrincipal principal, JsonStore store) =>
 app.MapGet("/api/health", () => Results.Ok(new { status = "healthy", at = DateTimeOffset.UtcNow }));
 app.MapPost("/api/bridge/{serverId:guid}/heartbeat", async (
     Guid serverId, BridgeHeartbeat heartbeat, HttpContext context, ServerManager servers,
-    BridgeStateService bridgeState, IHubContext<PanelHub> hub) =>
+    BridgeStateService bridgeState, PlayerDataService playerData, IHubContext<PanelHub> hub) =>
 {
     if (!await servers.ValidateBridgeTokenAsync(serverId, context.Request.Headers["X-Bridge-Token"].FirstOrDefault()))
         return Results.Unauthorized();
     bridgeState.Update(serverId, heartbeat);
+    await playerData.RecordHeartbeatAsync(serverId, heartbeat);
     await hub.Clients.All.SendAsync("BridgeChanged", serverId);
     return Results.NoContent();
 });
@@ -207,18 +209,50 @@ api.MapPost("/servers/{id:guid}/bridge/regenerate", async (Guid id, ServerManage
     await audit.AddAsync(Actor(user), "bridge.token.regenerate", id.ToString(), "Regenerated LabAPI bridge token");
     return Results.Ok(new { serverId = id, token, endpoint = $"/api/bridge/{id}/heartbeat" });
 }).RequireAuthorization("Owner");
-api.MapPost("/servers/{id:guid}/players/{playerId}/kick", async (Guid id, string playerId, ModerationRequest request, ServerManager servers, ClaimsPrincipal user, JsonStore store) =>
+api.MapPost("/servers/{id:guid}/players/{playerId}/kick", async (Guid id, string playerId, ModerationRequest request, ServerManager servers, BridgeStateService bridge, PlayerDataService playerData, ClaimsPrincipal user, JsonStore store) =>
 {
     if (!await Can(user, store, id, "players.manage")) return Results.Forbid();
     await servers.CommandAsync(id, $"kick {playerId} {request.Reason ?? "Removed by panel"}", Actor(user));
+    var player = bridge.Get(id).Players.FirstOrDefault(x => x.Id == playerId);
+    if (player is not null)
+        await playerData.RecordModerationAsync(id, string.IsNullOrWhiteSpace(player.UserId) ? $"ip:{player.IpAddress}" : player.UserId,
+            player.Nickname, "kick", request.Reason ?? "Removed by panel", Actor(user), null);
     return Results.Accepted();
 });
-api.MapPost("/servers/{id:guid}/players/{playerId}/ban", async (Guid id, string playerId, ModerationRequest request, ServerManager servers, ClaimsPrincipal user, JsonStore store) =>
+api.MapPost("/servers/{id:guid}/players/{playerId}/ban", async (Guid id, string playerId, ModerationRequest request, ServerManager servers, BridgeStateService bridge, PlayerDataService playerData, ClaimsPrincipal user, JsonStore store) =>
 {
     if (!await Can(user, store, id, "players.manage")) return Results.Forbid();
     var duration = Math.Max(1, request.DurationMinutes ?? 60);
     await servers.CommandAsync(id, $"ban {playerId} {duration} {request.Reason ?? "Banned by panel"}", Actor(user));
+    var player = bridge.Get(id).Players.FirstOrDefault(x => x.Id == playerId);
+    if (player is not null)
+        await playerData.RecordModerationAsync(id, string.IsNullOrWhiteSpace(player.UserId) ? $"ip:{player.IpAddress}" : player.UserId,
+            player.Nickname, "ban", request.Reason ?? "Banned by panel", Actor(user), duration);
     return Results.Accepted();
+});
+api.MapPost("/servers/{id:guid}/players/{playerId}/mute", async (Guid id, string playerId, ModerationRequest request, ServerManager servers, BridgeStateService bridge, PlayerDataService playerData, ClaimsPrincipal user, JsonStore store) =>
+{
+    if (!await Can(user, store, id, "players.manage")) return Results.Forbid();
+    await servers.CommandAsync(id, $"mute {playerId}", Actor(user));
+    var player = bridge.Get(id).Players.FirstOrDefault(x => x.Id == playerId);
+    if (player is not null)
+        await playerData.RecordModerationAsync(id, string.IsNullOrWhiteSpace(player.UserId) ? $"ip:{player.IpAddress}" : player.UserId,
+            player.Nickname, "mute", request.Reason ?? "Muted by panel", Actor(user), request.DurationMinutes);
+    return Results.Accepted();
+});
+api.MapGet("/servers/{id:guid}/player-history", async (Guid id, PlayerDataService players, ClaimsPrincipal user, JsonStore store) =>
+    !await Can(user, store, id, "players.history") ? Results.Forbid() : Results.Ok(await players.ListAsync(id)));
+api.MapGet("/servers/{id:guid}/player-history/{playerId:guid}", async (Guid id, Guid playerId, PlayerDataService players, ClaimsPrincipal user, JsonStore store) =>
+    !await Can(user, store, id, "players.history") ? Results.Forbid()
+    : await players.FindAsync(id, playerId) is { } player ? Results.Ok(player) : Results.NotFound());
+api.MapPost("/servers/{id:guid}/player-history/{playerId:guid}/notes", async (
+    Guid id, Guid playerId, PlayerNoteRequest request, PlayerDataService players,
+    ClaimsPrincipal user, JsonStore store) =>
+{
+    if (!await Can(user, store, id, "players.notes")) return Results.Forbid();
+    if (string.IsNullOrWhiteSpace(request.Text)) return Results.BadRequest(new { error = "Note text is required." });
+    return await players.AddNoteAsync(id, playerId, request.Text, Actor(user)) is { } player
+        ? Results.Ok(player) : Results.NotFound();
 });
 
 api.MapGet("/servers/{id:guid}/files/{**path}", async (Guid id, string path, ServerManager servers, JsonStore store, ClaimsPrincipal user) =>

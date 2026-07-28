@@ -55,3 +55,13 @@ public sealed record ScheduleRequest(Guid ServerId, string Name, string Cron, st
 public sealed record BridgePlayerReport(int PlayerId, string DisplayName, string UserId, string IpAddress, string Role);
 public sealed record BridgeHeartbeat(string BridgeVersion, string ApiVersion, string RoundState, int MaxPlayers, IReadOnlyList<BridgePlayerReport> Players);
 public sealed record BridgeStatus(bool Connected, DateTimeOffset? LastSeenAt, string? BridgeVersion, string? ApiVersion, string? RoundState, int MaxPlayers, IReadOnlyList<PlayerInfo> Players);
+public sealed record PlayerNameEntry(string Name, DateTimeOffset FirstSeenAt, DateTimeOffset LastSeenAt);
+public sealed record PlayerModerationEntry(
+    Guid Id, string Type, string Reason, string Actor, DateTimeOffset At, int? DurationMinutes);
+public sealed record PlayerNote(Guid Id, string Text, string Actor, DateTimeOffset At);
+public sealed record PlayerRecord(
+    Guid Id, Guid ServerId, string UserId, string LastIpAddress, string CurrentName,
+    DateTimeOffset FirstConnectedAt, DateTimeOffset LastConnectedAt, long PlaytimeSeconds,
+    int Connections, IReadOnlyList<PlayerNameEntry> NameHistory,
+    IReadOnlyList<PlayerModerationEntry> ModerationHistory, IReadOnlyList<PlayerNote> Notes);
+public sealed record PlayerNoteRequest(string Text);
