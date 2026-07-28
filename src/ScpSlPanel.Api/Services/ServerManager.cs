@@ -19,6 +19,7 @@ public sealed class ServerManager(
         public string? LastError;
         public long PreviousCpuTicks;
         public DateTimeOffset PreviousSample = DateTimeOffset.UtcNow;
+        public bool StopInProgress;
     }
 
     private readonly ConcurrentDictionary<Guid, Runtime> _runtime = new();
@@ -133,6 +134,8 @@ public sealed class ServerManager(
         var runtime = _runtime.GetOrAdd(id, _ => new Runtime());
         lock (runtime)
         {
+            if (runtime.StopInProgress)
+                throw new InvalidOperationException("The server is still stopping. Try again in a moment.");
             if (runtime.Process is { HasExited: false }) throw new InvalidOperationException("Server is already running.");
             if (!File.Exists(definition.ExecutablePath)) throw new FileNotFoundException("Server executable was not found.", definition.ExecutablePath);
             runtime.State = ServerState.Starting;
@@ -167,31 +170,57 @@ public sealed class ServerManager(
     {
         var definition = await FindAsync(id) ?? throw new KeyNotFoundException("Server not found.");
         var runtime = _runtime.GetOrAdd(id, _ => new Runtime());
-        var process = runtime.Process;
-        if (process is null || process.HasExited) return;
-        runtime.State = ServerState.Stopping;
-        if (!force)
+        Process? process;
+        lock (runtime)
         {
-            try { await process.StandardInput.WriteLineAsync("shutdown"); }
-            catch { force = true; }
+            process = runtime.Process;
+            if (process is null) return;
+            if (runtime.StopInProgress)
+                throw new InvalidOperationException("A stop or restart operation is already in progress.");
+            try
+            {
+                if (process.HasExited) return;
+            }
+            catch (InvalidOperationException) { return; }
+            runtime.StopInProgress = true;
+            runtime.State = ServerState.Stopping;
+        }
+        try
+        {
             if (!force)
             {
-                using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(15));
-                try { await process.WaitForExitAsync(timeout.Token); }
-                catch (OperationCanceledException) { force = true; }
+                try { await process.StandardInput.WriteLineAsync("shutdown"); }
+                catch { force = true; }
+                if (!force)
+                {
+                    using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(15));
+                    try { await process.WaitForExitAsync(timeout.Token); }
+                    catch (OperationCanceledException) { force = true; }
+                }
             }
-        }
-        if (force && !process.HasExited)
-        {
-            process.Kill(entireProcessTree: true);
-            using var killTimeout = new CancellationTokenSource(TimeSpan.FromSeconds(5));
-            try { await process.WaitForExitAsync(killTimeout.Token); }
-            catch (OperationCanceledException)
+            if (force && !SafeHasExited(process))
             {
-                throw new InvalidOperationException("The server process did not exit after it was terminated.");
+                process.Kill(entireProcessTree: true);
+                using var killTimeout = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+                try { await process.WaitForExitAsync(killTimeout.Token); }
+                catch (OperationCanceledException)
+                {
+                    throw new InvalidOperationException("The server process did not exit after it was terminated.");
+                }
             }
+            await audit.AddAsync(actor, force ? "server.kill" : "server.stop", definition.Name, "Stopped server");
         }
-        await audit.AddAsync(actor, force ? "server.kill" : "server.stop", definition.Name, "Stopped server");
+        finally
+        {
+            lock (runtime)
+            {
+                if (ReferenceEquals(runtime.Process, process))
+                    runtime.Process = null;
+                runtime.State = ServerState.Offline;
+                runtime.StopInProgress = false;
+            }
+            process.Dispose();
+        }
     }
 
     public async Task RestartAsync(Guid id, string actor)
@@ -227,11 +256,11 @@ public sealed class ServerManager(
     {
         ServerState priorState;
         int? exitCode;
+        bool disposeProcess;
         lock (runtime)
         {
             if (!ReferenceEquals(runtime.Process, exitedProcess))
             {
-                exitedProcess.Dispose();
                 return;
             }
             priorState = runtime.State;
@@ -239,8 +268,9 @@ public sealed class ServerManager(
             catch { exitCode = null; }
             runtime.State = ServerState.Offline;
             runtime.Process = null;
-            exitedProcess.Dispose();
+            disposeProcess = !runtime.StopInProgress;
         }
+        if (disposeProcess) exitedProcess.Dispose();
         await PublishLine(definition.Id, "system", $"Process exited with code {exitCode}.");
         await hub.Clients.All.SendAsync("ServerChanged", Snapshot(definition));
         if (definition.AutoRestart && priorState != ServerState.Stopping)
@@ -254,5 +284,11 @@ public sealed class ServerManager(
                 logger.LogError(ex, "Auto-restart failed for {Server}", definition.Name);
             }
         }
+    }
+
+    private static bool SafeHasExited(Process process)
+    {
+        try { return process.HasExited; }
+        catch (InvalidOperationException) { return true; }
     }
 }
