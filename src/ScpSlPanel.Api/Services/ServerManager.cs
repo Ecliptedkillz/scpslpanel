@@ -1,0 +1,205 @@
+using System.Collections.Concurrent;
+using System.Diagnostics;
+using Microsoft.AspNetCore.SignalR;
+using ScpSlPanel.Api.Domain;
+using ScpSlPanel.Api.Hubs;
+using ScpSlPanel.Api.Infrastructure;
+
+namespace ScpSlPanel.Api.Services;
+
+public sealed class ServerManager(
+    JsonStore store, IHubContext<PanelHub> hub, AuditService audit, ILogger<ServerManager> logger)
+{
+    private sealed class Runtime
+    {
+        public Process? Process;
+        public ServerState State = ServerState.Offline;
+        public DateTimeOffset? StartedAt;
+        public string? LastError;
+        public long PreviousCpuTicks;
+        public DateTimeOffset PreviousSample = DateTimeOffset.UtcNow;
+    }
+
+    private readonly ConcurrentDictionary<Guid, Runtime> _runtime = new();
+
+    public Task<List<ServerDefinition>> DefinitionsAsync() => store.ReadAsync<ServerDefinition>("servers");
+
+    public async Task<ServerDefinition?> FindAsync(Guid id) =>
+        (await DefinitionsAsync()).FirstOrDefault(x => x.Id == id);
+
+    public async Task<ServerDefinition> AddAsync(ServerCreateRequest request)
+    {
+        if (string.IsNullOrWhiteSpace(request.Name) || string.IsNullOrWhiteSpace(request.ExecutablePath))
+            throw new ArgumentException("Name and executable path are required.");
+        var definitions = await DefinitionsAsync();
+        var working = string.IsNullOrWhiteSpace(request.WorkingDirectory)
+            ? Path.GetDirectoryName(Path.GetFullPath(request.ExecutablePath))!
+            : Path.GetFullPath(request.WorkingDirectory);
+        var item = new ServerDefinition(Guid.NewGuid(), request.Name.Trim(), Path.GetFullPath(request.ExecutablePath),
+            request.Arguments ?? "", working, request.AutoRestart, request.AutoStart, request.QueryPort,
+            request.UpdateCommand, DateTimeOffset.UtcNow);
+        definitions.Add(item);
+        await store.WriteAsync("servers", definitions);
+        return item;
+    }
+
+    public async Task<bool> RemoveAsync(Guid id)
+    {
+        if (_runtime.TryGetValue(id, out var active) && active.Process is { HasExited: false }) return false;
+        var definitions = await DefinitionsAsync();
+        var removed = definitions.RemoveAll(x => x.Id == id) > 0;
+        if (removed) await store.WriteAsync("servers", definitions);
+        _runtime.TryRemove(id, out _);
+        return removed;
+    }
+
+    public async Task<IReadOnlyList<ServerSnapshot>> SnapshotsAsync()
+    {
+        var definitions = await DefinitionsAsync();
+        return definitions.Select(Snapshot).ToList();
+    }
+
+    public async Task<ServerSnapshot?> SnapshotAsync(Guid id)
+    {
+        var definition = await FindAsync(id);
+        return definition is null ? null : Snapshot(definition);
+    }
+
+    private ServerSnapshot Snapshot(ServerDefinition definition)
+    {
+        var runtime = _runtime.GetOrAdd(definition.Id, _ => new Runtime());
+        var process = runtime.Process;
+        long memory = 0;
+        double cpu = 0;
+        int? processId = null;
+        if (process is { HasExited: false })
+        {
+            try
+            {
+                process.Refresh();
+                memory = process.WorkingSet64;
+                processId = process.Id;
+                var now = DateTimeOffset.UtcNow;
+                var ticks = process.TotalProcessorTime.Ticks;
+                var elapsed = (now - runtime.PreviousSample).TotalMilliseconds;
+                if (elapsed > 0 && runtime.PreviousCpuTicks > 0)
+                    cpu = Math.Clamp((ticks - runtime.PreviousCpuTicks) / TimeSpan.TicksPerMillisecond /
+                        elapsed / Environment.ProcessorCount * 100, 0, 100);
+                runtime.PreviousCpuTicks = ticks;
+                runtime.PreviousSample = now;
+            }
+            catch { /* Process may have exited during sampling. */ }
+        }
+        return new(definition.Id, definition.Name, runtime.State, processId, runtime.StartedAt,
+            memory, Math.Round(cpu, 1), 0, 0, runtime.LastError);
+    }
+
+    public async Task StartAsync(Guid id, string actor)
+    {
+        var definition = await FindAsync(id) ?? throw new KeyNotFoundException("Server not found.");
+        var runtime = _runtime.GetOrAdd(id, _ => new Runtime());
+        lock (runtime)
+        {
+            if (runtime.Process is { HasExited: false }) throw new InvalidOperationException("Server is already running.");
+            if (!File.Exists(definition.ExecutablePath)) throw new FileNotFoundException("Server executable was not found.", definition.ExecutablePath);
+            runtime.State = ServerState.Starting;
+            runtime.LastError = null;
+            var start = new ProcessStartInfo
+            {
+                FileName = definition.ExecutablePath,
+                Arguments = definition.Arguments,
+                WorkingDirectory = definition.WorkingDirectory,
+                UseShellExecute = false,
+                RedirectStandardInput = true,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                CreateNoWindow = true
+            };
+            var process = new Process { StartInfo = start, EnableRaisingEvents = true };
+            process.OutputDataReceived += (_, e) => PublishLine(id, "stdout", e.Data);
+            process.ErrorDataReceived += (_, e) => PublishLine(id, "stderr", e.Data);
+            process.Exited += (_, _) => _ = OnExitedAsync(definition, runtime);
+            if (!process.Start()) throw new InvalidOperationException("The server process did not start.");
+            runtime.Process = process;
+            runtime.StartedAt = DateTimeOffset.UtcNow;
+            runtime.State = ServerState.Online;
+            process.BeginOutputReadLine();
+            process.BeginErrorReadLine();
+        }
+        await audit.AddAsync(actor, "server.start", definition.Name, $"Started server {definition.Name}");
+        await hub.Clients.All.SendAsync("ServerChanged", Snapshot(definition));
+    }
+
+    public async Task StopAsync(Guid id, string actor, bool force = false)
+    {
+        var definition = await FindAsync(id) ?? throw new KeyNotFoundException("Server not found.");
+        var runtime = _runtime.GetOrAdd(id, _ => new Runtime());
+        var process = runtime.Process;
+        if (process is null || process.HasExited) return;
+        runtime.State = ServerState.Stopping;
+        if (!force)
+        {
+            try { await process.StandardInput.WriteLineAsync("shutdown"); }
+            catch { force = true; }
+            if (!force)
+            {
+                using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(15));
+                try { await process.WaitForExitAsync(timeout.Token); }
+                catch (OperationCanceledException) { force = true; }
+            }
+        }
+        if (force && !process.HasExited) process.Kill(entireProcessTree: true);
+        await audit.AddAsync(actor, force ? "server.kill" : "server.stop", definition.Name, "Stopped server");
+    }
+
+    public async Task RestartAsync(Guid id, string actor)
+    {
+        await StopAsync(id, actor);
+        await StartAsync(id, actor);
+    }
+
+    public async Task CommandAsync(Guid id, string command, string actor)
+    {
+        if (string.IsNullOrWhiteSpace(command)) throw new ArgumentException("Command cannot be empty.");
+        var definition = await FindAsync(id) ?? throw new KeyNotFoundException("Server not found.");
+        var runtime = _runtime.GetOrAdd(id, _ => new Runtime());
+        if (runtime.Process is not { HasExited: false } process) throw new InvalidOperationException("Server is offline.");
+        await process.StandardInput.WriteLineAsync(command);
+        await PublishLine(id, "command", $"> {command}");
+        await audit.AddAsync(actor, "console.command", definition.Name, command);
+    }
+
+    public async Task InitializeAsync()
+    {
+        foreach (var definition in await DefinitionsAsync())
+            if (definition.AutoStart)
+                try { await StartAsync(definition.Id, "system"); }
+                catch (Exception ex) { logger.LogError(ex, "Failed to auto-start {Server}", definition.Name); }
+    }
+
+    private Task PublishLine(Guid id, string stream, string? line) =>
+        line is null ? Task.CompletedTask : hub.Clients.Group($"server:{id}")
+            .SendAsync("ConsoleLine", new { serverId = id, stream, line, at = DateTimeOffset.UtcNow });
+
+    private async Task OnExitedAsync(ServerDefinition definition, Runtime runtime)
+    {
+        var priorState = runtime.State;
+        var exitCode = runtime.Process?.ExitCode;
+        runtime.State = ServerState.Offline;
+        runtime.Process?.Dispose();
+        runtime.Process = null;
+        await PublishLine(definition.Id, "system", $"Process exited with code {exitCode}.");
+        await hub.Clients.All.SendAsync("ServerChanged", Snapshot(definition));
+        if (definition.AutoRestart && priorState != ServerState.Stopping)
+        {
+            await Task.Delay(TimeSpan.FromSeconds(5));
+            try { await StartAsync(definition.Id, "system:auto-restart"); }
+            catch (Exception ex)
+            {
+                runtime.State = ServerState.Faulted;
+                runtime.LastError = ex.Message;
+                logger.LogError(ex, "Auto-restart failed for {Server}", definition.Name);
+            }
+        }
+    }
+}

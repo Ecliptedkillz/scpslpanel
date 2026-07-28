@@ -1,0 +1,12 @@
+**/bin/
+**/obj/
+**/node_modules/
+src/ScpSlPanel.Api/wwwroot/
+src/ScpSlPanel.Api/data/
+.env
+.dotnet-home/
+*.user
+*.suo
+*.tsbuildinfo
+src/scpsl-panel-web/vite.config.js
+src/scpsl-panel-web/vite.config.d.ts
