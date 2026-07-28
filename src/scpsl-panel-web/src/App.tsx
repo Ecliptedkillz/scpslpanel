@@ -9,7 +9,7 @@ import { api, ApiError } from './api'
 import type { AuditEntry, Ban, BridgeSetup, BridgeStatus, Overview, Player, Schedule, Server } from './types'
 
 type Page = 'overview' | 'servers' | 'server' | 'bans' | 'schedules' | 'audit' | 'admins' | 'settings'
-type ServerTab = 'overview' | 'console' | 'players' | 'plugins' | 'files'
+type ServerTab = 'overview' | 'monitoring' | 'console' | 'players' | 'player-history' | 'restarts' | 'plugins' | 'files' | 'maintenance'
 type User = { username: string; role: string; serverIds: string[]; permissions: string[] }
 
 const nav: { page: Page; label: string; icon: typeof LayoutDashboard }[] = [
@@ -25,7 +25,7 @@ const nav: { page: Page; label: string; icon: typeof LayoutDashboard }[] = [
 const fmtBytes = (bytes: number) => bytes ? `${(bytes / 1024 / 1024).toFixed(0)} MB` : '0 MB'
 const fmtState = (state: unknown) => typeof state === 'string' ? state.toUpperCase() : 'UNKNOWN'
 const topLevelPages = new Set<Page>(['overview', 'servers', 'bans', 'schedules', 'audit', 'admins', 'settings'])
-const serverTabs = new Set<ServerTab>(['overview', 'console', 'players', 'plugins', 'files'])
+const serverTabs = new Set<ServerTab>(['overview', 'monitoring', 'console', 'players', 'player-history', 'restarts', 'plugins', 'files', 'maintenance'])
 const readRoute = () => {
   const parts = window.location.pathname.split('/').filter(Boolean).map(decodeURIComponent)
   if (parts.length >= 2 && serverTabs.has(parts[1] as ServerTab))
@@ -240,6 +240,7 @@ function AddServerModal({ close, saved, onError }: { close: () => void; saved: (
     <label>DISPLAY NAME<input required placeholder="Site-02 Primary" value={form.name} onChange={e => setForm({...form, name: e.target.value})}/></label>
     <label>SERVER EXECUTABLE<input required placeholder="C:\SCPServer\LocalAdmin.exe" value={form.executablePath} onChange={e => setForm({...form, executablePath: e.target.value})}/></label>
     <label>WORKING DIRECTORY <small>(optional)</small><input placeholder="Inferred from executable" value={form.workingDirectory} onChange={e => setForm({...form, workingDirectory: e.target.value})}/></label>
+    <label>UPDATE COMMAND <small>(optional)</small><input placeholder="steamcmd +login anonymous +app_update …" value={form.updateCommand} onChange={e => setForm({...form, updateCommand: e.target.value})}/></label>
     <div className="form-row"><label>ARGUMENTS<input value={form.arguments} onChange={e => setForm({...form, arguments: e.target.value})}/></label><label>QUERY PORT<input type="number" value={form.queryPort} onChange={e => setForm({...form, queryPort: Number(e.target.value)})}/></label></div>
     <label className="check"><input type="checkbox" checked={form.autoRestart} onChange={e => setForm({...form, autoRestart: e.target.checked})}/><span>Automatically restart after a crash</span></label>
     <div className="modal-actions"><button type="button" onClick={close}>CANCEL</button><button className="primary">REGISTER SERVER</button></div>
@@ -258,10 +259,14 @@ function ServerWorkspace({ server, tab, setTab, refresh, back, onError }: { serv
   }
   const tabs: { id: ServerTab; label: string; icon: typeof LayoutDashboard }[] = [
     { id: 'overview', label: 'Overview', icon: LayoutDashboard },
+    { id: 'monitoring', label: 'Monitoring', icon: Activity },
     { id: 'console', label: 'Console', icon: Terminal },
-    { id: 'players', label: 'Players', icon: Users },
+    { id: 'players', label: 'Live Players', icon: Users },
+    { id: 'player-history', label: 'Player Database', icon: History },
+    { id: 'restarts', label: 'Restarts', icon: RotateCcw },
     { id: 'plugins', label: 'Plugins', icon: Plug },
     { id: 'files', label: 'Files & Config', icon: FolderOpen },
+    { id: 'maintenance', label: 'Maintenance', icon: Settings },
   ]
   return <>
     <button className="back-button" onClick={back}><ArrowLeft size={15}/> ALL SERVERS</button>
@@ -277,10 +282,14 @@ function ServerWorkspace({ server, tab, setTab, refresh, back, onError }: { serv
     <div className="server-tabs">{tabs.map(item => <button key={item.id} className={tab === item.id ? 'active' : ''} onClick={() => setTab(item.id)}><item.icon size={16}/>{item.label}</button>)}</div>
     <div className="server-tab-content">
       {tab === 'overview' && <ServerOverview server={server} setTab={setTab}/>}
+      {tab === 'monitoring' && <MonitoringPage server={server} onError={onError}/>}
       {tab === 'console' && <ConsolePage servers={[server]} selected={server.id} setSelected={() => {}} onError={onError} embedded/>}
-      {tab === 'players' && <ServerPlayers server={server} onError={onError}/>}
+      {tab === 'players' && <ServerPlayers server={server} onError={onError} initialMode="live"/>}
+      {tab === 'player-history' && <ServerPlayers server={server} onError={onError} initialMode="history"/>}
+      {tab === 'restarts' && <RestartManagerPage server={server} onError={onError}/>}
       {tab === 'plugins' && <PluginsPage servers={[server]} selected={server.id} setSelected={() => {}} onError={onError} embedded/>}
       {tab === 'files' && <ServerFiles server={server} onError={onError}/>}
+      {tab === 'maintenance' && <MaintenancePage server={server} onError={onError}/>}
     </div>
   </>
 }
@@ -304,11 +313,57 @@ function ServerOverview({ server, setTab }: { server: Server; setTab: (tab: Serv
   </section>
 }
 
-function ServerPlayers({ server, onError }: { server: Server; onError: (error: string) => void }) {
+function MonitoringPage({ server, onError }: { server: Server; onError: (value: string) => void }) {
+  type Metric = { at: string; cpuPercent: number; memoryBytes: number; players: number; state: string; bridgeConnected: boolean }
+  type Incident = { id: string; at: string; type: string; message: string; exitCode: number | null }
+  const [metrics, setMetrics] = useState<Metric[]>([])
+  const [incidents, setIncidents] = useState<Incident[]>([])
+  const [hours, setHours] = useState(24)
+  const load = useCallback(() => Promise.all([
+    api<Metric[]>(`/servers/${server.id}/metrics?hours=${hours}`),
+    api<Incident[]>(`/servers/${server.id}/incidents`)
+  ]).then(([samples, events]) => { setMetrics(samples); setIncidents(events) }).catch(e => onError(e.message)), [server.id, hours, onError])
+  useEffect(() => { void load(); const timer = setInterval(load, 30000); return () => clearInterval(timer) }, [load])
+  return <section><div className="section-toolbar"><div><span className="eyebrow">TELEMETRY</span><h2>Server monitoring</h2></div><select value={hours} onChange={e => setHours(Number(e.target.value))}><option value="1">Last hour</option><option value="6">Last 6 hours</option><option value="24">Last 24 hours</option><option value="168">Last 7 days</option></select></div><div className="chart-grid"><MetricChart title="CPU USAGE" values={metrics.map(x => x.cpuPercent)} suffix="%"/><MetricChart title="MEMORY" values={metrics.map(x => x.memoryBytes / 1024 / 1024)} suffix=" MB"/><MetricChart title="PLAYERS" values={metrics.map(x => x.players)} suffix=""/></div><article className="panel incident-panel"><div className="panel-head"><div><span className="eyebrow">DIAGNOSTICS</span><h2>Crash and restart history</h2></div></div>{incidents.length ? incidents.map(item => <div className="incident-row" key={item.id}><span className={`event-icon ${item.type.includes('failed') || item.type === 'crash' ? 'danger' : ''}`}><Activity size={15}/></span><div><strong>{item.type.replaceAll('-', ' ').toUpperCase()}</strong><p>{item.message}</p></div><time>{new Date(item.at).toLocaleString()}</time></div>) : <EmptyMini text="No incidents recorded."/ >}</article></section>
+}
+
+function MetricChart({ title, values, suffix }: { title: string; values: number[]; suffix: string }) {
+  const width = 500, height = 130, max = Math.max(1, ...values)
+  const points = values.map((value, index) => `${values.length === 1 ? width : index / (values.length - 1) * width},${height - value / max * (height - 15)}`).join(' ')
+  const latest = values.at(-1) ?? 0
+  return <article className="metric-chart"><div><span>{title}</span><strong>{latest.toFixed(title === 'PLAYERS' ? 0 : 1)}{suffix}</strong></div><svg viewBox={`0 0 ${width} ${height}`} preserveAspectRatio="none"><polyline points={points}/></svg><small>{values.length} samples · peak {max.toFixed(1)}{suffix}</small></article>
+}
+
+function RestartManagerPage({ server, onError }: { server: Server; onError: (value: string) => void }) {
+  type Countdown = { serverId: string; dueAt: string; message: string; actor: string }
+  const [countdown, setCountdown] = useState<Countdown | null>(null)
+  const [seconds, setSeconds] = useState(300)
+  const [message, setMessage] = useState('Scheduled server restart')
+  const load = useCallback(() => api<Countdown | null>(`/servers/${server.id}/restart/countdown`).then(setCountdown).catch(e => onError(e.message)), [server.id, onError])
+  useEffect(() => { void load(); const timer = setInterval(load, 5000); return () => clearInterval(timer) }, [load])
+  return <section className="restart-layout"><article className="panel restart-status"><div className="panel-head"><div><span className="eyebrow">RESTART MANAGER</span><h2>{countdown ? 'Countdown active' : 'No restart scheduled'}</h2></div></div>{countdown ? <><div className="countdown-clock">{Math.max(0, Math.ceil((new Date(countdown.dueAt).getTime() - Date.now()) / 1000))}<small>SECONDS REMAINING</small></div><p>{countdown.message}</p><button className="danger solid" onClick={async () => { await api(`/servers/${server.id}/restart/countdown`, {method:'DELETE'}); load() }}>CANCEL RESTART</button></> : <EmptyMini text="Create a warned restart using the form."/ >}</article><form className="panel form-panel" onSubmit={async e => { e.preventDefault(); try { await api(`/servers/${server.id}/restart/countdown`, { method:'POST', body:JSON.stringify({seconds,message}) }); load() } catch(error) { onError(error instanceof Error ? error.message : 'Unable to schedule restart') } }}><div className="panel-head"><div><span className="eyebrow">NEW COUNTDOWN</span><h2>Schedule warned restart</h2></div></div><label>COUNTDOWN<select value={seconds} onChange={e => setSeconds(Number(e.target.value))}><option value="60">1 minute</option><option value="300">5 minutes</option><option value="600">10 minutes</option><option value="1800">30 minutes</option><option value="3600">1 hour</option></select></label><label>ANNOUNCEMENT<input value={message} onChange={e => setMessage(e.target.value)}/></label><p className="muted">Players receive automatic warnings as the restart approaches. You can cancel at any time.</p><button className="primary" disabled={!!countdown}><RotateCcw size={14}/> START COUNTDOWN</button></form></section>
+}
+
+function MaintenancePage({ server, onError }: { server: Server; onError: (value: string) => void }) {
+  type Backup = { id: string; createdAt: string; fileName: string; sizeBytes: number; actor: string }
+  const [backups, setBackups] = useState<Backup[]>([])
+  const [busy, setBusy] = useState('')
+  const load = useCallback(() => api<Backup[]>(`/servers/${server.id}/backups`).then(setBackups).catch(e => onError(e.message)), [server.id, onError])
+  useEffect(() => { void load() }, [load])
+  const run = async (action: 'backups' | 'update') => {
+    setBusy(action)
+    try { await api(`/servers/${server.id}/${action}`, {method:'POST'}); load() }
+    catch(e) { onError(e instanceof Error ? e.message : `Unable to run ${action}`) }
+    finally { setBusy('') }
+  }
+  return <section className="maintenance-layout"><article className="panel"><div className="panel-head"><div><span className="eyebrow">SAFE OPERATIONS</span><h2>Update and backup</h2></div></div><div className="maintenance-actions"><button onClick={() => run('backups')} disabled={!!busy}><Save/><div><strong>CREATE BACKUP</strong><span>Archive server configuration files</span></div></button><button onClick={() => run('update')} disabled={!!busy || server.state !== 'offline'}><RefreshCw/><div><strong>RUN UPDATE</strong><span>{server.state === 'offline' ? 'Backup, then execute update command' : 'Stop the server before updating'}</span></div></button></div></article><article className="panel"><div className="panel-head"><div><span className="eyebrow">RECOVERY</span><h2>Available backups</h2></div></div>{backups.map(item => <div className="backup-row" key={item.id}><FileCode2/><div><strong>{item.fileName}</strong><small>{new Date(item.createdAt).toLocaleString()} · {fmtBytes(item.sizeBytes)} · {item.actor}</small></div><a className="manage-button" href={`/api/servers/${server.id}/backups/${encodeURIComponent(item.fileName)}`}>DOWNLOAD</a></div>)}{!backups.length && <EmptyMini text="No backups created yet."/ >}</article></section>
+}
+
+function ServerPlayers({ server, onError, initialMode = 'live' }: { server: Server; onError: (error: string) => void; initialMode?: 'live' | 'history' }) {
   type PlayerRecord = { id: string; userId: string; lastIpAddress: string; currentName: string; firstConnectedAt: string; lastConnectedAt: string; playtimeSeconds: number; connections: number; nameHistory: { name: string; firstSeenAt: string; lastSeenAt: string }[]; moderationHistory: { id: string; type: string; reason: string; actor: string; at: string; durationMinutes: number | null }[]; notes: { id: string; text: string; actor: string; at: string }[] }
   const [status, setStatus] = useState<BridgeStatus | null>(null)
   const [setup, setSetup] = useState<BridgeSetup | null>(null)
-  const [mode, setMode] = useState<'live' | 'history'>('live')
+  const [mode, setMode] = useState<'live' | 'history'>(initialMode)
   const [history, setHistory] = useState<PlayerRecord[]>([])
   const [profile, setProfile] = useState<PlayerRecord | null>(null)
   const [note, setNote] = useState('')
@@ -358,7 +413,14 @@ function ServerPlayers({ server, onError }: { server: Server; onError: (error: s
 
 type StoredPlayer = { id: string; userId: string; lastIpAddress: string; currentName: string; firstConnectedAt: string; lastConnectedAt: string; playtimeSeconds: number; connections: number; nameHistory: { name: string; firstSeenAt: string; lastSeenAt: string }[]; moderationHistory: { id: string; type: string; reason: string; actor: string; at: string; durationMinutes: number | null }[]; notes: { id: string; text: string; actor: string; at: string }[] }
 function PlayerHistoryView({ server, history, profile, setProfile, note, setNote, reload, onError }: { server: Server; history: StoredPlayer[]; profile: StoredPlayer | null; setProfile: (value: StoredPlayer | null) => void; note: string; setNote: (value: string) => void; reload: () => void; onError: (value: string) => void }) {
-  return <section className="player-database"><div className="player-db-summary"><div><strong>{history.length}</strong><span>KNOWN PLAYERS</span></div><div><strong>{history.reduce((sum,x) => sum + x.connections, 0)}</strong><span>CONNECTIONS</span></div><div><strong>{history.reduce((sum,x) => sum + x.moderationHistory.length, 0)}</strong><span>MODERATION RECORDS</span></div></div><Table headers={['PLAYER','IDENTIFIER','FIRST CONNECTED','LAST CONNECTED','PLAYTIME','']}>{history.map(player => <tr key={player.id}><td><strong>{player.currentName}</strong><small>{player.nameHistory.length} known name{player.nameHistory.length === 1 ? '' : 's'}</small></td><td className="mono">{player.userId}</td><td>{new Date(player.firstConnectedAt).toLocaleString()}</td><td>{fmtAgo(player.lastConnectedAt)}</td><td>{formatPlaytime(player.playtimeSeconds)}</td><td><button className="manage-button" onClick={() => setProfile(player)}>VIEW PROFILE</button></td></tr>)}</Table>{!history.length && <EmptyMini text="Records will appear after LabAPI bridge heartbeats are received."/>}{profile && <div className="modal-backdrop"><div className="modal player-profile"><div className="modal-head"><div><span className="eyebrow">PLAYER PROFILE</span><h2>{profile.currentName}</h2><p className="mono">{profile.userId}</p></div><button className="icon-button" onClick={() => setProfile(null)}><X/></button></div><div className="profile-stats"><div><span>FIRST CONNECTED</span><strong>{new Date(profile.firstConnectedAt).toLocaleString()}</strong></div><div><span>LAST CONNECTED</span><strong>{new Date(profile.lastConnectedAt).toLocaleString()}</strong></div><div><span>PLAYTIME</span><strong>{formatPlaytime(profile.playtimeSeconds)}</strong></div><div><span>CONNECTIONS</span><strong>{profile.connections}</strong></div></div><div className="profile-columns"><section><h3>NAME HISTORY</h3>{profile.nameHistory.map(item => <div className="history-entry" key={item.name}><strong>{item.name}</strong><small>Last used {new Date(item.lastSeenAt).toLocaleString()}</small></div>)}</section><section><h3>MODERATION HISTORY</h3>{profile.moderationHistory.slice().reverse().map(item => <div className="history-entry" key={item.id}><strong><span className="tag red">{item.type.toUpperCase()}</span> {item.reason}</strong><small>{item.actor} · {new Date(item.at).toLocaleString()}</small></div>)}{!profile.moderationHistory.length && <EmptyMini text="No moderation history."/>}</section></div><section className="profile-notes"><h3>STAFF NOTES</h3>{profile.notes.slice().reverse().map(item => <div className="history-entry" key={item.id}><strong>{item.text}</strong><small>{item.actor} · {new Date(item.at).toLocaleString()}</small></div>)}<form onSubmit={async event => { event.preventDefault(); if (!note.trim()) return; try { const updated = await api<StoredPlayer>(`/servers/${server.id}/player-history/${profile.id}/notes`, { method:'POST', body:JSON.stringify({text:note}) }); setProfile(updated); setNote(''); reload() } catch(error) { onError(error instanceof Error ? error.message : 'Unable to add note') } }}><input value={note} onChange={event => setNote(event.target.value)} placeholder="Add a private staff note…"/><button className="primary">ADD NOTE</button></form></section></div></div>}</section>
+  const recordAction = async (type: string) => {
+    if (!profile) return
+    const reason = prompt(`Reason for ${type}:`, type === 'warning' ? 'Staff warning' : `${type} status changed`)
+    if (reason === null) return
+    try { const updated = await api<StoredPlayer>(`/servers/${server.id}/player-history/${profile.id}/actions`, {method:'POST',body:JSON.stringify({type,reason,durationMinutes:null})}); setProfile(updated); reload() }
+    catch(error) { onError(error instanceof Error ? error.message : 'Unable to record action') }
+  }
+  return <section className="player-database"><div className="player-db-summary"><div><strong>{history.length}</strong><span>KNOWN PLAYERS</span></div><div><strong>{history.reduce((sum,x) => sum + x.connections, 0)}</strong><span>CONNECTIONS</span></div><div><strong>{history.reduce((sum,x) => sum + x.moderationHistory.length, 0)}</strong><span>MODERATION RECORDS</span></div></div><Table headers={['PLAYER','IDENTIFIER','FIRST CONNECTED','LAST CONNECTED','PLAYTIME','']}>{history.map(player => <tr key={player.id}><td><strong>{player.currentName}</strong><small>{player.nameHistory.length} known name{player.nameHistory.length === 1 ? '' : 's'}</small></td><td className="mono">{player.userId}</td><td>{new Date(player.firstConnectedAt).toLocaleString()}</td><td>{fmtAgo(player.lastConnectedAt)}</td><td>{formatPlaytime(player.playtimeSeconds)}</td><td><button className="manage-button" onClick={() => setProfile(player)}>VIEW PROFILE</button></td></tr>)}</Table>{!history.length && <EmptyMini text="Records will appear after LabAPI bridge heartbeats are received."/>}{profile && <div className="modal-backdrop"><div className="modal player-profile"><div className="modal-head"><div><span className="eyebrow">PLAYER PROFILE</span><h2>{profile.currentName}</h2><p className="mono">{profile.userId}</p></div><button className="icon-button" onClick={() => setProfile(null)}><X/></button></div><div className="profile-action-bar"><button onClick={() => recordAction('warning')}>ADD WARNING</button><button onClick={() => recordAction('watchlist')}>WATCHLIST</button><button onClick={() => recordAction('allowlist')}>ALLOWLIST</button><button onClick={() => copyText(`${profile.userId}\n${profile.lastIpAddress}`)}>COPY IDENTIFIERS</button></div><div className="profile-stats"><div><span>FIRST CONNECTED</span><strong>{new Date(profile.firstConnectedAt).toLocaleString()}</strong></div><div><span>LAST CONNECTED</span><strong>{new Date(profile.lastConnectedAt).toLocaleString()}</strong></div><div><span>PLAYTIME</span><strong>{formatPlaytime(profile.playtimeSeconds)}</strong></div><div><span>CONNECTIONS</span><strong>{profile.connections}</strong></div></div><div className="profile-columns"><section><h3>NAME HISTORY</h3>{profile.nameHistory.map(item => <div className="history-entry" key={item.name}><strong>{item.name}</strong><small>Last used {new Date(item.lastSeenAt).toLocaleString()}</small></div>)}</section><section><h3>MODERATION HISTORY</h3>{profile.moderationHistory.slice().reverse().map(item => <div className="history-entry" key={item.id}><strong><span className="tag red">{item.type.toUpperCase()}</span> {item.reason}</strong><small>{item.actor} · {new Date(item.at).toLocaleString()}</small></div>)}{!profile.moderationHistory.length && <EmptyMini text="No moderation history."/>}</section></div><section className="profile-notes"><h3>STAFF NOTES</h3>{profile.notes.slice().reverse().map(item => <div className="history-entry" key={item.id}><strong>{item.text}</strong><small>{item.actor} · {new Date(item.at).toLocaleString()}</small></div>)}<form onSubmit={async event => { event.preventDefault(); if (!note.trim()) return; try { const updated = await api<StoredPlayer>(`/servers/${server.id}/player-history/${profile.id}/notes`, { method:'POST', body:JSON.stringify({text:note}) }); setProfile(updated); setNote(''); reload() } catch(error) { onError(error instanceof Error ? error.message : 'Unable to add note') } }}><input value={note} onChange={event => setNote(event.target.value)} placeholder="Add a private staff note…"/><button className="primary">ADD NOTE</button></form></section></div></div>}</section>
 }
 
 function ServerFiles({ server, onError }: { server: Server; onError: (error: string) => void }) {
@@ -393,36 +455,43 @@ function ServerFiles({ server, onError }: { server: Server; onError: (error: str
 function ConsolePage({ servers, selected, setSelected, onError, embedded = false }: { servers: Server[]; selected: string | null; setSelected: (id: string) => void; onError: (e: string) => void; embedded?: boolean }) {
   const [lines, setLines] = useState<{ at: string; stream: string; line: string }[]>([])
   const [command, setCommand] = useState('')
+  const [search, setSearch] = useState('')
+  const [paused, setPaused] = useState(false)
+  const [commandHistory, setCommandHistory] = useState<string[]>([])
+  const [historyIndex, setHistoryIndex] = useState(-1)
   const outputRef = useRef<HTMLDivElement>(null)
+  const pausedRef = useRef(false)
   const server = servers.find(x => x.id === selected)
   const submit = async (event: FormEvent) => {
     event.preventDefault(); if (!selected || !command.trim()) return
-    try { await api(`/servers/${selected}/command`, { method: 'POST', body: JSON.stringify({ command }) }); setCommand('') }
+    try { await api(`/servers/${selected}/command`, { method: 'POST', body: JSON.stringify({ command }) }); setCommandHistory(old => [...old.slice(-49), command]); setHistoryIndex(-1); setCommand('') }
     catch (e) { onError(e instanceof Error ? e.message : 'Command failed') }
   }
   useEffect(() => {
     if (!selected) return
+    api<{ at: string; stream: string; line: string }[]>(`/servers/${selected}/console/history?take=1000`).then(setLines).catch(() => {})
     let disposed = false
     let connection: import('@microsoft/signalr').HubConnection | undefined
     import('@microsoft/signalr').then(({ HubConnectionBuilder, LogLevel }) => {
       if (disposed) return
       connection = new HubConnectionBuilder().withUrl('/hub/panel').withAutomaticReconnect().configureLogging(LogLevel.Warning).build()
-      connection.on('ConsoleLine', line => setLines(old => [...old.slice(-499), line]))
+      connection.on('ConsoleLine', line => { if (!pausedRef.current) setLines(old => [...old.slice(-1999), line]) })
       connection.on('ServerChanged', () => {})
       connection.on('BridgeChanged', () => {})
       connection.start().then(() => connection?.invoke('JoinServer', selected)).catch(() => {})
     })
     return () => { disposed = true; connection?.stop() }
   }, [selected])
+  useEffect(() => { pausedRef.current = paused }, [paused])
   useEffect(() => {
     const output = outputRef.current
     if (output) output.scrollTop = output.scrollHeight
   }, [lines])
   return <>
     {!embedded && <PageTitle eyebrow="REAL-TIME OPERATIONS" title="Live console"><select value={selected ?? ''} onChange={e => { setSelected(e.target.value); setLines([]) }}><option value="">Select server</option>{servers.map(x => <option key={x.id} value={x.id}>{x.name}</option>)}</select></PageTitle>}
-    <section className="console-panel"><div className="console-toolbar"><div><span className={`status-dot ${server?.state !== 'online' ? 'off' : ''}`}/>{server?.name ?? 'NO SERVER SELECTED'} <small>{fmtState(server?.state)}</small></div><button onClick={() => setLines([])}>CLEAR</button></div>
-      <div className="console-output" ref={outputRef}>{lines.length ? lines.map((line, i) => <div key={i} className={line.stream}><time>{new Date(line.at).toLocaleTimeString()}</time><span>{line.line}</span></div>) : <div className="console-placeholder"><Terminal size={28}/><span>Console output will stream here.</span></div>}</div>
-      <form className="command-line" onSubmit={submit}><span>RA &gt;</span><input disabled={!server || server.state !== 'online'} value={command} onChange={e => setCommand(e.target.value)} placeholder={server?.state === 'online' ? 'Enter server command…' : 'Server is offline'}/><button disabled={!command.trim()}>EXECUTE</button></form>
+    <section className="console-panel"><div className="console-toolbar"><div><span className={`status-dot ${server?.state !== 'online' ? 'off' : ''}`}/>{server?.name ?? 'NO SERVER SELECTED'} <small>{fmtState(server?.state)} · {lines.length} LINES</small></div><div className="console-tools"><input value={search} onChange={e => setSearch(e.target.value)} placeholder="Search logs…"/><button className={paused ? 'active' : ''} onClick={() => setPaused(!paused)}>{paused ? 'RESUME' : 'PAUSE'}</button><a href={selected ? `/api/servers/${selected}/console/download` : '#'}>DOWNLOAD</a><button onClick={() => setLines([])}>CLEAR</button></div></div>
+      <div className="console-output" ref={outputRef}>{lines.length ? lines.filter(item => !search || item.line.toLowerCase().includes(search.toLowerCase())).map((line, i) => <div key={i} className={line.stream}><time>{new Date(line.at).toLocaleTimeString()}</time><span>{line.line}</span></div>) : <div className="console-placeholder"><Terminal size={28}/><span>Console output will stream here.</span></div>}</div>
+      <form className="command-line" onSubmit={submit}><span>RA &gt;</span><input disabled={!server || server.state !== 'online'} value={command} onChange={e => setCommand(e.target.value)} onKeyDown={e => { if (e.key === 'ArrowUp' && commandHistory.length) { e.preventDefault(); const next = Math.min(commandHistory.length - 1, historyIndex + 1); setHistoryIndex(next); setCommand(commandHistory[commandHistory.length - 1 - next]) } else if (e.key === 'ArrowDown') { e.preventDefault(); const next = historyIndex - 1; setHistoryIndex(next); setCommand(next < 0 ? '' : commandHistory[commandHistory.length - 1 - next]) } }} placeholder={server?.state === 'online' ? 'Enter server command… (↑ for history)' : 'Server is offline'}/><button disabled={!command.trim()}>EXECUTE</button></form>
     </section>
   </>
 }
@@ -446,11 +515,11 @@ function BanModal({ close, saved, onError }: { close: () => void; saved: () => v
 
 function SchedulesPage({ servers, onError }: { servers: Server[]; onError: (e: string) => void }) {
   const [items, setItems] = useState<Schedule[]>([])
-  const [form, setForm] = useState({ serverId: '', name: 'Nightly restart', cron: '0 4 * * *', action: 'restart', enabled: true })
+  const [form, setForm] = useState({ serverId: '', name: 'Nightly restart', cron: '0 4 * * *', action: 'restart', enabled: true, warningSeconds: 300 })
   const load = () => api<Schedule[]>('/schedules').then(setItems).catch(e => onError(e.message))
   useEffect(() => { void load() }, [])
   return <><PageTitle eyebrow="AUTOMATION" title="Scheduler"/>
-    <section className="split-grid schedule-grid"><form className="panel form-panel" onSubmit={async e => { e.preventDefault(); try { await api('/schedules', { method: 'POST', body: JSON.stringify(form) }); load() } catch (x) { onError(x instanceof Error ? x.message : 'Failed') } }}><div className="panel-head"><div><span className="eyebrow">NEW AUTOMATION</span><h2>Create schedule</h2></div></div><label>SERVER<select required value={form.serverId} onChange={e => setForm({...form, serverId: e.target.value})}><option value="">Choose instance</option>{servers.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}</select></label><label>NAME<input value={form.name} onChange={e => setForm({...form, name: e.target.value})}/></label><div className="form-row"><label>CRON EXPRESSION<input value={form.cron} onChange={e => setForm({...form, cron: e.target.value})}/></label><label>ACTION<select value={form.action} onChange={e => setForm({...form, action: e.target.value})}><option>restart</option><option>start</option><option>stop</option></select></label></div><button className="primary">CREATE SCHEDULE</button></form>
+    <section className="split-grid schedule-grid"><form className="panel form-panel" onSubmit={async e => { e.preventDefault(); try { await api('/schedules', { method: 'POST', body: JSON.stringify(form) }); load() } catch (x) { onError(x instanceof Error ? x.message : 'Failed') } }}><div className="panel-head"><div><span className="eyebrow">NEW AUTOMATION</span><h2>Create schedule</h2></div></div><label>SERVER<select required value={form.serverId} onChange={e => setForm({...form, serverId: e.target.value})}><option value="">Choose instance</option>{servers.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}</select></label><label>NAME<input value={form.name} onChange={e => setForm({...form, name:e.target.value})}/></label><div className="form-row"><label>CRON EXPRESSION<input value={form.cron} onChange={e => setForm({...form,cron:e.target.value})}/></label><label>ACTION<select value={form.action} onChange={e => setForm({...form,action:e.target.value})}><option>restart</option><option>start</option><option>stop</option></select></label></div>{form.action === 'restart' && <label>PLAYER WARNING COUNTDOWN<select value={form.warningSeconds} onChange={e => setForm({...form,warningSeconds:Number(e.target.value)})}><option value="0">No warning</option><option value="60">1 minute</option><option value="300">5 minutes</option><option value="600">10 minutes</option><option value="1800">30 minutes</option></select></label>}<button className="primary">CREATE SCHEDULE</button></form>
     <article className="panel"><div className="panel-head"><div><span className="eyebrow">AUTOMATION QUEUE</span><h2>Active schedules</h2></div></div>{items.length ? <div className="schedule-list">{items.map(x => <div className="schedule-row" key={x.id}><div className="event-icon"><CalendarClock size={17}/></div><div><strong>{x.name}</strong><p>{x.cron} · {x.action}</p></div><span className="tag">{x.enabled ? 'ENABLED' : 'PAUSED'}</span><button className="icon-button" onClick={async () => { await api(`/schedules/${x.id}`, { method: 'DELETE' }); load() }}><X size={16}/></button></div>)}</div> : <EmptyMini text="No scheduled actions."/ >}</article></section>
   </>
 }
@@ -508,6 +577,7 @@ function AdminManagerPage({ user, servers, onError }: { user: User; servers: Ser
     ['players', 'View live players'], ['players.history', 'View player database'],
     ['players.notes', 'Add player notes'], ['players.manage', 'Mute, kick and ban players'], ['plugins', 'View plugins'],
     ['plugins.manage', 'Load / unload / restart plugins'], ['config', 'Read and edit configuration'],
+    ['monitoring', 'View monitoring and incidents'], ['maintenance', 'Backups and server updates'],
   ]
   const blank = { id: '', username: '', password: '', enabled: true, serverIds: [] as string[], permissions: ['view'] as string[] }
   const [accounts, setAccounts] = useState<Account[]>([])
@@ -557,6 +627,8 @@ function SettingsPage({ user, onError }: { user: User; onError: (e: string) => v
   const [confirmPassword, setConfirmPassword] = useState('')
   const [saved, setSaved] = useState(false)
   const [busy, setBusy] = useState(false)
+  const [integration, setIntegration] = useState({ discordWebhookUrl: '', notifyCrash: true, notifyRestart: true, notifyBridgeOffline: true, notifyAdminActions: false })
+  useEffect(() => { if (user.role === 'Owner') api<typeof integration>('/integrations').then(setIntegration).catch(() => {}) }, [user.role])
   const changePassword = async (event: FormEvent) => {
     event.preventDefault(); setSaved(false)
     if (password.length < 8) return onError('Password must be at least 8 characters.')
@@ -568,7 +640,7 @@ function SettingsPage({ user, onError }: { user: User; onError: (e: string) => v
     } catch (e) { onError(e instanceof Error ? e.message : 'Unable to change password') }
     finally { setBusy(false) }
   }
-  return <><PageTitle eyebrow="SYSTEM" title="Panel settings"/><section className="settings-grid"><form className="panel" onSubmit={changePassword}><Shield size={22}/><h2>Change my password</h2><p>Signed in as <strong>{user.username}</strong>.</p><label>NEW PASSWORD<input type="password" minLength={8} required value={password} onChange={e => setPassword(e.target.value)} autoComplete="new-password"/></label><label>CONFIRM PASSWORD<input type="password" minLength={8} required value={confirmPassword} onChange={e => setConfirmPassword(e.target.value)} autoComplete="new-password"/></label>{saved && <p className="success-message">Password changed successfully.</p>}<button className="primary wide" disabled={busy}>{busy ? 'SAVING…' : 'CHANGE PASSWORD'}</button></form><article className="panel"><FileCode2 size={22}/><h2>Configuration</h2><p>Panel settings live in <code>appsettings.json</code>. Environment variables can override production values.</p></article><article className="panel"><Activity size={22}/><h2>Access control</h2><p>Administrators and their server permissions are managed in the dedicated Admin Manager tab.</p></article></section></>
+  return <><PageTitle eyebrow="SYSTEM" title="Panel settings"/><section className="settings-grid"><form className="panel" onSubmit={changePassword}><Shield size={22}/><h2>Change my password</h2><p>Signed in as <strong>{user.username}</strong>.</p><label>NEW PASSWORD<input type="password" minLength={8} required value={password} onChange={e => setPassword(e.target.value)} autoComplete="new-password"/></label><label>CONFIRM PASSWORD<input type="password" minLength={8} required value={confirmPassword} onChange={e => setConfirmPassword(e.target.value)} autoComplete="new-password"/></label>{saved && <p className="success-message">Password changed successfully.</p>}<button className="primary wide" disabled={busy}>{busy ? 'SAVING…' : 'CHANGE PASSWORD'}</button></form>{user.role === 'Owner' && <form className="panel discord-settings" onSubmit={async e => { e.preventDefault(); try { await api('/integrations',{method:'PUT',body:JSON.stringify(integration)}) } catch(error) { onError(error instanceof Error ? error.message : 'Unable to save Discord settings') } }}><Activity size={22}/><h2>Discord notifications</h2><p>Send crash, restart, and administrative alerts to a Discord channel.</p><label>WEBHOOK URL<input type="password" value={integration.discordWebhookUrl} onChange={e => setIntegration({...integration,discordWebhookUrl:e.target.value})} placeholder="https://discord.com/api/webhooks/…"/></label><label className="check-row"><input type="checkbox" checked={integration.notifyCrash} onChange={e => setIntegration({...integration,notifyCrash:e.target.checked})}/> Crash alerts</label><label className="check-row"><input type="checkbox" checked={integration.notifyRestart} onChange={e => setIntegration({...integration,notifyRestart:e.target.checked})}/> Restart alerts</label><label className="check-row"><input type="checkbox" checked={integration.notifyAdminActions} onChange={e => setIntegration({...integration,notifyAdminActions:e.target.checked})}/> Admin action log</label><div className="discord-actions"><button type="button" onClick={() => api('/integrations/discord/test',{method:'POST'}).catch(e => onError(e.message))}>TEST</button><button className="primary">SAVE</button></div></form>}<article className="panel"><FileCode2 size={22}/><h2>Configuration</h2><p>Panel settings live in <code>appsettings.json</code>. Administrators and server permissions are managed in Admin Manager.</p></article></section></>
 }
 
 function Table({ headers, children }: { headers: string[]; children: React.ReactNode }) {

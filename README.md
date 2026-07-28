@@ -11,12 +11,20 @@ configuration access, metrics, authentication, and audit logging in one dashboar
 - Stream stdout/stderr to authenticated browsers through SignalR
 - Execute LocalAdmin/console commands with a complete audit trail
 - Monitor process ID, state, CPU, memory, and uptime
+- Store seven days of CPU, memory, player-count, process-state, and bridge telemetry
+- Record crash, bridge-disconnect, scheduled-restart, and restart-failure incidents
+- Persist console output with search, pause/resume, command history, and log downloads
 - Read and write files below each registered server directory with path traversal protection
 - Record and revoke timed or permanent bans
 - Run start, stop, restart, or console-command schedules with five-field cron expressions
+- Run warned restart countdowns with in-game announcements and cancellation
 - Detect EXILED and NWAPI plugin assemblies
 - Receive live players and roles through the included LabAPI bridge
-- Cookie authentication, PBKDF2 password hashing, owner/admin roles, and user creation API
+- Maintain a player database with name history, playtime, connections, notes, warnings,
+  watchlist/allowlist records, mutes, kicks, and bans
+- Create downloadable configuration backups and execute owner-configured update commands
+- Send Discord crash, restart, bridge, and optional administrator-action notifications
+- Cookie authentication, PBKDF2 password hashing, per-server access, and granular permissions
 - Responsive React operator interface and a single deployable ASP.NET Core application
 
 Player telemetry is intentionally adapter-based. SCP:SL does not expose all live player data
@@ -94,6 +102,31 @@ and the current server port.
 The bridge makes outbound HTTP requests to the panel. `PanelUrl` must therefore be reachable
 from the game-server machine; do not use `127.0.0.1` when the panel runs on another computer.
 Use HTTPS when traffic leaves a trusted private network. Treat the bridge token like a password.
+
+## Per-server pages
+
+Every server has stable, bookmarkable routes:
+
+- `/{server-id}/overview`
+- `/{server-id}/monitoring`
+- `/{server-id}/console`
+- `/{server-id}/players`
+- `/{server-id}/player-history`
+- `/{server-id}/restarts`
+- `/{server-id}/plugins`
+- `/{server-id}/files`
+- `/{server-id}/maintenance`
+
+Monitoring samples are retained for seven days. Console logs and configuration backups are
+stored below the panel data directory. Player records begin accumulating when the LabAPI bridge
+sends heartbeats.
+
+The maintenance updater only runs while the game server is offline. It creates a configuration
+backup first, then executes the update command entered when registering the server. Treat update
+commands as trusted owner-only configuration.
+
+Configure Discord alerts under **Settings → Discord notifications**. Webhook URLs are sensitive
+credentials and should not be shared.
 
 ## Production
 

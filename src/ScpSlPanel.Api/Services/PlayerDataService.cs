@@ -104,6 +104,42 @@ public sealed class PlayerDataService(JsonStore store)
         finally { _gate.Release(); }
     }
 
+    public async Task<PlayerRecord?> AddActionAsync(
+        Guid serverId, Guid playerId, string type, string reason, string actor, int? durationMinutes)
+    {
+        await _gate.WaitAsync();
+        try
+        {
+            var records = await store.ReadAsync<PlayerRecord>("players");
+            var index = records.FindIndex(x => x.ServerId == serverId && x.Id == playerId);
+            if (index < 0) return null;
+            records[index] = records[index] with
+            {
+                ModerationHistory = records[index].ModerationHistory.Append(
+                    new PlayerModerationEntry(Guid.NewGuid(), type, reason.Trim(), actor,
+                        DateTimeOffset.UtcNow, durationMinutes)).ToList()
+            };
+            await store.WriteAsync("players", records);
+            return records[index];
+        }
+        finally { _gate.Release(); }
+    }
+
+    public async Task<int> CleanupAsync(Guid serverId, int olderThanDays)
+    {
+        await _gate.WaitAsync();
+        try
+        {
+            var records = await store.ReadAsync<PlayerRecord>("players");
+            var cutoff = DateTimeOffset.UtcNow.AddDays(-Math.Clamp(olderThanDays, 30, 3650));
+            var removed = records.RemoveAll(x => x.ServerId == serverId && x.LastConnectedAt < cutoff
+                && x.Notes.Count == 0 && x.ModerationHistory.Count == 0);
+            if (removed > 0) await store.WriteAsync("players", records);
+            return removed;
+        }
+        finally { _gate.Release(); }
+    }
+
     private static string? StableIdentity(BridgePlayerReport player) =>
         !string.IsNullOrWhiteSpace(player.UserId) ? player.UserId
         : !string.IsNullOrWhiteSpace(player.IpAddress) ? $"ip:{player.IpAddress}"

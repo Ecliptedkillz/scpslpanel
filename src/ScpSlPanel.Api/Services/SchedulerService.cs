@@ -4,7 +4,8 @@ using ScpSlPanel.Api.Infrastructure;
 namespace ScpSlPanel.Api.Services;
 
 public sealed class SchedulerService(
-    JsonStore store, ServerManager servers, AuditService audit, ILogger<SchedulerService> logger) : BackgroundService
+    JsonStore store, ServerManager servers, RestartCoordinator restarts,
+    AuditService audit, ILogger<SchedulerService> logger) : BackgroundService
 {
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
@@ -25,7 +26,11 @@ public sealed class SchedulerService(
                         {
                             case "start": await servers.StartAsync(item.ServerId, "scheduler"); break;
                             case "stop": await servers.StopAsync(item.ServerId, "scheduler"); break;
-                            case "restart": await servers.RestartAsync(item.ServerId, "scheduler"); break;
+                            case "restart":
+                                if (item.WarningSeconds > 0)
+                                    restarts.Schedule(item.ServerId, item.WarningSeconds, item.Name, "scheduler");
+                                else await servers.RestartAsync(item.ServerId, "scheduler");
+                                break;
                             default: await servers.CommandAsync(item.ServerId, item.Action, "scheduler"); break;
                         }
                         schedules[index] = item with { LastRunAt = now };

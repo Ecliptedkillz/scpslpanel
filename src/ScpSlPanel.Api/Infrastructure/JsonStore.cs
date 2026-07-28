@@ -47,5 +47,14 @@ public sealed class JsonStore(IHostEnvironment environment, IConfiguration confi
         return fullPath;
     }
 
+    public string StoragePath(params string[] parts)
+    {
+        var path = Path.GetFullPath(parts.Aggregate(_root, Path.Combine));
+        if (!path.StartsWith(_root + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase)
+            && !string.Equals(path, _root, StringComparison.OrdinalIgnoreCase))
+            throw new InvalidOperationException("The storage path is outside the panel data directory.");
+        return path;
+    }
+
     private string PathFor(string collection) => Path.Combine(_root, collection + ".json");
 }

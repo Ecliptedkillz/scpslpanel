@@ -9,7 +9,7 @@ namespace ScpSlPanel.Api.Services;
 
 public sealed class ServerManager(
     JsonStore store, IHubContext<PanelHub> hub, AuditService audit, BridgeStateService bridge,
-    ILogger<ServerManager> logger)
+    OperationsDataService operations, NotificationService notifications, ILogger<ServerManager> logger)
 {
     private sealed class Runtime
     {
@@ -171,8 +171,8 @@ public sealed class ServerManager(
                 CreateNoWindow = true
             };
             var process = new Process { StartInfo = start, EnableRaisingEvents = true };
-            process.OutputDataReceived += (_, e) => PublishLine(id, "stdout", e.Data);
-            process.ErrorDataReceived += (_, e) => PublishLine(id, "stderr", e.Data);
+            process.OutputDataReceived += (_, e) => _ = PublishLine(id, "stdout", e.Data);
+            process.ErrorDataReceived += (_, e) => _ = PublishLine(id, "stderr", e.Data);
             process.Exited += (_, _) => _ = OnExitedAsync(definition, runtime, process);
             if (!process.Start()) throw new InvalidOperationException("The server process did not start.");
             runtime.Process = process;
@@ -274,9 +274,13 @@ public sealed class ServerManager(
                 catch (Exception ex) { logger.LogError(ex, "Failed to auto-start {Server}", definition.Name); }
     }
 
-    private Task PublishLine(Guid id, string stream, string? line) =>
-        line is null ? Task.CompletedTask : hub.Clients.Group($"server:{id}")
+    private async Task PublishLine(Guid id, string stream, string? line)
+    {
+        if (line is null) return;
+        await operations.AppendConsoleAsync(id, stream, line);
+        await hub.Clients.Group($"server:{id}")
             .SendAsync("ConsoleLine", new { serverId = id, stream, line, at = DateTimeOffset.UtcNow });
+    }
 
     private async Task OnExitedAsync(ServerDefinition definition, Runtime runtime, Process exitedProcess)
     {
@@ -298,6 +302,15 @@ public sealed class ServerManager(
         }
         if (disposeProcess) exitedProcess.Dispose();
         await PublishLine(definition.Id, "system", $"Process exited with code {exitCode}.");
+        if (priorState != ServerState.Stopping)
+        {
+            await operations.AddIncidentAsync(definition.Id, "crash",
+                $"Server process exited unexpectedly with code {exitCode}.", exitCode);
+            var settings = await notifications.GetAsync();
+            if (settings.NotifyCrash)
+                await notifications.SendAsync($"{definition.Name} crashed",
+                    $"The process exited with code `{exitCode}`. Auto-restart: `{definition.AutoRestart}`.", "error");
+        }
         await hub.Clients.All.SendAsync("ServerChanged", Snapshot(definition));
         if (definition.AutoRestart && priorState != ServerState.Stopping)
         {

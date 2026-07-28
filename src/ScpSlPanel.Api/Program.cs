@@ -24,9 +24,14 @@ builder.Services.AddSingleton<PasswordService>();
 builder.Services.AddSingleton<AuditService>();
 builder.Services.AddSingleton<BridgeStateService>();
 builder.Services.AddSingleton<PlayerDataService>();
+builder.Services.AddSingleton<OperationsDataService>();
+builder.Services.AddSingleton<NotificationService>();
+builder.Services.AddSingleton<MaintenanceService>();
+builder.Services.AddSingleton<RestartCoordinator>();
 builder.Services.AddSingleton<ServerManager>();
 builder.Services.AddHostedService<BootstrapService>();
 builder.Services.AddHostedService<SchedulerService>();
+builder.Services.AddHostedService<MonitoringService>();
 builder.Services.AddSignalR();
 builder.Services.ConfigureHttpJsonOptions(options =>
     options.SerializerOptions.Converters.Add(new JsonStringEnumConverter(JsonNamingPolicy.CamelCase)));
@@ -194,8 +199,36 @@ api.MapDelete("/servers/{id:guid}", async (Guid id, ServerManager servers, Audit
 api.MapPost("/servers/{id:guid}/start", async (Guid id, ServerManager servers, ClaimsPrincipal user, JsonStore store) => { if (!await Can(user, store, id, "server.start")) return Results.Forbid(); await servers.StartAsync(id, Actor(user)); return Results.Accepted(); });
 api.MapPost("/servers/{id:guid}/stop", async (Guid id, ServerManager servers, ClaimsPrincipal user, JsonStore store) => { if (!await Can(user, store, id, "server.stop")) return Results.Forbid(); await servers.StopAsync(id, Actor(user)); return Results.Accepted(); });
 api.MapPost("/servers/{id:guid}/restart", async (Guid id, ServerManager servers, ClaimsPrincipal user, JsonStore store) => { if (!await Can(user, store, id, "server.restart")) return Results.Forbid(); await servers.RestartAsync(id, Actor(user)); return Results.Accepted(); });
+api.MapPost("/servers/{id:guid}/restart/countdown", async (Guid id, RestartCountdownRequest request, RestartCoordinator restarts, ClaimsPrincipal user, JsonStore store) =>
+{
+    if (!await Can(user, store, id, "server.restart")) return Results.Forbid();
+    return Results.Accepted(value: restarts.Schedule(id, request.Seconds, request.Message, Actor(user)));
+});
+api.MapGet("/servers/{id:guid}/restart/countdown", async (Guid id, RestartCoordinator restarts, ClaimsPrincipal user, JsonStore store) =>
+    !await Can(user, store, id, "view") ? Results.Forbid() : Results.Ok(restarts.Get(id)));
+api.MapDelete("/servers/{id:guid}/restart/countdown", async (Guid id, RestartCoordinator restarts, ClaimsPrincipal user, JsonStore store) =>
+{
+    if (!await Can(user, store, id, "server.restart")) return Results.Forbid();
+    return await restarts.CancelAsync(id, Actor(user)) ? Results.NoContent() : Results.NotFound();
+});
 api.MapPost("/servers/{id:guid}/kill", async (Guid id, ServerManager servers, ClaimsPrincipal user) => { await servers.StopAsync(id, Actor(user), true); return Results.Accepted(); }).RequireAuthorization("Owner");
 api.MapPost("/servers/{id:guid}/command", async (Guid id, CommandRequest request, ServerManager servers, ClaimsPrincipal user, JsonStore store) => { if (!await Can(user, store, id, "console")) return Results.Forbid(); await servers.CommandAsync(id, request.Command, Actor(user)); return Results.Accepted(); });
+api.MapGet("/servers/{id:guid}/console/history", async (Guid id, int? take, string? search, OperationsDataService operations, ClaimsPrincipal user, JsonStore store) =>
+    !await Can(user, store, id, "console") ? Results.Forbid()
+    : Results.Ok(await operations.ConsoleAsync(id, take ?? 1000, search)));
+api.MapGet("/servers/{id:guid}/console/download", async (Guid id, OperationsDataService operations, ClaimsPrincipal user, JsonStore store) =>
+{
+    if (!await Can(user, store, id, "console")) return Results.Forbid();
+    var entries = await operations.ConsoleAsync(id, 5000, null);
+    var text = string.Join(Environment.NewLine, entries.Select(x => $"[{x.At:O}] [{x.Stream}] {x.Line}"));
+    return Results.File(System.Text.Encoding.UTF8.GetBytes(text), "text/plain", $"console-{id}-{DateTime.UtcNow:yyyyMMdd-HHmmss}.log");
+});
+api.MapGet("/servers/{id:guid}/metrics", async (Guid id, int? hours, OperationsDataService operations, ClaimsPrincipal user, JsonStore store) =>
+    !await Can(user, store, id, "monitoring") ? Results.Forbid()
+    : Results.Ok(await operations.MetricsAsync(id, hours ?? 24)));
+api.MapGet("/servers/{id:guid}/incidents", async (Guid id, OperationsDataService operations, ClaimsPrincipal user, JsonStore store) =>
+    !await Can(user, store, id, "monitoring") ? Results.Forbid()
+    : Results.Ok(await operations.IncidentsAsync(id)));
 api.MapGet("/servers/{id:guid}/players", async (Guid id, BridgeStateService bridge, ClaimsPrincipal user, JsonStore store) =>
     !await Can(user, store, id, "players") ? Results.Forbid() : Results.Ok(bridge.Get(id)));
 api.MapGet("/servers/{id:guid}/bridge", async (Guid id, ServerManager servers, BridgeStateService bridge) =>
@@ -254,6 +287,23 @@ api.MapPost("/servers/{id:guid}/player-history/{playerId:guid}/notes", async (
     return await players.AddNoteAsync(id, playerId, request.Text, Actor(user)) is { } player
         ? Results.Ok(player) : Results.NotFound();
 });
+api.MapPost("/servers/{id:guid}/player-history/{playerId:guid}/actions", async (
+    Guid id, Guid playerId, PlayerActionRequest request, PlayerDataService players,
+    ClaimsPrincipal user, JsonStore store) =>
+{
+    if (!await Can(user, store, id, "players.manage")) return Results.Forbid();
+    var type = request.Type.Trim().ToLowerInvariant();
+    if (type is not ("warning" or "watchlist" or "allowlist" or "unmute"))
+        return Results.BadRequest(new { error = "Unsupported player action." });
+    return await players.AddActionAsync(id, playerId, type, request.Reason, Actor(user), request.DurationMinutes) is { } player
+        ? Results.Ok(player) : Results.NotFound();
+});
+api.MapDelete("/servers/{id:guid}/player-history", async (
+    Guid id, int? olderThanDays, PlayerDataService players, ClaimsPrincipal user, JsonStore store) =>
+{
+    if (!await Can(user, store, id, "maintenance")) return Results.Forbid();
+    return Results.Ok(new { removed = await players.CleanupAsync(id, olderThanDays ?? 365) });
+});
 
 api.MapGet("/servers/{id:guid}/files/{**path}", async (Guid id, string path, ServerManager servers, JsonStore store, ClaimsPrincipal user) =>
 {
@@ -301,7 +351,8 @@ api.MapGet("/schedules", (JsonStore store) => store.ReadAsync<ScheduleEntry>("sc
 api.MapPost("/schedules", async (ScheduleRequest request, JsonStore store, AuditService audit, ClaimsPrincipal user) =>
 {
     var schedules = await store.ReadAsync<ScheduleEntry>("schedules");
-    var item = new ScheduleEntry(Guid.NewGuid(), request.ServerId, request.Name, request.Cron, request.Action, request.Enabled, null);
+    var item = new ScheduleEntry(Guid.NewGuid(), request.ServerId, request.Name, request.Cron, request.Action,
+        request.Enabled, null, Math.Clamp(request.WarningSeconds, 0, 86400));
     schedules.Add(item);
     await store.WriteAsync("schedules", schedules);
     await audit.AddAsync(Actor(user), "schedule.create", item.Name, $"{item.Cron}: {item.Action}");
@@ -475,6 +526,37 @@ api.MapPut("/users/me/password", async (LoginRequest request, JsonStore store, P
     await audit.AddAsync(Actor(actor), "user.password", users[index].Username, "Password changed");
     return Results.NoContent();
 });
+api.MapGet("/servers/{id:guid}/backups", async (Guid id, OperationsDataService operations, ClaimsPrincipal user, JsonStore store) =>
+    !await Can(user, store, id, "maintenance") ? Results.Forbid()
+    : Results.Ok(await operations.BackupsAsync(id)));
+api.MapPost("/servers/{id:guid}/backups", async (Guid id, MaintenanceService maintenance, ClaimsPrincipal user, JsonStore store) =>
+{
+    if (!await Can(user, store, id, "maintenance")) return Results.Forbid();
+    return Results.Ok(await maintenance.BackupAsync(id, Actor(user)));
+});
+api.MapGet("/servers/{id:guid}/backups/{fileName}", async (Guid id, string fileName, OperationsDataService operations, ClaimsPrincipal user, JsonStore store) =>
+{
+    if (!await Can(user, store, id, "maintenance")) return Results.Forbid();
+    var path = operations.BackupPath(id, fileName);
+    return File.Exists(path) ? Results.File(path, "application/zip", Path.GetFileName(path)) : Results.NotFound();
+});
+api.MapPost("/servers/{id:guid}/update", async (Guid id, MaintenanceService maintenance, ClaimsPrincipal user, JsonStore store) =>
+{
+    if (!await Can(user, store, id, "maintenance")) return Results.Forbid();
+    return Results.Ok(new { output = await maintenance.UpdateAsync(id, Actor(user)) });
+});
+api.MapGet("/integrations", (NotificationService notifications) => notifications.GetAsync()).RequireAuthorization("Owner");
+api.MapPut("/integrations", async (PanelIntegrationSettings request, NotificationService notifications, AuditService audit, ClaimsPrincipal user) =>
+{
+    await notifications.SaveAsync(request);
+    await audit.AddAsync(Actor(user), "integrations.update", "Discord", "Notification settings changed");
+    return Results.NoContent();
+}).RequireAuthorization("Owner");
+api.MapPost("/integrations/discord/test", async (NotificationService notifications) =>
+{
+    await notifications.TestAsync();
+    return Results.NoContent();
+}).RequireAuthorization("Owner");
 
 app.MapHub<PanelHub>("/hub/panel");
 app.MapFallbackToFile("index.html");

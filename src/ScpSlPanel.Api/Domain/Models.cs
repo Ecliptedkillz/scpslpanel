@@ -24,7 +24,7 @@ public sealed record AuditEntry(
 
 public sealed record ScheduleEntry(
     Guid Id, Guid ServerId, string Name, string Cron, string Action, bool Enabled,
-    DateTimeOffset? LastRunAt);
+    DateTimeOffset? LastRunAt, int WarningSeconds = 0);
 
 public sealed record PanelUser(
     Guid Id, string Username, string PasswordHash, string Role, bool Enabled,
@@ -51,7 +51,8 @@ public sealed record ModerationRequest(string PlayerId, string? Reason, int? Dur
 public sealed record ConfigFileRequest(string Content);
 public sealed record PluginActionRequest(string Path, string Action);
 public sealed record PluginConfigRequest(string Path, string Content);
-public sealed record ScheduleRequest(Guid ServerId, string Name, string Cron, string Action, bool Enabled);
+public sealed record ScheduleRequest(
+    Guid ServerId, string Name, string Cron, string Action, bool Enabled, int WarningSeconds = 0);
 public sealed record BridgePlayerReport(int PlayerId, string DisplayName, string UserId, string IpAddress, string Role);
 public sealed record BridgeHeartbeat(string BridgeVersion, string ApiVersion, string RoundState, int MaxPlayers, IReadOnlyList<BridgePlayerReport> Players);
 public sealed record BridgeStatus(bool Connected, DateTimeOffset? LastSeenAt, string? BridgeVersion, string? ApiVersion, string? RoundState, int MaxPlayers, IReadOnlyList<PlayerInfo> Players);
@@ -65,3 +66,17 @@ public sealed record PlayerRecord(
     int Connections, IReadOnlyList<PlayerNameEntry> NameHistory,
     IReadOnlyList<PlayerModerationEntry> ModerationHistory, IReadOnlyList<PlayerNote> Notes);
 public sealed record PlayerNoteRequest(string Text);
+public sealed record PlayerActionRequest(string Type, string Reason, int? DurationMinutes);
+public sealed record MetricSample(
+    Guid ServerId, DateTimeOffset At, double CpuPercent, long MemoryBytes,
+    int Players, ServerState State, bool BridgeConnected);
+public sealed record ServerIncident(
+    Guid Id, Guid ServerId, DateTimeOffset At, string Type, string Message, int? ExitCode);
+public sealed record ConsoleLogEntry(DateTimeOffset At, string Stream, string Line);
+public sealed record PanelIntegrationSettings(
+    string DiscordWebhookUrl = "", bool NotifyCrash = true, bool NotifyRestart = true,
+    bool NotifyBridgeOffline = true, bool NotifyAdminActions = false);
+public sealed record BackupEntry(
+    Guid Id, Guid ServerId, DateTimeOffset CreatedAt, string FileName, long SizeBytes, string Actor);
+public sealed record RestartCountdownRequest(int Seconds, string? Message);
+public sealed record RestartCountdownStatus(Guid ServerId, DateTimeOffset DueAt, string Message, string Actor);
