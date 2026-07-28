@@ -7,11 +7,9 @@ echo.
 echo [1/2] Building the SCP Control web dashboard...
 pushd "src\scpsl-panel-web"
 
-if not exist "node_modules\" (
-    echo Installing web dependencies...
-    call npm.cmd install --no-audit --no-fund
-    if errorlevel 1 goto :error
-)
+echo Synchronizing web dependencies...
+call npm.cmd install --no-audit --no-fund
+if errorlevel 1 goto :error
 
 call npm.cmd run build
 if errorlevel 1 goto :error
