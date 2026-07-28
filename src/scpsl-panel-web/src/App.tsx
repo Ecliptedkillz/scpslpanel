@@ -723,13 +723,17 @@ function DiscordBotPanel({ servers, onError }: { servers: Server[]; onError: (e:
   const [settings,setSettings] = useState<IntegrationSettings | null>(null)
   const [status,setStatus] = useState<{enabled:boolean;connected:boolean;botName:string|null;error:string|null}|null>(null)
   const load = useCallback(() => Promise.all([
-    api<IntegrationSettings>('/integrations').then(setSettings),
+    api<IntegrationSettings>('/integrations').then(value=>setSettings({
+      ...defaultIntegration,
+      ...value,
+      discordRoleGrants:value.discordRoleGrants ?? [],
+    })),
     api<typeof status>('/integrations/discord/bot/status').then(setStatus),
   ]).catch(e => onError(e.message)), [onError])
   useEffect(() => { void load(); const timer=setInterval(load,10000); return () => clearInterval(timer) }, [load])
   if (!settings) return null
   const addGrant=()=>setSettings({...settings,discordRoleGrants:[...(settings.discordRoleGrants ?? []),{roleId:'',serverId:servers[0]?.id ?? '',permissions:['view']}]})
-  const updateGrant=(index:number,patch:Partial<IntegrationSettings['discordRoleGrants'][number]>)=>setSettings({...settings,discordRoleGrants:settings.discordRoleGrants.map((grant,i)=>i===index?{...grant,...patch}:grant)})
+  const updateGrant=(index:number,patch:Partial<IntegrationSettings['discordRoleGrants'][number]>)=>setSettings({...settings,discordRoleGrants:(settings.discordRoleGrants ?? []).map((grant,i)=>i===index?{...grant,...patch}:grant)})
   return <form className="panel settings-alerts discord-settings" onSubmit={async e => {
     e.preventDefault()
     try { await api('/integrations',{method:'PUT',body:JSON.stringify(settings)}); setTimeout(load,1200) }
@@ -741,11 +745,11 @@ function DiscordBotPanel({ servers, onError }: { servers: Server[]; onError: (e:
     <div className="form-row"><label>BOT TOKEN<input type="password" value={settings.discordBotToken} onChange={e=>setSettings({...settings,discordBotToken:e.target.value})}/></label><label>GUILD ID<input value={settings.discordGuildId} onChange={e=>setSettings({...settings,discordGuildId:e.target.value.trim()})}/></label><label>TECHNICAL CHANNEL ID<input value={settings.discordNotificationChannelId} onChange={e=>setSettings({...settings,discordNotificationChannelId:e.target.value.trim()})}/></label><label>MODERATION CHANNEL ID<input value={settings.discordModerationChannelId} onChange={e=>setSettings({...settings,discordModerationChannelId:e.target.value.trim()})}/></label><label>AUDIT CHANNEL ID<input value={settings.discordAuditChannelId} onChange={e=>setSettings({...settings,discordAuditChannelId:e.target.value.trim()})}/></label><label>FULL CONTROL ROLE IDS<input value={settings.discordControlRoleIds} onChange={e=>setSettings({...settings,discordControlRoleIds:e.target.value})} placeholder="123…, 456…"/></label><label>STEAM WEB API KEY<input type="password" value={settings.steamWebApiKey} onChange={e=>setSettings({...settings,steamWebApiKey:e.target.value})}/></label></div>
     <div className="form-row"><label className="check-row"><input type="checkbox" checked={settings.discordDailyReportEnabled} onChange={e=>setSettings({...settings,discordDailyReportEnabled:e.target.checked})}/> Send daily fleet report</label><label>REPORT HOUR (UTC)<input type="number" min={0} max={23} value={settings.discordDailyReportHourUtc} onChange={e=>setSettings({...settings,discordDailyReportHourUtc:Number(e.target.value)})}/></label></div>
     <div className="role-grant-editor"><div className="panel-head"><div><span className="eyebrow">PER-SERVER ACCESS</span><h3>Discord role permissions</h3></div><button type="button" onClick={addGrant}>ADD ROLE</button></div>
-      {settings.discordRoleGrants.map((grant,index)=><section className="role-grant-card" key={index}>
-        <div className="form-row"><label>ROLE ID<input value={grant.roleId} onChange={e=>updateGrant(index,{roleId:e.target.value.trim()})}/></label><label>SERVER<select value={grant.serverId} onChange={e=>updateGrant(index,{serverId:e.target.value})}>{servers.map(server=><option value={server.id} key={server.id}>{server.name}</option>)}</select></label><button type="button" className="danger" onClick={()=>setSettings({...settings,discordRoleGrants:settings.discordRoleGrants.filter((_,i)=>i!==index)})}>REMOVE</button></div>
-        <div className="permission-chip-grid">{discordPermissions.map(([value,label])=><label className="check-row" key={value}><input type="checkbox" checked={grant.permissions.includes(value)} onChange={()=>updateGrant(index,{permissions:grant.permissions.includes(value)?grant.permissions.filter(x=>x!==value):[...grant.permissions,value]})}/>{label}</label>)}</div>
+      {(settings.discordRoleGrants ?? []).map((grant,index)=><section className="role-grant-card" key={index}>
+        <div className="form-row"><label>ROLE ID<input value={grant.roleId} onChange={e=>updateGrant(index,{roleId:e.target.value.trim()})}/></label><label>SERVER<select value={grant.serverId} onChange={e=>updateGrant(index,{serverId:e.target.value})}>{servers.map(server=><option value={server.id} key={server.id}>{server.name}</option>)}</select></label><button type="button" className="danger" onClick={()=>setSettings({...settings,discordRoleGrants:(settings.discordRoleGrants ?? []).filter((_,i)=>i!==index)})}>REMOVE</button></div>
+        <div className="permission-chip-grid">{discordPermissions.map(([value,label])=>{const permissions=grant.permissions ?? [];return <label className="check-row" key={value}><input type="checkbox" checked={permissions.includes(value)} onChange={()=>updateGrant(index,{permissions:permissions.includes(value)?permissions.filter(x=>x!==value):[...permissions,value]})}/>{label}</label>})}</div>
       </section>)}
-      {!settings.discordRoleGrants.length && <p className="muted">No limited role grants. Add a role to give it specific permissions on one server.</p>}
+      {!(settings.discordRoleGrants?.length) && <p className="muted">No limited role grants. Add a role to give it specific permissions on one server.</p>}
     </div>
     <p>Commands: <code>/scp status</code>, <code>players</code>, <code>player</code>, <code>kick</code>, <code>mute</code>, <code>ban</code>, <code>start</code>, <code>stop</code>, <code>restart</code>, and <code>announce</code>. Stop, restart, and moderation commands require explicit confirmation.</p>
     <div className="button-row"><button className="primary">SAVE BOT SETTINGS</button><button type="button" onClick={async()=>{try{await api('/integrations/discord/bot/reconnect',{method:'POST'});setTimeout(load,1200)}catch(error){onError(error instanceof Error ? error.message : 'Unable to reconnect bot')}}}>RECONNECT BOT</button></div>
