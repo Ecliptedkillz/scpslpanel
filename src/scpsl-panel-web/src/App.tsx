@@ -8,7 +8,7 @@ import {
 import { api, ApiError } from './api'
 import type { AuditEntry, Ban, BridgeSetup, BridgeStatus, Overview, Player, Schedule, Server } from './types'
 
-type Page = 'overview' | 'servers' | 'server' | 'bans' | 'schedules' | 'audit' | 'settings'
+type Page = 'overview' | 'servers' | 'server' | 'bans' | 'schedules' | 'audit' | 'admins' | 'settings'
 type ServerTab = 'overview' | 'console' | 'players' | 'plugins' | 'files'
 type User = { username: string; role: string; serverIds: string[]; permissions: string[] }
 
@@ -18,12 +18,13 @@ const nav: { page: Page; label: string; icon: typeof LayoutDashboard }[] = [
   { page: 'bans', label: 'Ban Manager', icon: BanIcon },
   { page: 'schedules', label: 'Scheduler', icon: CalendarClock },
   { page: 'audit', label: 'Audit Log', icon: History },
+  { page: 'admins', label: 'Admin Manager', icon: Shield },
   { page: 'settings', label: 'Settings', icon: Settings },
 ]
 
 const fmtBytes = (bytes: number) => bytes ? `${(bytes / 1024 / 1024).toFixed(0)} MB` : '0 MB'
 const fmtState = (state: unknown) => typeof state === 'string' ? state.toUpperCase() : 'UNKNOWN'
-const topLevelPages = new Set<Page>(['overview', 'servers', 'bans', 'schedules', 'audit', 'settings'])
+const topLevelPages = new Set<Page>(['overview', 'servers', 'bans', 'schedules', 'audit', 'admins', 'settings'])
 const serverTabs = new Set<ServerTab>(['overview', 'console', 'players', 'plugins', 'files'])
 const readRoute = () => {
   const parts = window.location.pathname.split('/').filter(Boolean).map(decodeURIComponent)
@@ -130,7 +131,7 @@ function Panel({ user, onLogout }: { user: User; onLogout: () => void }) {
     return () => window.removeEventListener('popstate', onPopState)
   }, [])
   const servers = overview?.servers ?? []
-  const visibleNav = user.role === 'Owner' ? nav : nav.filter(item => !['bans', 'schedules', 'audit'].includes(item.page))
+  const visibleNav = user.role === 'Owner' ? nav : nav.filter(item => !['bans', 'schedules', 'audit', 'admins'].includes(item.page))
   const selectedServer = servers.find(server => server.id === selected)
   const navigatePage = (nextPage: Page) => {
     setPage(nextPage)
@@ -163,7 +164,8 @@ function Panel({ user, onLogout }: { user: User; onLogout: () => void }) {
         {page === 'bans' && <BansPage onError={setError}/>}
         {page === 'schedules' && <SchedulesPage servers={servers} onError={setError}/>}
         {page === 'audit' && <AuditPage/>}
-        {page === 'settings' && <SettingsPage user={user} servers={servers} onError={setError}/>}
+        {page === 'admins' && <AdminManagerPage user={user} servers={servers} onError={setError}/>}
+        {page === 'settings' && <SettingsPage/>}
       </div>
     </main>
   </div>
@@ -481,7 +483,7 @@ function AuditPage() {
   return <><PageTitle eyebrow="SECURITY RECORD" title="Audit log"/><Table headers={['TIME','ACTOR','ACTION','TARGET','DETAIL']}>{entries.map(x => <tr key={x.id}><td>{new Date(x.at).toLocaleString()}</td><td><strong>{x.actor}</strong></td><td><span className="tag">{x.action}</span></td><td>{x.target}</td><td>{x.detail}</td></tr>)}</Table>{!entries.length && <EmptyMini text="No activity recorded."/>}</>
 }
 
-function SettingsPage({ user, servers, onError }: { user: User; servers: Server[]; onError: (e: string) => void }) {
+function AdminManagerPage({ user, servers, onError }: { user: User; servers: Server[]; onError: (e: string) => void }) {
   type Account = { id: string; username: string; role: string; enabled: boolean; serverIds: string[]; permissions: string[] }
   const permissionOptions = [
     ['view', 'View server'], ['lifecycle', 'Start / stop / restart'], ['console', 'View console and execute commands'],
@@ -494,7 +496,7 @@ function SettingsPage({ user, servers, onError }: { user: User; servers: Server[
   const [busy, setBusy] = useState(false)
   const loadAccounts = () => { if (user.role === 'Owner') api<Account[]>('/users').then(setAccounts).catch(e => onError(e.message)) }
   useEffect(() => { loadAccounts() }, [])
-  if (user.role !== 'Owner') return <><PageTitle eyebrow="SYSTEM" title="Panel settings"/><section className="panel"><Shield size={22}/><h2>Your access</h2><p>Your account permissions are managed by the panel owner.</p></section></>
+  if (user.role !== 'Owner') return <><PageTitle eyebrow="ACCESS CONTROL" title="Admin Manager"/><section className="panel"><Shield size={22}/><h2>Owner access required</h2><p>Only the panel owner can manage administrator accounts.</p></section></>
   const toggle = (key: 'serverIds' | 'permissions', value: string) =>
     setForm({ ...form, [key]: form[key].includes(value) ? form[key].filter(x => x !== value) : [...form[key], value] })
   const edit = (account: Account) => setForm({ id: account.id, username: account.username, password: '', enabled: account.enabled, serverIds: account.serverIds, permissions: account.permissions })
@@ -506,10 +508,14 @@ function SettingsPage({ user, servers, onError }: { user: User; servers: Server[
     } catch (e) { onError(e instanceof Error ? e.message : 'Unable to save account') }
     finally { setBusy(false) }
   }
-  return <><PageTitle eyebrow="ACCESS CONTROL" title="Accounts and permissions"><button className="primary" onClick={() => setForm(blank)}><Plus size={15}/> NEW ACCOUNT</button></PageTitle>
+  return <><PageTitle eyebrow="ACCESS CONTROL" title={`Admin Manager · ${accounts.length}`}><button className="primary" onClick={() => setForm(blank)}><Plus size={15}/> ADD ADMIN</button></PageTitle>
     <section className="access-grid"><article className="panel"><div className="panel-head"><div><span className="eyebrow">PANEL USERS</span><h2>Accounts</h2></div></div><div className="account-list">{accounts.map(account => <button key={account.id} className={form.id === account.id ? 'active' : ''} onClick={() => account.role !== 'Owner' && edit(account)}><div className="avatar">{account.username.slice(0,2).toUpperCase()}</div><div><strong>{account.username}</strong><small>{account.role} · {account.enabled ? 'Enabled' : 'Disabled'} · {account.serverIds.length || 'All'} server(s)</small></div><ChevronRight size={15}/></button>)}</div></article>
     <form className="panel access-form" onSubmit={save}><div className="panel-head"><div><span className="eyebrow">{form.id ? 'EDIT OPERATOR' : 'NEW OPERATOR'}</span><h2>{form.id ? form.username : 'Create account'}</h2></div></div><div className="form-row"><label>USERNAME<input required value={form.username} onChange={e => setForm({...form, username:e.target.value})}/></label><label>{form.id ? 'NEW PASSWORD (OPTIONAL)' : 'PASSWORD'}<input required={!form.id} type="password" value={form.password} onChange={e => setForm({...form,password:e.target.value})}/></label></div><label className="check-row"><input type="checkbox" checked={form.enabled} onChange={e => setForm({...form,enabled:e.target.checked})}/> Account enabled</label><div className="access-section"><span className="eyebrow">SERVER ACCESS</span>{servers.map(server => <label className="check-row" key={server.id}><input type="checkbox" checked={form.serverIds.includes(server.id)} onChange={() => toggle('serverIds',server.id)}/>{server.name}</label>)}</div><div className="access-section"><span className="eyebrow">PERMISSIONS</span>{permissionOptions.map(([value,label]) => <label className="check-row" key={value}><input type="checkbox" checked={form.permissions.includes(value)} onChange={() => toggle('permissions',value)}/>{label}</label>)}</div><div className="account-actions">{form.id && <button type="button" className="danger" onClick={async () => { if (!confirm(`Delete ${form.username}?`)) return; await api(`/users/${form.id}`,{method:'DELETE'}); setForm(blank); loadAccounts() }}>DELETE</button>}<button className="primary" disabled={busy}><Save size={14}/> SAVE ACCOUNT</button></div></form></section>
   </>
+}
+
+function SettingsPage() {
+  return <><PageTitle eyebrow="SYSTEM" title="Panel settings"/><section className="settings-grid"><article className="panel"><FileCode2 size={22}/><h2>Configuration</h2><p>Panel settings live in <code>appsettings.json</code>. Environment variables can override production values.</p></article><article className="panel"><Shield size={22}/><h2>Security</h2><p>Use HTTPS before exposing the panel publicly and keep the owner password secure.</p></article><article className="panel"><Activity size={22}/><h2>Access control</h2><p>Administrators and their server permissions are managed in the dedicated Admin Manager tab.</p></article></section></>
 }
 
 function Table({ headers, children }: { headers: string[]; children: React.ReactNode }) {
