@@ -1,29 +1,40 @@
-import { FormEvent, useCallback, useEffect, useMemo, useState } from 'react'
+import { FormEvent, useCallback, useEffect, useState } from 'react'
 import {
-  Activity, Ban as BanIcon, CalendarClock, ChevronRight, CircleGauge, Command,
-  FileCode2, Gamepad2, History, LayoutDashboard, LogOut, Menu, Play, Plug,
+  Activity, ArrowLeft, Ban as BanIcon, CalendarClock, ChevronRight, CircleGauge, Command,
+  FileCode2, FolderOpen, Gamepad2, History, LayoutDashboard, LogOut, Menu, Play, Plug, Save,
   Plus, RefreshCw, RotateCcw, Server as ServerIcon, Settings, Shield,
   Square, Terminal, Users, X,
 } from 'lucide-react'
 import { api, ApiError } from './api'
 import type { AuditEntry, Ban, Overview, Schedule, Server } from './types'
 
-type Page = 'overview' | 'servers' | 'console' | 'players' | 'bans' | 'schedules' | 'plugins' | 'audit' | 'settings'
+type Page = 'overview' | 'servers' | 'server' | 'bans' | 'schedules' | 'audit' | 'settings'
+type ServerTab = 'overview' | 'console' | 'players' | 'plugins' | 'files'
 type User = { username: string; role: string }
 
 const nav: { page: Page; label: string; icon: typeof LayoutDashboard }[] = [
   { page: 'overview', label: 'Overview', icon: LayoutDashboard },
   { page: 'servers', label: 'Servers', icon: ServerIcon },
-  { page: 'console', label: 'Live Console', icon: Terminal },
-  { page: 'players', label: 'Players', icon: Users },
   { page: 'bans', label: 'Ban Manager', icon: BanIcon },
   { page: 'schedules', label: 'Scheduler', icon: CalendarClock },
-  { page: 'plugins', label: 'Plugins', icon: Plug },
   { page: 'audit', label: 'Audit Log', icon: History },
   { page: 'settings', label: 'Settings', icon: Settings },
 ]
 
 const fmtBytes = (bytes: number) => bytes ? `${(bytes / 1024 / 1024).toFixed(0)} MB` : '0 MB'
+const fmtState = (state: unknown) => typeof state === 'string' ? state.toUpperCase() : 'UNKNOWN'
+const topLevelPages = new Set<Page>(['overview', 'servers', 'bans', 'schedules', 'audit', 'settings'])
+const serverTabs = new Set<ServerTab>(['overview', 'console', 'players', 'plugins', 'files'])
+const readRoute = () => {
+  const parts = window.location.pathname.split('/').filter(Boolean).map(decodeURIComponent)
+  if (parts.length >= 2 && serverTabs.has(parts[1] as ServerTab))
+    return { page: 'server' as Page, serverId: parts[0], tab: parts[1] as ServerTab }
+  if (parts[0] && topLevelPages.has(parts[0] as Page))
+    return { page: parts[0] as Page, serverId: null, tab: 'overview' as ServerTab }
+  return { page: 'overview' as Page, serverId: null, tab: 'overview' as ServerTab }
+}
+const topLevelPath = (page: Page) => page === 'overview' ? '/' : `/${page}`
+const serverPath = (serverId: string, tab: ServerTab) => `/${encodeURIComponent(serverId)}/${tab}`
 const fmtAgo = (value: string) => {
   const seconds = Math.max(0, Math.floor((Date.now() - new Date(value).getTime()) / 1000))
   if (seconds < 60) return `${seconds}s ago`
@@ -71,9 +82,11 @@ function Login({ onLogin }: { onLogin: (user: User) => void }) {
 }
 
 function Panel({ user, onLogout }: { user: User; onLogout: () => void }) {
-  const [page, setPage] = useState<Page>('overview')
+  const initialRoute = readRoute()
+  const [page, setPage] = useState<Page>(initialRoute.page)
   const [overview, setOverview] = useState<Overview | null>(null)
-  const [selected, setSelected] = useState<string | null>(null)
+  const [selected, setSelected] = useState<string | null>(initialRoute.serverId)
+  const [serverTab, setServerTab] = useState<ServerTab>(initialRoute.tab)
   const [drawer, setDrawer] = useState(false)
   const [error, setError] = useState('')
 
@@ -88,26 +101,48 @@ function Panel({ user, onLogout }: { user: User; onLogout: () => void }) {
     }
   }, [onLogout, selected])
   useEffect(() => { load(); const timer = setInterval(load, 5000); return () => clearInterval(timer) }, [load])
+  useEffect(() => {
+    const onPopState = () => {
+      const route = readRoute()
+      setPage(route.page)
+      setSelected(route.serverId)
+      setServerTab(route.tab)
+    }
+    window.addEventListener('popstate', onPopState)
+    return () => window.removeEventListener('popstate', onPopState)
+  }, [])
   const servers = overview?.servers ?? []
+  const selectedServer = servers.find(server => server.id === selected)
+  const navigatePage = (nextPage: Page) => {
+    setPage(nextPage)
+    window.history.pushState({}, '', topLevelPath(nextPage))
+  }
+  const openServer = (id: string, tab: ServerTab = 'overview') => {
+    setSelected(id); setServerTab(tab); setPage('server')
+    window.history.pushState({}, '', serverPath(id, tab))
+  }
+  const navigateServerTab = (tab: ServerTab) => {
+    if (!selected) return
+    setServerTab(tab)
+    window.history.pushState({}, '', serverPath(selected, tab))
+  }
 
   const logout = async () => { await api('/auth/logout', { method: 'POST' }).catch(() => {}); onLogout() }
   return <div className="app-shell">
     <aside className={drawer ? 'open' : ''}>
       <div className="brand"><div className="brand-mark"><Shield size={24}/></div><div><strong>SCP CONTROL</strong><span>ADMINISTRATION</span></div></div>
-      <nav>{nav.map(item => <button key={item.page} className={page === item.page ? 'active' : ''} onClick={() => { setPage(item.page); setDrawer(false) }}><item.icon size={18}/>{item.label}</button>)}</nav>
+      <nav>{nav.map(item => <button key={item.page} className={page === item.page ? 'active' : ''} onClick={() => { navigatePage(item.page); setDrawer(false) }}><item.icon size={18}/>{item.label}</button>)}</nav>
       <div className="aside-bottom"><div className="system-line"><span className="status-dot"/>System operational</div><div className="profile"><div className="avatar">{user.username.slice(0, 2).toUpperCase()}</div><div><strong>{user.username}</strong><span>{user.role}</span></div><button onClick={logout} title="Log out"><LogOut size={17}/></button></div></div>
     </aside>
     <main className="workspace">
-      <header><button className="mobile-menu" onClick={() => setDrawer(!drawer)}>{drawer ? <X/> : <Menu/>}</button><div><span className="crumb">SCP CONTROL / </span>{nav.find(x => x.page === page)?.label.toUpperCase()}</div><div className="header-right"><span className="live-pill"><span className="status-dot"/> LIVE</span><button className="icon-button" onClick={load}><RefreshCw size={17}/></button></div></header>
+      <header><button className="mobile-menu" onClick={() => setDrawer(!drawer)}>{drawer ? <X/> : <Menu/>}</button><div><span className="crumb">SCP CONTROL / </span>{page === 'server' ? selectedServer?.name.toUpperCase() ?? 'SERVER' : nav.find(x => x.page === page)?.label.toUpperCase()}</div><div className="header-right"><span className="live-pill"><span className="status-dot"/> LIVE</span><button className="icon-button" onClick={load}><RefreshCw size={17}/></button></div></header>
       {error && <div className="toast error">{error}<button onClick={() => setError('')}><X size={15}/></button></div>}
       <div className="content">
-        {page === 'overview' && <OverviewPage data={overview} setPage={setPage} setSelected={setSelected}/>}
-        {page === 'servers' && <ServersPage servers={servers} refresh={load} setPage={setPage} setSelected={setSelected} onError={setError}/>}
-        {page === 'console' && <ConsolePage servers={servers} selected={selected} setSelected={setSelected} onError={setError}/>}
-        {page === 'players' && <EmptyPage icon={Users} title="Player intelligence" text="Live players appear when the SCP:SL query bridge is connected."/>}
+        {page === 'overview' && <OverviewPage data={overview} navigatePage={navigatePage} openServer={openServer}/>}
+        {page === 'servers' && <ServersPage servers={servers} refresh={load} openServer={openServer} onError={setError}/>}
+        {page === 'server' && <ServerWorkspace server={selectedServer} tab={serverTab} setTab={navigateServerTab} refresh={load} back={() => navigatePage('servers')} onError={setError}/>}
         {page === 'bans' && <BansPage onError={setError}/>}
         {page === 'schedules' && <SchedulesPage servers={servers} onError={setError}/>}
-        {page === 'plugins' && <PluginsPage servers={servers} selected={selected} setSelected={setSelected}/>}
         {page === 'audit' && <AuditPage/>}
         {page === 'settings' && <SettingsPage/>}
       </div>
@@ -119,7 +154,7 @@ function PageTitle({ eyebrow, title, children }: { eyebrow: string; title: strin
   return <div className="page-title"><div><span className="eyebrow">{eyebrow}</span><h1>{title}</h1></div>{children && <div className="actions">{children}</div>}</div>
 }
 
-function OverviewPage({ data, setPage, setSelected }: { data: Overview | null; setPage: (p: Page) => void; setSelected: (id: string) => void }) {
+function OverviewPage({ data, navigatePage, openServer }: { data: Overview | null; navigatePage: (p: Page) => void; openServer: (id: string) => void }) {
   if (!data) return <Skeleton/>
   const cards = [
     { label: 'SERVERS ONLINE', value: `${data.serversOnline}/${data.serversTotal}`, sub: data.serversTotal ? 'Fleet availability' : 'Add your first server', icon: ServerIcon },
@@ -128,26 +163,26 @@ function OverviewPage({ data, setPage, setSelected }: { data: Overview | null; s
     { label: 'FACILITY STATUS', value: data.serversOnline ? 'ACTIVE' : 'STANDBY', sub: 'Control plane healthy', icon: CircleGauge },
   ]
   return <>
-    <PageTitle eyebrow="FACILITY COMMAND" title="Operations overview"><button className="primary" onClick={() => setPage('servers')}><Plus size={16}/> ADD SERVER</button></PageTitle>
+    <PageTitle eyebrow="FACILITY COMMAND" title="Operations overview"><button className="primary" onClick={() => navigatePage('servers')}><Plus size={16}/> ADD SERVER</button></PageTitle>
     <section className="stat-grid">{cards.map(card => <article className="stat-card" key={card.label}><div className="card-top"><span>{card.label}</span><card.icon size={19}/></div><strong>{card.value}</strong><small>{card.sub}</small></article>)}</section>
     <section className="split-grid">
       <article className="panel">
-        <div className="panel-head"><div><span className="eyebrow">INFRASTRUCTURE</span><h2>Server fleet</h2></div><button className="text-button" onClick={() => setPage('servers')}>VIEW ALL <ChevronRight size={15}/></button></div>
+        <div className="panel-head"><div><span className="eyebrow">INFRASTRUCTURE</span><h2>Server fleet</h2></div><button className="text-button" onClick={() => navigatePage('servers')}>VIEW ALL <ChevronRight size={15}/></button></div>
         {data.servers.length ? <div className="server-list">{data.servers.slice(0, 5).map(server =>
-          <button className="server-row" key={server.id} onClick={() => { setSelected(server.id); setPage('console') }}>
+          <button className="server-row" key={server.id} onClick={() => openServer(server.id)}>
             <span className={`server-state ${server.state}`}><Gamepad2 size={19}/></span><span className="server-name"><strong>{server.name}</strong><small>PID {server.processId ?? '—'} • {server.players}/{server.maxPlayers || '—'} players</small></span>
             <span className={`state-label ${server.state}`}><span/> {server.state}</span><span>{server.cpuPercent}% CPU</span><span>{fmtBytes(server.memoryBytes)}</span><ChevronRight size={16}/>
           </button>)}</div> : <EmptyMini text="No servers configured yet."/>}
       </article>
       <article className="panel">
-        <div className="panel-head"><div><span className="eyebrow">SECURITY RECORD</span><h2>Recent activity</h2></div><button className="text-button" onClick={() => setPage('audit')}>AUDIT LOG <ChevronRight size={15}/></button></div>
+        <div className="panel-head"><div><span className="eyebrow">SECURITY RECORD</span><h2>Recent activity</h2></div><button className="text-button" onClick={() => navigatePage('audit')}>AUDIT LOG <ChevronRight size={15}/></button></div>
         {data.recentActivity.length ? <div className="activity-list">{data.recentActivity.slice(0, 6).map(entry => <div className="activity-row" key={entry.id}><div className="event-icon"><Command size={16}/></div><div><strong>{entry.action}</strong><p>{entry.actor} · {entry.target}</p></div><time>{fmtAgo(entry.at)}</time></div>)}</div> : <EmptyMini text="Activity will appear here."/>}
       </article>
     </section>
   </>
 }
 
-function ServersPage({ servers, refresh, setPage, setSelected, onError }: { servers: Server[]; refresh: () => void; setPage: (p: Page) => void; setSelected: (id: string) => void; onError: (e: string) => void }) {
+function ServersPage({ servers, refresh, openServer, onError }: { servers: Server[]; refresh: () => void; openServer: (id: string) => void; onError: (e: string) => void }) {
   const [modal, setModal] = useState(false)
   const action = async (id: string, name: string) => {
     try { await api(`/servers/${id}/${name}`, { method: 'POST' }); setTimeout(refresh, 600) }
@@ -156,7 +191,7 @@ function ServersPage({ servers, refresh, setPage, setSelected, onError }: { serv
   return <>
     <PageTitle eyebrow="INFRASTRUCTURE" title="Server fleet"><button className="primary" onClick={() => setModal(true)}><Plus size={16}/> REGISTER SERVER</button></PageTitle>
     <div className="server-cards">{servers.map(server => <article className="server-card" key={server.id}>
-      <div className="server-card-head"><div className={`server-state ${server.state}`}><Gamepad2/></div><div><h2>{server.name}</h2><span className={`state-label ${server.state}`}><span/> {server.state}</span></div><button className="icon-button" onClick={() => { setSelected(server.id); setPage('console') }}><Terminal size={18}/></button></div>
+      <div className="server-card-head"><div className={`server-state ${server.state}`}><Gamepad2/></div><div><h2>{server.name}</h2><span className={`state-label ${server.state}`}><span/> {server.state}</span></div><button className="manage-button" onClick={() => openServer(server.id)}>MANAGE <ChevronRight size={15}/></button></div>
       <div className="metric-strip"><div><span>PROCESS</span><strong>{server.processId ?? '—'}</strong></div><div><span>CPU</span><strong>{server.cpuPercent}%</strong></div><div><span>MEMORY</span><strong>{fmtBytes(server.memoryBytes)}</strong></div><div><span>PLAYERS</span><strong>{server.players}/{server.maxPlayers || '—'}</strong></div></div>
       {server.lastError && <p className="error">{server.lastError}</p>}
       <div className="server-actions"><button disabled={server.state === 'online'} onClick={() => action(server.id, 'start')}><Play size={15}/> START</button><button disabled={server.state === 'offline'} onClick={() => action(server.id, 'restart')}><RotateCcw size={15}/> RESTART</button><button disabled={server.state === 'offline'} className="danger" onClick={() => action(server.id, 'stop')}><Square size={14}/> STOP</button></div>
@@ -183,7 +218,100 @@ function AddServerModal({ close, saved, onError }: { close: () => void; saved: (
   </form></div>
 }
 
-function ConsolePage({ servers, selected, setSelected, onError }: { servers: Server[]; selected: string | null; setSelected: (id: string) => void; onError: (e: string) => void }) {
+function ServerWorkspace({ server, tab, setTab, refresh, back, onError }: { server?: Server; tab: ServerTab; setTab: (tab: ServerTab) => void; refresh: () => void; back: () => void; onError: (e: string) => void }) {
+  if (!server) return <EmptyPage icon={ServerIcon} title="Server not found" text="The selected server was removed or is no longer available."><button onClick={back}>BACK TO SERVERS</button></EmptyPage>
+  const action = async (name: string) => {
+    try { await api(`/servers/${server.id}/${name}`, { method: 'POST' }); setTimeout(refresh, 500) }
+    catch (error) { onError(error instanceof Error ? error.message : 'Server action failed') }
+  }
+  const tabs: { id: ServerTab; label: string; icon: typeof LayoutDashboard }[] = [
+    { id: 'overview', label: 'Overview', icon: LayoutDashboard },
+    { id: 'console', label: 'Console', icon: Terminal },
+    { id: 'players', label: 'Players', icon: Users },
+    { id: 'plugins', label: 'Plugins', icon: Plug },
+    { id: 'files', label: 'Files & Config', icon: FolderOpen },
+  ]
+  return <>
+    <button className="back-button" onClick={back}><ArrowLeft size={15}/> ALL SERVERS</button>
+    <section className="server-hero">
+      <div className={`server-state ${server.state}`}><Gamepad2 size={25}/></div>
+      <div><span className="eyebrow">MANAGED INSTANCE</span><h1>{server.name}</h1><span className={`state-label ${server.state}`}><span/> {fmtState(server.state)}</span></div>
+      <div className="server-hero-actions">
+        <button disabled={server.state === 'online'} onClick={() => action('start')}><Play size={15}/> START</button>
+        <button disabled={server.state === 'offline'} onClick={() => action('restart')}><RotateCcw size={15}/> RESTART</button>
+        <button disabled={server.state === 'offline'} className="danger" onClick={() => action('stop')}><Square size={14}/> STOP</button>
+      </div>
+    </section>
+    <div className="server-tabs">{tabs.map(item => <button key={item.id} className={tab === item.id ? 'active' : ''} onClick={() => setTab(item.id)}><item.icon size={16}/>{item.label}</button>)}</div>
+    <div className="server-tab-content">
+      {tab === 'overview' && <ServerOverview server={server} setTab={setTab}/>}
+      {tab === 'console' && <ConsolePage servers={[server]} selected={server.id} setSelected={() => {}} onError={onError} embedded/>}
+      {tab === 'players' && <ServerPlayers server={server}/>}
+      {tab === 'plugins' && <PluginsPage servers={[server]} selected={server.id} setSelected={() => {}} embedded/>}
+      {tab === 'files' && <ServerFiles server={server} onError={onError}/>}
+    </div>
+  </>
+}
+
+function ServerOverview({ server, setTab }: { server: Server; setTab: (tab: ServerTab) => void }) {
+  const uptime = server.startedAt ? fmtAgo(server.startedAt).replace(' ago', '') : 'Not running'
+  return <section className="server-overview-grid">
+    <div className="stat-grid server-stats">
+      <article className="stat-card"><div className="card-top"><span>PROCESS ID</span><Activity size={18}/></div><strong>{server.processId ?? '—'}</strong><small>{fmtState(server.state)}</small></article>
+      <article className="stat-card"><div className="card-top"><span>PLAYERS</span><Users size={18}/></div><strong>{server.players}/{server.maxPlayers || '—'}</strong><small>Current population</small></article>
+      <article className="stat-card"><div className="card-top"><span>CPU / MEMORY</span><CircleGauge size={18}/></div><strong>{server.cpuPercent}%</strong><small>{fmtBytes(server.memoryBytes)} memory</small></article>
+      <article className="stat-card"><div className="card-top"><span>UPTIME</span><History size={18}/></div><strong>{uptime}</strong><small>{server.startedAt ? new Date(server.startedAt).toLocaleString() : 'Offline'}</small></article>
+    </div>
+    <div className="quick-grid">
+      <button onClick={() => setTab('console')}><Terminal/><div><strong>Live console</strong><span>Watch output and run commands</span></div><ChevronRight/></button>
+      <button onClick={() => setTab('players')}><Users/><div><strong>Players</strong><span>View connected players and moderation</span></div><ChevronRight/></button>
+      <button onClick={() => setTab('plugins')}><Plug/><div><strong>Plugins</strong><span>Inspect EXILED and NWAPI assemblies</span></div><ChevronRight/></button>
+      <button onClick={() => setTab('files')}><FileCode2/><div><strong>Files & configuration</strong><span>Open and edit files below the server directory</span></div><ChevronRight/></button>
+    </div>
+    {server.lastError && <div className="server-alert"><strong>LAST ERROR</strong><span>{server.lastError}</span></div>}
+  </section>
+}
+
+function ServerPlayers({ server }: { server: Server }) {
+  return <section className="integration-empty">
+    <div className="empty-icon"><Users size={28}/></div>
+    <span className="eyebrow">PLAYER BRIDGE REQUIRED</span>
+    <h2>No live player feed connected for {server.name}</h2>
+    <p>Process control is working, but SCP:SL does not send player identities through standard console output. Install the panel's EXILED/NWAPI bridge on this instance to enable the player list, roles, kick, mute, warn, and ban actions.</p>
+    <div className="integration-checks"><span className={server.state === 'online' ? 'ok' : ''}><i/>{server.state === 'online' ? 'Server process online' : 'Start the server process'}</span><span><i/>Install game-server bridge</span><span><i/>Configure bridge token and port</span></div>
+  </section>
+}
+
+function ServerFiles({ server, onError }: { server: Server; onError: (error: string) => void }) {
+  const [path, setPath] = useState('config_gameplay.txt')
+  const [content, setContent] = useState('')
+  const [loadedPath, setLoadedPath] = useState('')
+  const [busy, setBusy] = useState(false)
+  const open = async () => {
+    setBusy(true)
+    try {
+      const response = await fetch(`/api/servers/${server.id}/files/${path.split('/').map(encodeURIComponent).join('/')}`, { credentials: 'include' })
+      if (!response.ok) throw new Error(response.status === 404 ? 'File not found below the registered server directory.' : `Unable to open file (${response.status}).`)
+      setContent(await response.text()); setLoadedPath(path)
+    } catch (error) { onError(error instanceof Error ? error.message : 'Unable to open file') }
+    finally { setBusy(false) }
+  }
+  const save = async () => {
+    if (!loadedPath) return
+    setBusy(true)
+    try {
+      await api(`/servers/${server.id}/files/${loadedPath.split('/').map(encodeURIComponent).join('/')}`, { method: 'PUT', body: JSON.stringify({ content }) })
+    } catch (error) { onError(error instanceof Error ? error.message : 'Unable to save file') }
+    finally { setBusy(false) }
+  }
+  return <section className="file-editor">
+    <div className="file-toolbar"><div><label>PATH BELOW SERVER DIRECTORY<input value={path} onChange={event => setPath(event.target.value)} onKeyDown={event => { if (event.key === 'Enter') void open() }}/></label></div><button onClick={open} disabled={!path || busy}><FolderOpen size={15}/> OPEN</button><button className="primary" onClick={save} disabled={!loadedPath || busy}><Save size={15}/> SAVE</button></div>
+    <div className="file-context">{loadedPath ? `Editing ${loadedPath}` : 'Enter a relative configuration path, then choose Open.'}</div>
+    <textarea className="code-editor" value={content} onChange={event => setContent(event.target.value)} spellCheck={false} placeholder="File contents will appear here…"/>
+  </section>
+}
+
+function ConsolePage({ servers, selected, setSelected, onError, embedded = false }: { servers: Server[]; selected: string | null; setSelected: (id: string) => void; onError: (e: string) => void; embedded?: boolean }) {
   const [lines, setLines] = useState<{ at: string; stream: string; line: string }[]>([])
   const [command, setCommand] = useState('')
   const server = servers.find(x => x.id === selected)
@@ -205,8 +333,8 @@ function ConsolePage({ servers, selected, setSelected, onError }: { servers: Ser
     return () => { disposed = true; connection?.stop() }
   }, [selected])
   return <>
-    <PageTitle eyebrow="REAL-TIME OPERATIONS" title="Live console"><select value={selected ?? ''} onChange={e => { setSelected(e.target.value); setLines([]) }}><option value="">Select server</option>{servers.map(x => <option key={x.id} value={x.id}>{x.name}</option>)}</select></PageTitle>
-    <section className="console-panel"><div className="console-toolbar"><div><span className={`status-dot ${server?.state !== 'online' ? 'off' : ''}`}/>{server?.name ?? 'NO SERVER SELECTED'} <small>{server?.state.toUpperCase()}</small></div><button onClick={() => setLines([])}>CLEAR</button></div>
+    {!embedded && <PageTitle eyebrow="REAL-TIME OPERATIONS" title="Live console"><select value={selected ?? ''} onChange={e => { setSelected(e.target.value); setLines([]) }}><option value="">Select server</option>{servers.map(x => <option key={x.id} value={x.id}>{x.name}</option>)}</select></PageTitle>}
+    <section className="console-panel"><div className="console-toolbar"><div><span className={`status-dot ${server?.state !== 'online' ? 'off' : ''}`}/>{server?.name ?? 'NO SERVER SELECTED'} <small>{fmtState(server?.state)}</small></div><button onClick={() => setLines([])}>CLEAR</button></div>
       <div className="console-output">{lines.length ? lines.map((line, i) => <div key={i} className={line.stream}><time>{new Date(line.at).toLocaleTimeString()}</time><span>{line.line}</span></div>) : <div className="console-placeholder"><Terminal size={28}/><span>Console output will stream here.</span></div>}</div>
       <form className="command-line" onSubmit={submit}><span>RA &gt;</span><input disabled={!server || server.state !== 'online'} value={command} onChange={e => setCommand(e.target.value)} placeholder={server?.state === 'online' ? 'Enter server command…' : 'Server is offline'}/><button disabled={!command.trim()}>EXECUTE</button></form>
     </section>
@@ -241,10 +369,10 @@ function SchedulesPage({ servers, onError }: { servers: Server[]; onError: (e: s
   </>
 }
 
-function PluginsPage({ servers, selected, setSelected }: { servers: Server[]; selected: string | null; setSelected: (id: string) => void }) {
+function PluginsPage({ servers, selected, setSelected, embedded = false }: { servers: Server[]; selected: string | null; setSelected: (id: string) => void; embedded?: boolean }) {
   const [plugins, setPlugins] = useState<{ name: string; version: string; framework: string; path: string }[]>([])
   useEffect(() => { if (selected) api<typeof plugins>(`/plugins/${selected}`).then(setPlugins).catch(() => setPlugins([])) }, [selected])
-  return <><PageTitle eyebrow="EXTENSIONS" title="Plugin inventory"><select value={selected ?? ''} onChange={e => setSelected(e.target.value)}><option value="">Select server</option>{servers.map(x => <option value={x.id} key={x.id}>{x.name}</option>)}</select></PageTitle>
+  return <>{!embedded && <PageTitle eyebrow="EXTENSIONS" title="Plugin inventory"><select value={selected ?? ''} onChange={e => setSelected(e.target.value)}><option value="">Select server</option>{servers.map(x => <option value={x.id} key={x.id}>{x.name}</option>)}</select></PageTitle>}
     <Table headers={['PLUGIN','FRAMEWORK','VERSION','LOCATION']}>{plugins.map(x => <tr key={x.path}><td><strong>{x.name}</strong></td><td><span className="tag">{x.framework}</span></td><td>{x.version}</td><td className="mono">{x.path}</td></tr>)}</Table>{!plugins.length && <EmptyPage icon={Plug} title="No plugins detected" text="EXILED and NWAPI plugin folders are scanned automatically."/>}
   </>
 }

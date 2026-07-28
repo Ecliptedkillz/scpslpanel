@@ -27,6 +27,14 @@ The process manager and API are ready for that adapter without changing the dash
 
 Requirements: .NET 9 SDK and Node.js 22 or later.
 
+On Windows, run `build.bat` once to build the frontend and backend, then use `start.bat`
+to listen on port 5080 on every network interface.
+
+Repository helpers are also included:
+
+- `git-update.bat` reviews local changes, asks for a commit message, and pushes the current branch.
+- `git-pull.bat` safely pulls the current branch with fast-forward-only behavior.
+
 ```powershell
 cd src\scpsl-panel-web
 npm install
