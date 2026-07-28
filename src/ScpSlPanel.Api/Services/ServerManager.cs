@@ -147,12 +147,21 @@ public sealed class ServerManager(
                 throw new InvalidOperationException("The server is still stopping. Try again in a moment.");
             if (runtime.Process is { HasExited: false }) throw new InvalidOperationException("Server is already running.");
             if (!File.Exists(definition.ExecutablePath)) throw new FileNotFoundException("Server executable was not found.", definition.ExecutablePath);
+            var isLocalAdmin = Path.GetFileNameWithoutExtension(definition.ExecutablePath)
+                .Equals("LocalAdmin", StringComparison.OrdinalIgnoreCase);
+            if (isLocalAdmin && !File.Exists(Path.Combine(definition.WorkingDirectory, "SCPSL.exe")))
+                throw new FileNotFoundException(
+                    "LocalAdmin must use the dedicated server folder containing SCPSL.exe as its working directory.",
+                    Path.Combine(definition.WorkingDirectory, "SCPSL.exe"));
+            var arguments = isLocalAdmin && string.IsNullOrWhiteSpace(definition.Arguments)
+                ? definition.QueryPort.ToString(System.Globalization.CultureInfo.InvariantCulture)
+                : definition.Arguments;
             runtime.State = ServerState.Starting;
             runtime.LastError = null;
             var start = new ProcessStartInfo
             {
                 FileName = definition.ExecutablePath,
-                Arguments = definition.Arguments,
+                Arguments = arguments,
                 WorkingDirectory = definition.WorkingDirectory,
                 UseShellExecute = false,
                 RedirectStandardInput = true,
