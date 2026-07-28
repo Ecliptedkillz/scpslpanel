@@ -15,6 +15,15 @@ if not exist "%SCPSL_MANAGED%\LabApi.dll" (
     exit /b 1
 )
 
+if not exist "%SCPSL_MANAGED%\Mirror.dll" (
+    echo.
+    echo Mirror.dll was not found in:
+    echo %SCPSL_MANAGED%
+    echo Confirm this is the live SCP Secret Laboratory\SCPSL_Data\Managed folder.
+    pause
+    exit /b 1
+)
+
 dotnet build "src\ScpSlPanel.LabApiBridge\ScpSlPanel.LabApiBridge.csproj" -c Release -p:ScpSlManagedPath="%SCPSL_MANAGED%"
 if errorlevel 1 (
     echo.
