@@ -136,9 +136,11 @@ static async Task<bool> Can(ClaimsPrincipal principal, JsonStore store, Guid ser
     var permissions = grant?.Permissions ?? account?.Permissions ?? [];
     var legacyLifecycle = permission is "server.start" or "server.stop" or "server.restart"
         && permissions.Contains("lifecycle", StringComparer.OrdinalIgnoreCase);
+    var legacyConsole = permission is "console.view" or "console.write"
+        && permissions.Contains("console", StringComparer.OrdinalIgnoreCase);
     return account is not null && (account.Role == "Owner"
         || ((grant is not null || (account.ServerIds?.Contains(serverId) ?? false))
-            && (permissions.Contains(permission, StringComparer.OrdinalIgnoreCase) || legacyLifecycle)));
+            && (permissions.Contains(permission, StringComparer.OrdinalIgnoreCase) || legacyLifecycle || legacyConsole)));
 }
 
 app.MapPost("/api/auth/login", async (LoginRequest request, JsonStore store, PasswordService passwords, HttpContext context) =>
@@ -252,13 +254,13 @@ api.MapDelete("/servers/{id:guid}/restart/countdown", async (Guid id, RestartCoo
     return await restarts.CancelAsync(id, Actor(user)) ? Results.NoContent() : Results.NotFound();
 });
 api.MapPost("/servers/{id:guid}/kill", async (Guid id, ServerManager servers, ClaimsPrincipal user) => { await servers.StopAsync(id, Actor(user), true); return Results.Accepted(); }).RequireAuthorization("Owner");
-api.MapPost("/servers/{id:guid}/command", async (Guid id, CommandRequest request, ServerManager servers, ClaimsPrincipal user, JsonStore store) => { if (!await Can(user, store, id, "console")) return Results.Forbid(); await servers.CommandAsync(id, request.Command, Actor(user)); return Results.Accepted(); });
+api.MapPost("/servers/{id:guid}/command", async (Guid id, CommandRequest request, ServerManager servers, ClaimsPrincipal user, JsonStore store) => { if (!await Can(user, store, id, "console.write")) return Results.Forbid(); await servers.CommandAsync(id, request.Command, Actor(user)); return Results.Accepted(); });
 api.MapGet("/servers/{id:guid}/console/history", async (Guid id, int? take, string? search, OperationsDataService operations, ClaimsPrincipal user, JsonStore store) =>
-    !await Can(user, store, id, "console") ? Results.Forbid()
+    !await Can(user, store, id, "console.view") ? Results.Forbid()
     : Results.Ok(await operations.ConsoleAsync(id, take ?? 1000, search)));
 api.MapGet("/servers/{id:guid}/console/download", async (Guid id, OperationsDataService operations, ClaimsPrincipal user, JsonStore store) =>
 {
-    if (!await Can(user, store, id, "console")) return Results.Forbid();
+    if (!await Can(user, store, id, "console.view")) return Results.Forbid();
     var entries = await operations.ConsoleAsync(id, 5000, null);
     var text = string.Join(Environment.NewLine, entries.Select(x => $"[{x.At:O}] [{x.Stream}] {x.Line}"));
     return Results.File(System.Text.Encoding.UTF8.GetBytes(text), "text/plain", $"console-{id}-{DateTime.UtcNow:yyyyMMdd-HHmmss}.log");

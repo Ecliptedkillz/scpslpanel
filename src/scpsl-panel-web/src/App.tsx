@@ -99,8 +99,8 @@ function ThemeButton({ theme, setTheme }: { theme: ThemeMode; setTheme: (theme: 
 }
 
 function Login({ onLogin, theme, setTheme }: { onLogin: (user: User) => void; theme: ThemeMode; setTheme: (theme: ThemeMode) => void }) {
-  const [username, setUsername] = useState('admin')
-  const [password, setPassword] = useState('change-me-now')
+  const [username, setUsername] = useState('')
+  const [password, setPassword] = useState('')
   const [error, setError] = useState('')
   const [busy, setBusy] = useState(false)
   const submit = async (event: FormEvent) => {
@@ -280,10 +280,11 @@ function ServerWorkspace({ user, server, tab, setTab, refresh, back, onError }: 
   }
   const permissions = user.role === 'Owner' ? null : user.serverAccess?.find(x => x.serverId === server.id)?.permissions ?? user.permissions
   const allowed = (permission: string) => permissions === null || permissions.includes(permission)
+    || (permission.startsWith('console.') && permissions.includes('console'))
   const tabs: { id: ServerTab; label: string; icon: typeof LayoutDashboard; permission: string }[] = [
     { id: 'overview', label: 'Overview', icon: LayoutDashboard, permission: 'view' },
     { id: 'monitoring', label: 'Monitoring', icon: Activity, permission: 'monitoring' },
-    { id: 'console', label: 'Console', icon: Terminal, permission: 'console' },
+    { id: 'console', label: 'Console', icon: Terminal, permission: 'console.view' },
     { id: 'players', label: 'Live Players', icon: Users, permission: 'players' },
     { id: 'player-history', label: 'Player Database', icon: History, permission: 'players.history' },
     { id: 'activity', label: 'Activity & Rounds', icon: Activity, permission: 'monitoring' },
@@ -307,7 +308,7 @@ function ServerWorkspace({ user, server, tab, setTab, refresh, back, onError }: 
     <div className="server-tab-content">
       {tab === 'overview' && <ServerOverview server={server} setTab={setTab}/>}
       {tab === 'monitoring' && <MonitoringPage server={server} onError={onError}/>}
-      {tab === 'console' && <ConsolePage servers={[server]} selected={server.id} setSelected={() => {}} onError={onError} embedded/>}
+      {tab === 'console' && <ConsolePage servers={[server]} selected={server.id} setSelected={() => {}} onError={onError} canWrite={allowed('console.write')} embedded/>}
       {tab === 'players' && <ServerPlayers server={server} onError={onError} initialMode="live" canManage={allowed('players.manage')} canAnnounce={allowed('announcements')}/>}
       {tab === 'player-history' && <ServerPlayers server={server} onError={onError} initialMode="history" canManage={allowed('players.manage')} canAnnounce={allowed('announcements')}/>}
       {tab === 'activity' && <ServerActivityPage server={server} onError={onError}/>}
@@ -492,7 +493,7 @@ function ServerFiles({ server, onError }: { server: Server; onError: (error: str
   </section>
 }
 
-function ConsolePage({ servers, selected, setSelected, onError, embedded = false }: { servers: Server[]; selected: string | null; setSelected: (id: string) => void; onError: (e: string) => void; embedded?: boolean }) {
+function ConsolePage({ servers, selected, setSelected, onError, embedded = false, canWrite = true }: { servers: Server[]; selected: string | null; setSelected: (id: string) => void; onError: (e: string) => void; embedded?: boolean; canWrite?: boolean }) {
   const [lines, setLines] = useState<{ at: string; stream: string; line: string }[]>([])
   const [command, setCommand] = useState('')
   const [search, setSearch] = useState('')
@@ -503,7 +504,7 @@ function ConsolePage({ servers, selected, setSelected, onError, embedded = false
   const pausedRef = useRef(false)
   const server = servers.find(x => x.id === selected)
   const submit = async (event: FormEvent) => {
-    event.preventDefault(); if (!selected || !command.trim()) return
+    event.preventDefault(); if (!canWrite || !selected || !command.trim()) return
     try { await api(`/servers/${selected}/command`, { method: 'POST', body: JSON.stringify({ command }) }); setCommandHistory(old => [...old.slice(-49), command]); setHistoryIndex(-1); setCommand('') }
     catch (e) { onError(e instanceof Error ? e.message : 'Command failed') }
   }
@@ -528,6 +529,7 @@ function ConsolePage({ servers, selected, setSelected, onError, embedded = false
     if (output) output.scrollTop = output.scrollHeight
   }, [lines])
   return <>
+    {!canWrite && <div className="file-context">Read-only console access. Command execution is not permitted for this account.</div>}
     {!embedded && <PageTitle eyebrow="REAL-TIME OPERATIONS" title="Live console"><select value={selected ?? ''} onChange={e => { setSelected(e.target.value); setLines([]) }}><option value="">Select server</option>{servers.map(x => <option key={x.id} value={x.id}>{x.name}</option>)}</select></PageTitle>}
     <section className="console-panel"><div className="console-toolbar"><div><span className={`status-dot ${server?.state !== 'online' ? 'off' : ''}`}/>{server?.name ?? 'NO SERVER SELECTED'} <small>{fmtState(server?.state)} · {lines.length} LINES</small></div><div className="console-tools"><input value={search} onChange={e => setSearch(e.target.value)} placeholder="Search logs…"/><button className={paused ? 'active' : ''} onClick={() => setPaused(!paused)}>{paused ? 'RESUME' : 'PAUSE'}</button><a href={selected ? `/api/servers/${selected}/console/download` : '#'}>DOWNLOAD</a><button onClick={() => setLines([])}>CLEAR</button></div></div>
       <div className="console-output" ref={outputRef}>{lines.length ? lines.filter(item => !search || item.line.toLowerCase().includes(search.toLowerCase())).map((line, i) => <div key={i} className={line.stream}><time>{new Date(line.at).toLocaleTimeString()}</time><span>{line.line}</span></div>) : <div className="console-placeholder"><Terminal size={28}/><span>Console output will stream here.</span></div>}</div>
@@ -613,7 +615,8 @@ function AdminManagerPage({ user, servers, onError }: { user: User; servers: Ser
   type Account = { id: string; username: string; role: string; enabled: boolean; serverIds: string[]; permissions: string[]; serverAccess?: ServerAccessGrant[] }
   const permissionOptions = [
     ['view', 'View server'], ['server.start', 'Start server'], ['server.stop', 'Stop server'],
-    ['server.restart', 'Restart server'], ['console', 'View console and execute commands'],
+    ['server.restart', 'Restart server'], ['console.view', 'View console and download logs'],
+    ['console.write', 'Execute console commands'],
     ['players', 'View live players'], ['players.history', 'View player database'],
     ['players.notes', 'Add player notes'], ['players.manage', 'Mute, kick and ban players'], ['plugins', 'View plugins'],
     ['plugins.manage', 'Load / unload / restart plugins'], ['config', 'Read and edit configuration'],
@@ -646,8 +649,8 @@ function AdminManagerPage({ user, servers, onError }: { user: User; servers: Ser
   const add = () => { setForm(blank); setScopeServer(''); setShowModal(true) }
   const applyPreset = (name: 'viewer' | 'moderator' | 'manager' | 'full') => {
     const values = name === 'viewer' ? ['view', 'players', 'plugins']
-      : name === 'moderator' ? ['view', 'console', 'players', 'players.history', 'players.notes', 'players.manage']
-      : name === 'manager' ? ['view', 'server.start', 'server.stop', 'server.restart', 'console', 'players', 'players.history', 'players.notes', 'players.manage', 'plugins']
+      : name === 'moderator' ? ['view', 'console.view', 'players', 'players.history', 'players.notes', 'players.manage']
+      : name === 'manager' ? ['view', 'server.start', 'server.stop', 'server.restart', 'console.view', 'console.write', 'players', 'players.history', 'players.notes', 'players.manage', 'plugins']
       : permissionOptions.map(([value]) => value)
     setForm({ ...form, serverAccess: form.serverAccess.map(grant => grant.serverId === scopeServer ? {...grant,permissions:values} : grant) })
   }
@@ -672,12 +675,63 @@ function AdminManagerPage({ user, servers, onError }: { user: User; servers: Ser
   </>
 }
 
+type IntegrationSettings = {
+  discordWebhookUrl: string; notifyCrash: boolean; notifyRestart: boolean; notifyBridgeOffline: boolean
+  notifyAdminActions: boolean; notifyHighCpu: boolean; highCpuPercent: number
+  notifyHighMemory: boolean; highMemoryMb: number; alertCooldownMinutes: number
+  crashMessage: string; bridgeOfflineMessage: string; highCpuMessage: string
+  highMemoryMessage: string; restartFailureMessage: string; scheduleFailureMessage: string
+}
+const defaultIntegration: IntegrationSettings = {
+  discordWebhookUrl: '', notifyCrash: true, notifyRestart: true, notifyBridgeOffline: true,
+  notifyAdminActions: false, notifyHighCpu: true, highCpuPercent: 90,
+  notifyHighMemory: true, highMemoryMb: 4096, alertCooldownMinutes: 15,
+  crashMessage: '{server} stopped unexpectedly with exit code {exitCode}. Auto-restart is {autoRestart}.',
+  bridgeOfflineMessage: '{server} is online, but its LabAPI bridge stopped responding.',
+  highCpuMessage: '{server} CPU usage is {cpu}% (alert threshold: {threshold}%).',
+  highMemoryMessage: '{server} memory usage is {memoryMb} MB (alert threshold: {thresholdMb} MB).',
+  restartFailureMessage: '{server} failed to restart automatically: {error}',
+  scheduleFailureMessage: "Schedule '{schedule}' failed for {server}: {error}",
+}
+
 function SettingsPage({ user, onError }: { user: User; onError: (e: string) => void }) {
+  return <><SettingsBasePage user={user} onError={onError}/>{user.role === 'Owner' && <AlertRulesPanel onError={onError}/>}</>
+}
+
+function AlertRulesPanel({ onError }: { onError: (e: string) => void }) {
+  const [settings, setSettings] = useState<IntegrationSettings | null>(null)
+  const [saved, setSaved] = useState(false)
+  useEffect(() => { api<IntegrationSettings>('/integrations').then(setSettings).catch(e => onError(e.message)) }, [])
+  if (!settings) return null
+  const save = async (event: FormEvent) => {
+    event.preventDefault(); setSaved(false)
+    try {
+      await api('/integrations', { method: 'PUT', body: JSON.stringify(settings) })
+      setSaved(true)
+    } catch (error) { onError(error instanceof Error ? error.message : 'Unable to save alert rules') }
+  }
+  return <form className="panel discord-settings" onSubmit={save}>
+    <Activity size={22}/><h2>Alert rules and messages</h2>
+    <p>Thresholds must be exceeded for two samples. Tokens such as <code>{'{server}'}</code>, <code>{'{cpu}'}</code>, and <code>{'{error}'}</code> are replaced when an alert is sent.</p>
+    <div className="form-row"><label>CPU THRESHOLD (%)<input type="number" min={1} max={100} value={settings.highCpuPercent} onChange={e => setSettings({...settings, highCpuPercent:Number(e.target.value)})}/></label><label>MEMORY THRESHOLD (MB)<input type="number" min={128} value={settings.highMemoryMb} onChange={e => setSettings({...settings, highMemoryMb:Number(e.target.value)})}/></label><label>COOLDOWN (MINUTES)<input type="number" min={1} max={1440} value={settings.alertCooldownMinutes} onChange={e => setSettings({...settings, alertCooldownMinutes:Number(e.target.value)})}/></label></div>
+    <label className="check-row"><input type="checkbox" checked={settings.notifyHighCpu} onChange={e => setSettings({...settings,notifyHighCpu:e.target.checked})}/> Alert on sustained high CPU</label>
+    <label className="check-row"><input type="checkbox" checked={settings.notifyHighMemory} onChange={e => setSettings({...settings,notifyHighMemory:e.target.checked})}/> Alert on sustained high memory</label>
+    <label>CRASH MESSAGE<textarea value={settings.crashMessage} onChange={e => setSettings({...settings,crashMessage:e.target.value})}/></label>
+    <label>BRIDGE OFFLINE MESSAGE<textarea value={settings.bridgeOfflineMessage} onChange={e => setSettings({...settings,bridgeOfflineMessage:e.target.value})}/></label>
+    <label>HIGH CPU MESSAGE<textarea value={settings.highCpuMessage} onChange={e => setSettings({...settings,highCpuMessage:e.target.value})}/></label>
+    <label>HIGH MEMORY MESSAGE<textarea value={settings.highMemoryMessage} onChange={e => setSettings({...settings,highMemoryMessage:e.target.value})}/></label>
+    <label>AUTO-RESTART FAILURE MESSAGE<textarea value={settings.restartFailureMessage} onChange={e => setSettings({...settings,restartFailureMessage:e.target.value})}/></label>
+    <label>SCHEDULE FAILURE MESSAGE<textarea value={settings.scheduleFailureMessage} onChange={e => setSettings({...settings,scheduleFailureMessage:e.target.value})}/></label>
+    {saved && <p className="success-message">Alert rules saved.</p>}<button className="primary">SAVE ALERT RULES</button>
+  </form>
+}
+
+function SettingsBasePage({ user, onError }: { user: User; onError: (e: string) => void }) {
   const [password, setPassword] = useState('')
   const [confirmPassword, setConfirmPassword] = useState('')
   const [saved, setSaved] = useState(false)
   const [busy, setBusy] = useState(false)
-  const [integration, setIntegration] = useState({ discordWebhookUrl: '', notifyCrash: true, notifyRestart: true, notifyBridgeOffline: true, notifyAdminActions: false })
+  const [integration, setIntegration] = useState<IntegrationSettings>(defaultIntegration)
   useEffect(() => { if (user.role === 'Owner') api<typeof integration>('/integrations').then(setIntegration).catch(() => {}) }, [user.role])
   const changePassword = async (event: FormEvent) => {
     event.preventDefault(); setSaved(false)

@@ -5,7 +5,8 @@ namespace ScpSlPanel.Api.Services;
 
 public sealed class SchedulerService(
     JsonStore store, ServerManager servers, RestartCoordinator restarts,
-    AuditService audit, ILogger<SchedulerService> logger) : BackgroundService
+    AuditService audit, OperationsDataService operations, NotificationService notifications,
+    ILogger<SchedulerService> logger) : BackgroundService
 {
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
@@ -37,7 +38,17 @@ public sealed class SchedulerService(
                         changed = true;
                         await audit.AddAsync("scheduler", "schedule.run", item.Name, item.Action);
                     }
-                    catch (Exception ex) { logger.LogError(ex, "Schedule {Schedule} failed", item.Name); }
+                    catch (Exception ex)
+                    {
+                        var server = await servers.FindAsync(item.ServerId);
+                        var settings = await notifications.GetAsync();
+                        var message = NotificationService.Format(settings.ScheduleFailureMessage,
+                            ("schedule", item.Name), ("server", server?.Name ?? item.ServerId.ToString()),
+                            ("error", ex.Message));
+                        await operations.AddIncidentAsync(item.ServerId, "schedule-failure", message);
+                        await notifications.SendAsync($"Schedule failed: {item.Name}", message, "error");
+                        logger.LogError(ex, "Schedule {Schedule} failed", item.Name);
+                    }
                 }
                 if (changed) await store.WriteAsync("schedules", schedules, stoppingToken);
             }

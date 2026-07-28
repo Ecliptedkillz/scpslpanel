@@ -14,6 +14,15 @@ public sealed class NotificationService(JsonStore store, ILogger<NotificationSer
     public Task SaveAsync(PanelIntegrationSettings settings) =>
         store.WriteAsync("integrations", [settings]);
 
+    public static string Format(string template, params (string Name, object? Value)[] values)
+    {
+        var message = template;
+        foreach (var (name, value) in values)
+            message = message.Replace($"{{{name}}}", Convert.ToString(value,
+                System.Globalization.CultureInfo.InvariantCulture), StringComparison.OrdinalIgnoreCase);
+        return message;
+    }
+
     public async Task SendAsync(string title, string message, string severity = "info")
     {
         var settings = await GetAsync();

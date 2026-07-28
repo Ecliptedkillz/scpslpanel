@@ -78,7 +78,15 @@ public sealed record ServerIncident(
 public sealed record ConsoleLogEntry(DateTimeOffset At, string Stream, string Line);
 public sealed record PanelIntegrationSettings(
     string DiscordWebhookUrl = "", bool NotifyCrash = true, bool NotifyRestart = true,
-    bool NotifyBridgeOffline = true, bool NotifyAdminActions = false);
+    bool NotifyBridgeOffline = true, bool NotifyAdminActions = false,
+    bool NotifyHighCpu = true, double HighCpuPercent = 90,
+    bool NotifyHighMemory = true, int HighMemoryMb = 4096, int AlertCooldownMinutes = 15,
+    string CrashMessage = "{server} stopped unexpectedly with exit code {exitCode}. Auto-restart is {autoRestart}.",
+    string BridgeOfflineMessage = "{server} is online, but its LabAPI bridge stopped responding. Live player data and remote moderation may be unavailable.",
+    string HighCpuMessage = "{server} CPU usage is {cpu}% (alert threshold: {threshold}%).",
+    string HighMemoryMessage = "{server} memory usage is {memoryMb} MB (alert threshold: {thresholdMb} MB).",
+    string RestartFailureMessage = "{server} failed to restart automatically: {error}",
+    string ScheduleFailureMessage = "Schedule '{schedule}' failed for {server}: {error}");
 public sealed record BackupEntry(
     Guid Id, Guid ServerId, DateTimeOffset CreatedAt, string FileName, long SizeBytes, string Actor);
 public sealed record RestartCountdownRequest(int Seconds, string? Message);

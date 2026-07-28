@@ -304,12 +304,12 @@ public sealed class ServerManager(
         await PublishLine(definition.Id, "system", $"Process exited with code {exitCode}.");
         if (priorState != ServerState.Stopping)
         {
-            await operations.AddIncidentAsync(definition.Id, "crash",
-                $"Server process exited unexpectedly with code {exitCode}.", exitCode);
             var settings = await notifications.GetAsync();
+            var message = NotificationService.Format(settings.CrashMessage,
+                ("server", definition.Name), ("exitCode", exitCode), ("autoRestart", definition.AutoRestart));
+            await operations.AddIncidentAsync(definition.Id, "crash", message, exitCode);
             if (settings.NotifyCrash)
-                await notifications.SendAsync($"{definition.Name} crashed",
-                    $"The process exited with code `{exitCode}`. Auto-restart: `{definition.AutoRestart}`.", "error");
+                await notifications.SendAsync($"{definition.Name} crashed", message, "error");
         }
         await hub.Clients.All.SendAsync("ServerChanged", Snapshot(definition));
         if (definition.AutoRestart && priorState != ServerState.Stopping)
@@ -320,6 +320,11 @@ public sealed class ServerManager(
             {
                 runtime.State = ServerState.Faulted;
                 runtime.LastError = ex.Message;
+                var message = NotificationService.Format(
+                    (await notifications.GetAsync()).RestartFailureMessage,
+                    ("server", definition.Name), ("error", ex.Message));
+                await operations.AddIncidentAsync(definition.Id, "restart-failure", message);
+                await notifications.SendAsync($"{definition.Name}: automatic restart failed", message, "error");
                 logger.LogError(ex, "Auto-restart failed for {Server}", definition.Name);
             }
         }
