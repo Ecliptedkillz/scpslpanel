@@ -399,3 +399,21 @@ table { width:100%; border-collapse:collapse; font-size:12.5px } th { text-align
   .account-editor-permissions .permission-group{min-width:0!important}
   .account-editor-permissions .permission-group>div{display:grid!important;grid-template-columns:1fr!important}
 }
+
+/* Final spacing pass for the centered three-column editor. */
+.account-editor-overlay{display:flex;align-items:center;justify-content:center;padding:28px}
+.account-editor{width:min(1080px,calc(100vw - 56px));height:min(780px,calc(100vh - 56px));max-width:1080px;max-height:780px}
+.account-editor-head{padding:18px 24px}.account-editor-head h2{font-size:21px}.account-editor-head p{font-size:10px}
+.account-editor .admin-account-section{padding:14px 22px}.account-editor .admin-account-section .admin-section-title{margin-bottom:10px}
+.account-editor-access{padding:14px 22px 18px}.account-editor-access>.admin-section-title{margin-bottom:10px}
+.account-editor-workspace{grid-template-columns:210px minmax(0,1fr)!important;gap:12px}
+.account-editor-servers{grid-column:1!important;width:210px!important;min-width:210px!important;position:sticky;top:0;align-self:start;max-height:480px;overflow:auto}
+.account-editor-permissions{grid-column:2!important;padding:12px!important}
+.account-editor-permissions .permission-selector-head h3{font-size:17px;margin:2px 0}.account-editor-permissions .permission-selector-head p{font-size:9px}
+.account-editor-permissions .permission-presets{margin:8px 0;padding:8px 0}.account-editor-permissions .permission-presets button,.account-editor-permissions .permission-head-actions button{padding:7px 8px}
+.account-editor-permissions .permission-tools{margin-bottom:9px}.account-editor-permissions .permission-tools label{min-height:36px}
+.account-editor-permissions .permission-groups{gap:8px!important}
+.account-editor-permissions .permission-group header{min-height:48px;padding:8px 10px}.account-editor-permissions .permission-group h4{font-size:12px}.account-editor-permissions .permission-group p{font-size:8px;line-height:1.3}.account-editor-permissions .permission-group header button{padding:6px 7px;font-size:7px}
+.account-editor-permissions .permission-option{min-height:46px!important;padding:7px 9px!important;gap:8px!important}.account-editor-permissions .permission-option input{width:16px;height:16px}.account-editor-permissions .permission-option strong{font-size:10px;line-height:1.2}.account-editor-permissions .permission-option code{font-size:7px;margin-top:2px}.account-editor-permissions .permission-option em{font-size:5px}
+.account-editor>.admin-modal-actions{padding:11px 20px}.account-editor>.admin-modal-actions button{min-height:36px}
+@media(max-width:760px){.account-editor-overlay{padding:10px}.account-editor{width:calc(100vw - 20px);height:calc(100vh - 20px)}.account-editor-workspace{grid-template-columns:1fr!important}.account-editor-servers,.account-editor-permissions{grid-column:1!important;width:100%!important;min-width:0!important;position:static}}
