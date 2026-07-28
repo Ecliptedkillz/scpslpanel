@@ -67,7 +67,8 @@ public sealed record PlayerRecord(
     Guid Id, Guid ServerId, string UserId, string LastIpAddress, string CurrentName,
     DateTimeOffset FirstConnectedAt, DateTimeOffset LastConnectedAt, long PlaytimeSeconds,
     int Connections, IReadOnlyList<PlayerNameEntry> NameHistory,
-    IReadOnlyList<PlayerModerationEntry> ModerationHistory, IReadOnlyList<PlayerNote> Notes);
+    IReadOnlyList<PlayerModerationEntry> ModerationHistory, IReadOnlyList<PlayerNote> Notes,
+    string? DiscordId = null);
 public sealed record PlayerNoteRequest(string Text);
 public sealed record PlayerActionRequest(string Type, string Reason, int? DurationMinutes);
 public sealed record MetricSample(

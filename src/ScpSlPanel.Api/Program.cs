@@ -27,6 +27,7 @@ builder.Services.AddSingleton<AuditService>();
 builder.Services.AddSingleton<BridgeStateService>();
 builder.Services.AddSingleton<BridgeCommandService>();
 builder.Services.AddSingleton<PlayerDataService>();
+builder.Services.AddSingleton<DiscordLinkService>();
 builder.Services.AddSingleton<OperationsDataService>();
 builder.Services.AddSingleton<NotificationService>();
 builder.Services.AddSingleton<MaintenanceService>();
@@ -346,11 +347,25 @@ api.MapGet("/servers/{id:guid}/activity", async (Guid id, int? take, BridgeComma
     !await Can(user, store, id, "monitoring") ? Results.Forbid() : Results.Ok(await commands.ActivityAsync(id, take ?? 250)));
 api.MapGet("/servers/{id:guid}/rounds", async (Guid id, int? take, BridgeCommandService commands, ClaimsPrincipal user, JsonStore store) =>
     !await Can(user, store, id, "monitoring") ? Results.Forbid() : Results.Ok(await commands.RoundsAsync(id, take ?? 100)));
-api.MapGet("/servers/{id:guid}/player-history", async (Guid id, PlayerDataService players, ClaimsPrincipal user, JsonStore store) =>
-    !await Can(user, store, id, "players.history") ? Results.Forbid() : Results.Ok(await players.ListAsync(id)));
-api.MapGet("/servers/{id:guid}/player-history/{playerId:guid}", async (Guid id, Guid playerId, PlayerDataService players, ClaimsPrincipal user, JsonStore store) =>
-    !await Can(user, store, id, "players.history") ? Results.Forbid()
-    : await players.FindAsync(id, playerId) is { } player ? Results.Ok(player) : Results.NotFound());
+api.MapGet("/servers/{id:guid}/player-history", async (
+    Guid id, PlayerDataService players, DiscordLinkService discordLinks, ServerManager servers,
+    ClaimsPrincipal user, JsonStore store) =>
+{
+    if (!await Can(user, store, id, "players.history")) return Results.Forbid();
+    var server = await servers.FindAsync(id);
+    return server is null ? Results.NotFound()
+        : Results.Ok(discordLinks.Enrich(server, await players.ListAsync(id)));
+});
+api.MapGet("/servers/{id:guid}/player-history/{playerId:guid}", async (
+    Guid id, Guid playerId, PlayerDataService players, DiscordLinkService discordLinks,
+    ServerManager servers, ClaimsPrincipal user, JsonStore store) =>
+{
+    if (!await Can(user, store, id, "players.history")) return Results.Forbid();
+    var server = await servers.FindAsync(id);
+    var player = await players.FindAsync(id, playerId);
+    return server is null || player is null ? Results.NotFound()
+        : Results.Ok(discordLinks.Enrich(server, player));
+});
 api.MapPost("/servers/{id:guid}/player-history/{playerId:guid}/notes", async (
     Guid id, Guid playerId, PlayerNoteRequest request, PlayerDataService players,
     ClaimsPrincipal user, JsonStore store) =>

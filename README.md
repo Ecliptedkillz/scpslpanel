@@ -122,6 +122,10 @@ Monitoring samples are retained for seven days. Console logs and configuration b
 stored below the panel data directory. Player records begin accumulating when the LabAPI bridge
 sends heartbeats.
 
+When `LabAPI\configs\<query-port>\PlayhousePlugin\DiscordLinks.csv` exists, Player Database
+profiles are enriched with its Steam ID to Discord ID mappings. The file is read live and is
+not copied into panel storage.
+
 The maintenance updater only runs while the game server is offline. It creates a configuration
 backup first, then executes the update command entered when registering the server. Treat update
 commands as trusted owner-only configuration.
