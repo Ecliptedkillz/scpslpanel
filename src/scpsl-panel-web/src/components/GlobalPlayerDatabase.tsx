@@ -47,7 +47,7 @@ function GlobalProfileModal({record,close}:{record:GlobalPlayer;close:()=>void})
     </header>
     <div className="identity-profile-grid">
       <section><span className="eyebrow">STEAM IDENTITY</span><strong>{player.steamDisplayName ?? player.currentName}</strong><code>{player.userId}</code>{player.steamProfileUrl && <a href={player.steamProfileUrl} target="_blank" rel="noreferrer">OPEN STEAM PROFILE <ExternalLink size={13}/></a>}</section>
-      <section><span className="eyebrow">DISCORD IDENTITY</span><strong>{player.discordDisplayName ?? 'Not linked'}</strong><code>{player.discordId ?? 'No Discord ID'}</code><div>{player.discordRoles?.map(role=><span className="tag" key={role}>{role}</span>)}</div></section>
+      <section><span className="eyebrow">DISCORD IDENTITY</span><strong>{player.discordDisplayName ?? (player.discordId ? 'Linked · profile unavailable' : 'Not linked')}</strong><code>{player.discordId ?? 'No Discord ID'}</code><div>{player.discordRoles?.map(role=><span className="tag" key={role}>{role}</span>)}</div>{player.discordId && !player.discordRoles?.length && <small className="identity-hint">Enable Guild Members intent to load server nickname and roles.</small>}</section>
     </div>
     <div className="profile-stats"><div><span>FIRST SEEN</span><strong>{new Date(player.firstConnectedAt).toLocaleDateString()}</strong></div><div><span>LAST SEEN</span><strong>{new Date(player.lastConnectedAt).toLocaleString()}</strong></div><div><span>PLAYTIME</span><strong>{playtime(player.playtimeSeconds)}</strong></div><div><span>CONNECTIONS</span><strong>{player.connections}</strong></div></div>
     <div className="global-profile-columns">

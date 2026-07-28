@@ -51,8 +51,39 @@ public sealed class DiscordLinkService(NotificationService settingsService, ILog
 
     private async Task<PlayerRecord> AddDiscordAsync(PlayerRecord player, string discordId, PanelIntegrationSettings settings)
     {
-        if (!settings.DiscordBotEnabled || string.IsNullOrWhiteSpace(settings.DiscordBotToken)
-            || settings.DiscordGuildId == 0 || !ulong.TryParse(discordId, out _)) return player;
+        if (string.IsNullOrWhiteSpace(settings.DiscordBotToken)
+            || !ulong.TryParse(discordId, out var numericDiscordId)) return player;
+        var enriched = player;
+        try
+        {
+            using var request = new HttpRequestMessage(HttpMethod.Get,
+                $"https://discord.com/api/v10/users/{discordId}");
+            request.Headers.Authorization = new AuthenticationHeaderValue("Bot", settings.DiscordBotToken);
+            using var response = await _http.SendAsync(request);
+            response.EnsureSuccessStatusCode();
+            using var document = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+            var user = document.RootElement;
+            var username = user.GetProperty("username").GetString();
+            var avatar = user.TryGetProperty("avatar", out var avatarValue) ? avatarValue.GetString() : null;
+            var discriminator = user.TryGetProperty("discriminator", out var discriminatorValue)
+                ? discriminatorValue.GetString() : "0";
+            var defaultAvatar = discriminator is not null && discriminator != "0"
+                && int.TryParse(discriminator, out var legacyDiscriminator)
+                ? legacyDiscriminator % 5 : (int)((numericDiscordId >> 22) % 6);
+            enriched = player with {
+                DiscordDisplayName = username,
+                DiscordAvatarUrl = avatar is null
+                    ? $"https://cdn.discordapp.com/embed/avatars/{defaultAvatar}.png"
+                    : $"https://cdn.discordapp.com/avatars/{discordId}/{avatar}.png?size=256"
+            };
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(ex, "Discord user lookup failed for linked user {DiscordId}", discordId);
+            return enriched;
+        }
+
+        if (settings.DiscordGuildId == 0) return enriched;
         try
         {
             using var request = new HttpRequestMessage(HttpMethod.Get,
@@ -61,19 +92,23 @@ public sealed class DiscordLinkService(NotificationService settingsService, ILog
             using var response = await _http.SendAsync(request);
             response.EnsureSuccessStatusCode();
             using var document = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
-            var root = document.RootElement;
-            var user = root.GetProperty("user");
-            var username = user.GetProperty("username").GetString();
-            var avatar = user.TryGetProperty("avatar", out var avatarValue) ? avatarValue.GetString() : null;
-            var roleIds = root.GetProperty("roles").EnumerateArray().Select(x => x.GetString()).Where(x => x is not null).ToHashSet();
+            var member = document.RootElement;
+            var roleIds = member.GetProperty("roles").EnumerateArray()
+                .Select(x => x.GetString()).Where(x => x is not null).ToHashSet();
             var guildRoles = await GetGuildRolesAsync(settings);
-            return player with {
-                DiscordDisplayName = root.TryGetProperty("nick", out var nick) && nick.ValueKind != JsonValueKind.Null ? nick.GetString() : username,
-                DiscordAvatarUrl = avatar is null ? null : $"https://cdn.discordapp.com/avatars/{discordId}/{avatar}.png?size=256",
+            return enriched with {
+                DiscordDisplayName = member.TryGetProperty("nick", out var nick)
+                    && nick.ValueKind != JsonValueKind.Null ? nick.GetString() : enriched.DiscordDisplayName,
                 DiscordRoles = guildRoles.Where(x => roleIds.Contains(x.Id)).Select(x => x.Name).ToArray()
             };
         }
-        catch (Exception ex) { logger.LogDebug(ex, "Discord profile lookup failed for {DiscordId}", discordId); return player; }
+        catch (Exception ex)
+        {
+            logger.LogInformation(ex,
+                "Discord guild details unavailable for {DiscordId}; basic account profile will still be shown",
+                discordId);
+            return enriched;
+        }
     }
 
     private async Task<IReadOnlyList<(string Id, string Name)>> GetGuildRolesAsync(PanelIntegrationSettings settings)

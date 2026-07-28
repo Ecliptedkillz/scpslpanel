@@ -260,3 +260,4 @@ table { width:100%; border-collapse:collapse; font-size:12.5px } th { text-align
   .global-profile-hero{grid-template-columns:70px 1fr}.global-profile-hero>.icon-button{position:absolute;right:16px;top:16px}
   .identity-profile-grid,.global-profile-columns{grid-template-columns:1fr}
 }
+.identity-hint{display:block;margin-top:14px;color:var(--muted);font-size:10px;line-height:1.5}
