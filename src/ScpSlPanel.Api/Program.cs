@@ -4,6 +4,7 @@ using System.Text.Json.Serialization;
 using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Authentication.Cookies;
 using Microsoft.AspNetCore.DataProtection;
+using Microsoft.AspNetCore.SignalR;
 using ScpSlPanel.Api.Domain;
 using ScpSlPanel.Api.Hubs;
 using ScpSlPanel.Api.Infrastructure;
@@ -21,6 +22,7 @@ builder.Services.AddDataProtection()
 builder.Services.AddSingleton<JsonStore>();
 builder.Services.AddSingleton<PasswordService>();
 builder.Services.AddSingleton<AuditService>();
+builder.Services.AddSingleton<BridgeStateService>();
 builder.Services.AddSingleton<ServerManager>();
 builder.Services.AddHostedService<BootstrapService>();
 builder.Services.AddHostedService<SchedulerService>();
@@ -85,6 +87,16 @@ app.MapPost("/api/auth/logout", async (HttpContext context) =>
 }).RequireAuthorization();
 app.MapGet("/api/auth/me", (ClaimsPrincipal user) => Results.Ok(new { username = user.Identity!.Name, role = user.FindFirstValue(ClaimTypes.Role) })).RequireAuthorization();
 app.MapGet("/api/health", () => Results.Ok(new { status = "healthy", at = DateTimeOffset.UtcNow }));
+app.MapPost("/api/bridge/{serverId:guid}/heartbeat", async (
+    Guid serverId, BridgeHeartbeat heartbeat, HttpContext context, ServerManager servers,
+    BridgeStateService bridgeState, IHubContext<PanelHub> hub) =>
+{
+    if (!await servers.ValidateBridgeTokenAsync(serverId, context.Request.Headers["X-Bridge-Token"].FirstOrDefault()))
+        return Results.Unauthorized();
+    bridgeState.Update(serverId, heartbeat);
+    await hub.Clients.All.SendAsync("BridgeChanged", serverId);
+    return Results.NoContent();
+});
 
 var api = app.MapGroup("/api").RequireAuthorization();
 api.MapGet("/overview", async (ServerManager servers, AuditService audit) =>
@@ -113,6 +125,29 @@ api.MapPost("/servers/{id:guid}/stop", async (Guid id, ServerManager servers, Cl
 api.MapPost("/servers/{id:guid}/restart", async (Guid id, ServerManager servers, ClaimsPrincipal user) => { await servers.RestartAsync(id, Actor(user)); return Results.Accepted(); });
 api.MapPost("/servers/{id:guid}/kill", async (Guid id, ServerManager servers, ClaimsPrincipal user) => { await servers.StopAsync(id, Actor(user), true); return Results.Accepted(); }).RequireAuthorization("Owner");
 api.MapPost("/servers/{id:guid}/command", async (Guid id, CommandRequest request, ServerManager servers, ClaimsPrincipal user) => { await servers.CommandAsync(id, request.Command, Actor(user)); return Results.Accepted(); });
+api.MapGet("/servers/{id:guid}/players", (Guid id, BridgeStateService bridge) => Results.Ok(bridge.Get(id)));
+api.MapGet("/servers/{id:guid}/bridge", async (Guid id, ServerManager servers, BridgeStateService bridge) =>
+{
+    var token = await servers.EnsureBridgeTokenAsync(id);
+    return Results.Ok(new { serverId = id, token, endpoint = $"/api/bridge/{id}/heartbeat", status = bridge.Get(id) });
+}).RequireAuthorization("Owner");
+api.MapPost("/servers/{id:guid}/bridge/regenerate", async (Guid id, ServerManager servers, AuditService audit, ClaimsPrincipal user) =>
+{
+    var token = await servers.EnsureBridgeTokenAsync(id, true);
+    await audit.AddAsync(Actor(user), "bridge.token.regenerate", id.ToString(), "Regenerated LabAPI bridge token");
+    return Results.Ok(new { serverId = id, token, endpoint = $"/api/bridge/{id}/heartbeat" });
+}).RequireAuthorization("Owner");
+api.MapPost("/servers/{id:guid}/players/{playerId}/kick", async (Guid id, string playerId, ModerationRequest request, ServerManager servers, ClaimsPrincipal user) =>
+{
+    await servers.CommandAsync(id, $"kick {playerId} {request.Reason ?? "Removed by panel"}", Actor(user));
+    return Results.Accepted();
+});
+api.MapPost("/servers/{id:guid}/players/{playerId}/ban", async (Guid id, string playerId, ModerationRequest request, ServerManager servers, ClaimsPrincipal user) =>
+{
+    var duration = Math.Max(1, request.DurationMinutes ?? 60);
+    await servers.CommandAsync(id, $"ban {playerId} {duration} {request.Reason ?? "Banned by panel"}", Actor(user));
+    return Results.Accepted();
+});
 
 api.MapGet("/servers/{id:guid}/files/{**path}", async (Guid id, string path, ServerManager servers, JsonStore store) =>
 {
@@ -175,10 +210,21 @@ api.MapGet("/plugins/{serverId:guid}", async (Guid serverId, ServerManager serve
 {
     var server = await servers.FindAsync(serverId);
     if (server is null) return Results.NotFound();
-    var roots = new[] { ("EXILED", Path.Combine(server.WorkingDirectory, "EXILED", "Plugins")), ("NWAPI", Path.Combine(server.WorkingDirectory, "PluginAPI", "plugins")) };
-    var plugins = roots.Where(x => Directory.Exists(x.Item2)).SelectMany(x => Directory.EnumerateFiles(x.Item2, "*.dll")
+    var labApiRoots = new[]
+    {
+        Path.Combine(server.WorkingDirectory, "AppData", "SCP Secret Laboratory", "LabAPI", "plugins"),
+        Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "SCP Secret Laboratory", "LabAPI", "plugins")
+    };
+    var roots = new List<(string Framework, string Path)>
+    {
+        ("EXILED", Path.Combine(server.WorkingDirectory, "EXILED", "Plugins")),
+        ("NWAPI", Path.Combine(server.WorkingDirectory, "PluginAPI", "plugins"))
+    };
+    roots.AddRange(labApiRoots.Select(path => ("LabAPI", path)));
+    var plugins = roots.Where(x => Directory.Exists(x.Path)).SelectMany(x =>
+        Directory.EnumerateFiles(x.Path, "*.dll", SearchOption.AllDirectories)
         .Select(path => new PluginEntry(Path.GetFileNameWithoutExtension(path), "unknown", x.Item1, true, path))).ToList();
-    return Results.Ok(plugins);
+    return Results.Ok(plugins.DistinctBy(plugin => plugin.Path));
 });
 api.MapGet("/users", (JsonStore store) => store.ReadAsync<PanelUser>("users")).RequireAuthorization("Owner");
 api.MapPost("/users", async (LoginRequest request, JsonStore store, PasswordService passwords, AuditService audit, ClaimsPrincipal actor) =>

@@ -6,7 +6,7 @@ import {
   Square, Terminal, Users, X,
 } from 'lucide-react'
 import { api, ApiError } from './api'
-import type { AuditEntry, Ban, Overview, Schedule, Server } from './types'
+import type { AuditEntry, Ban, BridgeSetup, BridgeStatus, Overview, Player, Schedule, Server } from './types'
 
 type Page = 'overview' | 'servers' | 'server' | 'bans' | 'schedules' | 'audit' | 'settings'
 type ServerTab = 'overview' | 'console' | 'players' | 'plugins' | 'files'
@@ -246,7 +246,7 @@ function ServerWorkspace({ server, tab, setTab, refresh, back, onError }: { serv
     <div className="server-tab-content">
       {tab === 'overview' && <ServerOverview server={server} setTab={setTab}/>}
       {tab === 'console' && <ConsolePage servers={[server]} selected={server.id} setSelected={() => {}} onError={onError} embedded/>}
-      {tab === 'players' && <ServerPlayers server={server}/>}
+      {tab === 'players' && <ServerPlayers server={server} onError={onError}/>}
       {tab === 'plugins' && <PluginsPage servers={[server]} selected={server.id} setSelected={() => {}} embedded/>}
       {tab === 'files' && <ServerFiles server={server} onError={onError}/>}
     </div>
@@ -272,13 +272,46 @@ function ServerOverview({ server, setTab }: { server: Server; setTab: (tab: Serv
   </section>
 }
 
-function ServerPlayers({ server }: { server: Server }) {
-  return <section className="integration-empty">
-    <div className="empty-icon"><Users size={28}/></div>
-    <span className="eyebrow">PLAYER BRIDGE REQUIRED</span>
-    <h2>No live player feed connected for {server.name}</h2>
-    <p>Process control is working, but SCP:SL does not send player identities through standard console output. Install the panel's EXILED/NWAPI bridge on this instance to enable the player list, roles, kick, mute, warn, and ban actions.</p>
-    <div className="integration-checks"><span className={server.state === 'online' ? 'ok' : ''}><i/>{server.state === 'online' ? 'Server process online' : 'Start the server process'}</span><span><i/>Install game-server bridge</span><span><i/>Configure bridge token and port</span></div>
+function ServerPlayers({ server, onError }: { server: Server; onError: (error: string) => void }) {
+  const [status, setStatus] = useState<BridgeStatus | null>(null)
+  const [setup, setSetup] = useState<BridgeSetup | null>(null)
+  const load = useCallback(async () => {
+    try { setStatus(await api<BridgeStatus>(`/servers/${server.id}/players`)) }
+    catch (error) { onError(error instanceof Error ? error.message : 'Unable to load players') }
+  }, [server.id, onError])
+  useEffect(() => {
+    void load()
+    api<BridgeSetup>(`/servers/${server.id}/bridge`).then(setSetup).catch(() => {})
+    const timer = setInterval(load, 3000)
+    return () => clearInterval(timer)
+  }, [load, server.id])
+  const moderate = async (player: Player, action: 'kick' | 'ban') => {
+    const reason = window.prompt(`Reason to ${action} ${player.nickname}:`, `Removed by ${action === 'kick' ? 'administrator' : 'moderator'}`)
+    if (reason === null) return
+    const durationMinutes = action === 'ban' ? Number(window.prompt('Ban duration in minutes:', '60') ?? 0) : null
+    if (action === 'ban' && (!durationMinutes || durationMinutes < 1)) return
+    try {
+      await api(`/servers/${server.id}/players/${player.id}/${action}`, {
+        method: 'POST',
+        body: JSON.stringify({ playerId: player.id, reason, durationMinutes }),
+      })
+    } catch (error) { onError(error instanceof Error ? error.message : `Unable to ${action} player`) }
+  }
+  if (status?.connected) return <section className="players-panel">
+    <div className="bridge-banner connected"><div><span className="status-dot"/><strong>LABAPI BRIDGE CONNECTED</strong><small>v{status.bridgeVersion} · LabAPI {status.apiVersion} · heartbeat {status.lastSeenAt ? fmtAgo(status.lastSeenAt) : 'now'}</small></div><span>{status.players.length}/{status.maxPlayers || '—'} PLAYERS</span></div>
+    <Table headers={['PLAYER','USER ID','ROLE','CONNECTED','ACTIONS']}>{status.players.map(player => <tr key={player.id}><td><strong>{player.nickname}</strong><small>Player #{player.id} · {player.ipAddress || 'Identity protected'}</small></td><td className="mono">{player.userId || 'Do Not Track'}</td><td><span className="tag">{player.role}</span></td><td>{fmtAgo(player.connectedAt)}</td><td><div className="row-actions"><button onClick={() => moderate(player, 'kick')}>KICK</button><button className="danger" onClick={() => moderate(player, 'ban')}>BAN</button></div></td></tr>)}</Table>
+    {!status.players.length && <EmptyMini text="Bridge connected. No players are currently online."/>}
+  </section>
+  const config = setup ? `panel_url: "${window.location.origin}"\nserver_id: "${setup.serverId}"\ntoken: "${setup.token}"\nheartbeat_seconds: 5\nrespect_do_not_track: true` : ''
+  return <section className="bridge-install">
+    <div className="bridge-install-intro"><div className="empty-icon"><Users size={28}/></div><div><span className="eyebrow">LABAPI BRIDGE REQUIRED</span><h2>Connect live players for {server.name}</h2><p>The bridge makes outbound heartbeat requests to this panel. No inbound game-server port is required.</p></div></div>
+    <ol className="install-steps">
+      <li><span>1</span><div><strong>Build the LabAPI bridge</strong><p>Run <code>build-bridge.bat</code> and enter the server's <code>SCPSL_Data\Managed</code> path.</p></div></li>
+      <li><span>2</span><div><strong>Install the plugin DLL</strong><p>Copy <code>ScpSlPanel.LabApiBridge.dll</code> into your LabAPI plugins folder, then start the SCP:SL server once.</p></div></li>
+      <li><span>3</span><div><strong>Configure this server</strong><p>Open the generated <code>scp-control-bridge.yml</code> and replace its contents with:</p><div className="config-snippet"><pre>{config || 'Loading owner-only bridge token…'}</pre><button disabled={!config} onClick={() => navigator.clipboard.writeText(config)}>COPY</button></div></div></li>
+      <li><span>4</span><div><strong>Restart SCP:SL</strong><p>This page will switch to the live player table within a few seconds.</p></div></li>
+    </ol>
+    <div className="integration-checks"><span className={server.state === 'online' ? 'ok' : ''}><i/>{server.state === 'online' ? 'Server process online' : 'Start the server process'}</span><span className={status?.connected ? 'ok' : ''}><i/>{status?.lastSeenAt ? `Last heartbeat ${fmtAgo(status.lastSeenAt)}` : 'Waiting for first heartbeat'}</span></div>
   </section>
 }
 

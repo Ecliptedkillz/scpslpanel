@@ -4,7 +4,8 @@ public enum ServerState { Offline, Starting, Online, Stopping, Faulted }
 
 public sealed record ServerDefinition(
     Guid Id, string Name, string ExecutablePath, string Arguments, string WorkingDirectory,
-    bool AutoRestart, bool AutoStart, int QueryPort, string? UpdateCommand, DateTimeOffset CreatedAt);
+    bool AutoRestart, bool AutoStart, int QueryPort, string? UpdateCommand, DateTimeOffset CreatedAt,
+    string? BridgeToken = null);
 
 public sealed record ServerSnapshot(
     Guid Id, string Name, ServerState State, int? ProcessId, DateTimeOffset? StartedAt,
@@ -45,3 +46,6 @@ public sealed record CommandRequest(string Command);
 public sealed record ModerationRequest(string PlayerId, string? Reason, int? DurationMinutes);
 public sealed record ConfigFileRequest(string Content);
 public sealed record ScheduleRequest(Guid ServerId, string Name, string Cron, string Action, bool Enabled);
+public sealed record BridgePlayerReport(int PlayerId, string DisplayName, string UserId, string IpAddress, string Role);
+public sealed record BridgeHeartbeat(string BridgeVersion, string ApiVersion, string RoundState, int MaxPlayers, IReadOnlyList<BridgePlayerReport> Players);
+public sealed record BridgeStatus(bool Connected, DateTimeOffset? LastSeenAt, string? BridgeVersion, string? ApiVersion, string? RoundState, int MaxPlayers, IReadOnlyList<PlayerInfo> Players);

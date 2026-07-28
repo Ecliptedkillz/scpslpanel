@@ -51,3 +51,30 @@ export interface Schedule {
   enabled: boolean
   lastRunAt: string | null
 }
+
+export interface Player {
+  id: string
+  nickname: string
+  userId: string
+  ipAddress: string
+  role: string
+  ping: number
+  connectedAt: string
+}
+
+export interface BridgeStatus {
+  connected: boolean
+  lastSeenAt: string | null
+  bridgeVersion: string | null
+  apiVersion: string | null
+  roundState: string | null
+  maxPlayers: number
+  players: Player[]
+}
+
+export interface BridgeSetup {
+  serverId: string
+  token: string
+  endpoint: string
+  status: BridgeStatus
+}

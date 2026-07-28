@@ -8,7 +8,8 @@ using ScpSlPanel.Api.Infrastructure;
 namespace ScpSlPanel.Api.Services;
 
 public sealed class ServerManager(
-    JsonStore store, IHubContext<PanelHub> hub, AuditService audit, ILogger<ServerManager> logger)
+    JsonStore store, IHubContext<PanelHub> hub, AuditService audit, BridgeStateService bridge,
+    ILogger<ServerManager> logger)
 {
     private sealed class Runtime
     {
@@ -37,7 +38,7 @@ public sealed class ServerManager(
             : Path.GetFullPath(request.WorkingDirectory);
         var item = new ServerDefinition(Guid.NewGuid(), request.Name.Trim(), Path.GetFullPath(request.ExecutablePath),
             request.Arguments ?? "", working, request.AutoRestart, request.AutoStart, request.QueryPort,
-            request.UpdateCommand, DateTimeOffset.UtcNow);
+            request.UpdateCommand, DateTimeOffset.UtcNow, CreateBridgeToken());
         definitions.Add(item);
         await store.WriteAsync("servers", definitions);
         return item;
@@ -90,9 +91,41 @@ public sealed class ServerManager(
             }
             catch { /* Process may have exited during sampling. */ }
         }
+        var bridgeStatus = bridge.Get(definition.Id);
         return new(definition.Id, definition.Name, runtime.State, processId, runtime.StartedAt,
-            memory, Math.Round(cpu, 1), 0, 0, runtime.LastError);
+            memory, Math.Round(cpu, 1), bridgeStatus.Players.Count, bridgeStatus.MaxPlayers, runtime.LastError);
     }
+
+    public async Task<string> EnsureBridgeTokenAsync(Guid id, bool regenerate = false)
+    {
+        var definitions = await DefinitionsAsync();
+        var index = definitions.FindIndex(item => item.Id == id);
+        if (index < 0) throw new KeyNotFoundException("Server not found.");
+        var token = regenerate || string.IsNullOrWhiteSpace(definitions[index].BridgeToken)
+            ? CreateBridgeToken()
+            : definitions[index].BridgeToken!;
+        if (token != definitions[index].BridgeToken)
+        {
+            definitions[index] = definitions[index] with { BridgeToken = token };
+            await store.WriteAsync("servers", definitions);
+        }
+        return token;
+    }
+
+    public async Task<bool> ValidateBridgeTokenAsync(Guid id, string? supplied)
+    {
+        if (string.IsNullOrWhiteSpace(supplied)) return false;
+        var definition = await FindAsync(id);
+        if (string.IsNullOrWhiteSpace(definition?.BridgeToken)) return false;
+        var expectedBytes = System.Text.Encoding.UTF8.GetBytes(definition.BridgeToken);
+        var suppliedBytes = System.Text.Encoding.UTF8.GetBytes(supplied);
+        return expectedBytes.Length == suppliedBytes.Length
+            && System.Security.Cryptography.CryptographicOperations.FixedTimeEquals(expectedBytes, suppliedBytes);
+    }
+
+    private static string CreateBridgeToken() =>
+        Convert.ToBase64String(System.Security.Cryptography.RandomNumberGenerator.GetBytes(32))
+            .TrimEnd('=').Replace('+', '-').Replace('/', '_');
 
     public async Task StartAsync(Guid id, string actor)
     {

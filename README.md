@@ -15,13 +15,13 @@ configuration access, metrics, authentication, and audit logging in one dashboar
 - Record and revoke timed or permanent bans
 - Run start, stop, restart, or console-command schedules with five-field cron expressions
 - Detect EXILED and NWAPI plugin assemblies
+- Receive live players and roles through the included LabAPI bridge
 - Cookie authentication, PBKDF2 password hashing, owner/admin roles, and user creation API
 - Responsive React operator interface and a single deployable ASP.NET Core application
 
 Player telemetry is intentionally adapter-based. SCP:SL does not expose all live player data
-through the child process streams alone. A target installation needs an EXILED/NWAPI bridge
-or Remote Admin integration to populate players and execute in-game kick/mute/role actions.
-The process manager and API are ready for that adapter without changing the dashboard model.
+through child process streams alone. The included LabAPI bridge sends authenticated player
+heartbeats to the panel and enables per-player kick and ban actions.
 
 ## Run locally
 
@@ -68,6 +68,32 @@ The service account running SCP Control must have permission to:
 - terminate its child process tree.
 
 Do not run the panel as a system administrator/root account.
+
+## Install the LabAPI game-server bridge
+
+LabAPI is already bundled with current SCP:SL dedicated server builds. The bridge is compiled
+against the copy installed with your game server so its required API version always matches.
+
+1. Build and restart SCP Control, then open the registered server's **Players** tab.
+2. Run `install-bridge.bat`.
+3. Enter the full path to the server's `SCPSL_Data\Managed` directory. It must contain
+   `LabApi.dll` and `Assembly-CSharp.dll`.
+4. Enter the SCP:SL server port, panel URL, Server ID, and token shown in the Players tab.
+5. Restart the SCP:SL server. The Players tab should report **LabAPI Bridge Connected** within
+   a few seconds.
+
+The installer builds against the server's LabAPI version, copies the plugin into
+`%AppData%\SCP Secret Laboratory\LabAPI\plugins\<server-port>\`, and writes its YAML under
+`configs\<server-port>\SCP Control Bridge`. Use `build-bridge.bat` instead if you want to
+compile the DLL without installing it.
+
+If `hoster_policy.txt` contains `gamedir_for_configs: true`, replace `%AppData%` above with the
+dedicated server's local `AppData` directory. LabAPI's default plugin search paths are `global`
+and the current server port.
+
+The bridge makes outbound HTTP requests to the panel. `PanelUrl` must therefore be reachable
+from the game-server machine; do not use `127.0.0.1` when the panel runs on another computer.
+Use HTTPS when traffic leaves a trusted private network. Treat the bridge token like a password.
 
 ## Production
 
