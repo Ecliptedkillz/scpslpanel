@@ -718,6 +718,11 @@ api.MapPost("/integrations/discord/test", async (NotificationService notificatio
 }).RequireAuthorization("Owner");
 api.MapGet("/integrations/discord/bot/status", (DiscordBotService bot) =>
     Results.Ok(bot.Status)).RequireAuthorization("Owner");
+api.MapPost("/integrations/discord/bot/reconnect", (DiscordBotService bot) =>
+{
+    bot.RequestReconnect();
+    return Results.Accepted();
+}).RequireAuthorization("Owner");
 
 app.MapHub<PanelHub>("/hub/panel");
 app.MapFallbackToFile("index.html");

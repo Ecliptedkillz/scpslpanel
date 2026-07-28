@@ -11,6 +11,9 @@ public sealed class DiscordBotService(
     private DiscordSocketClient? _client;
     private string _activeToken = "";
     private volatile string? _error;
+    private volatile bool _restartRequested;
+
+    public void RequestReconnect() => _restartRequested = true;
 
     public DiscordBotStatus Status
     {
@@ -31,8 +34,11 @@ public sealed class DiscordBotService(
                 var settings = await settingsService.GetAsync();
                 if (!settings.DiscordBotEnabled || string.IsNullOrWhiteSpace(settings.DiscordBotToken))
                     await DisconnectAsync();
-                else if (_client is null || _activeToken != settings.DiscordBotToken)
+                else if (_client is null || _activeToken != settings.DiscordBotToken || _restartRequested)
+                {
+                    _restartRequested = false;
                     await ConnectAsync(settings.DiscordBotToken);
+                }
             }
             catch (Exception ex) { _error = ex.Message; logger.LogError(ex, "Discord bot connection failed"); }
             await Task.Delay(TimeSpan.FromSeconds(10), stoppingToken);

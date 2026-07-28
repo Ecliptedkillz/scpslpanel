@@ -70,13 +70,13 @@ public sealed class NotificationService(
     public async Task SendAsync(string title, string message, string severity = "info", string category = "technical")
     {
         var settings = await GetAsync();
-        if (!settings.DiscordBotEnabled || string.IsNullOrWhiteSpace(settings.DiscordBotToken)
-            || string.IsNullOrWhiteSpace(settings.DiscordNotificationChannelId)) return;
+        if (!settings.DiscordBotEnabled || string.IsNullOrWhiteSpace(settings.DiscordBotToken)) return;
         var channelId = category switch {
             "moderation" when !string.IsNullOrWhiteSpace(settings.DiscordModerationChannelId) => settings.DiscordModerationChannelId,
             "audit" when !string.IsNullOrWhiteSpace(settings.DiscordAuditChannelId) => settings.DiscordAuditChannelId,
             _ => settings.DiscordNotificationChannelId
         };
+        if (string.IsNullOrWhiteSpace(channelId)) return;
         try
         {
             var color = severity == "error" ? 15158332 : severity == "warning" ? 16753920 : 5763719;

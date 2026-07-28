@@ -4,6 +4,10 @@ import { api } from '../api'
 import type { StoredPlayer } from './PlayerHistoryView'
 
 type GlobalPlayer = { serverId: string; serverName: string; player: StoredPlayer }
+type LinkHealth = {
+  serverId: string; serverName: string; line: number; steamId: string; discordId: string
+  valid: boolean; issue?: string
+}
 const playtime = (seconds: number) => seconds >= 3600
   ? `${Math.floor(seconds / 3600)}h ${Math.floor(seconds % 3600 / 60)}m`
   : `${Math.floor(seconds / 60)}m`
@@ -12,7 +16,15 @@ export function GlobalPlayerDatabase({ onError }: { onError: (message: string) =
   const [records,setRecords] = useState<GlobalPlayer[]>([])
   const [search,setSearch] = useState('')
   const [selected,setSelected] = useState<GlobalPlayer | null>(null)
-  useEffect(() => { api<GlobalPlayer[]>('/players/global').then(setRecords).catch(e=>onError(e.message)) }, [onError])
+  const [health,setHealth] = useState<LinkHealth[]>([])
+  const [showHealth,setShowHealth] = useState(false)
+  useEffect(() => {
+    Promise.all([
+      api<GlobalPlayer[]>('/players/global').then(setRecords),
+      api<LinkHealth[]>('/players/identity-health').then(setHealth),
+    ]).catch(e=>onError(e.message))
+  }, [onError])
+  const issues=health.filter(x=>!x.valid)
   const filtered = useMemo(() => {
     const query=search.trim().toLowerCase()
     if (!query) return records
@@ -23,7 +35,14 @@ export function GlobalPlayerDatabase({ onError }: { onError: (message: string) =
   },[records,search])
   return <>
     <div className="global-player-toolbar"><div><span className="eyebrow">IDENTITY INTELLIGENCE</span><h1>Player Database</h1><p>Search linked player identities across every server you can access.</p></div><label><Search size={18}/><input value={search} onChange={e=>setSearch(e.target.value)} placeholder="Search name, Steam, Discord, role…"/></label></div>
-    <div className="player-db-summary"><div><strong>{records.length}</strong><span>KNOWN PLAYERS</span></div><div><strong>{records.filter(x=>x.player.discordId).length}</strong><span>DISCORD LINKS</span></div><div><strong>{new Set(records.map(x=>x.serverId)).size}</strong><span>SERVERS</span></div></div>
+    <div className="player-db-summary"><div><strong>{records.length}</strong><span>KNOWN PLAYERS</span></div><div><strong>{records.filter(x=>x.player.discordId).length}</strong><span>DISCORD LINKS</span></div><div><strong>{new Set(records.map(x=>x.serverId)).size}</strong><span>SERVERS</span></div><button className={issues.length ? 'identity-health bad' : 'identity-health'} onClick={()=>setShowHealth(!showHealth)}><strong>{issues.length || 'OK'}</strong><span>LINK HEALTH</span></button></div>
+    {showHealth && <section className="identity-health-panel">
+      <header><div><span className="eyebrow">DISCORD LINKS.CSV</span><h3>Identity-link health</h3></div><span className={`tag ${issues.length ? 'red' : ''}`}>{issues.length ? `${issues.length} ISSUE${issues.length === 1 ? '' : 'S'}` : 'HEALTHY'}</span></header>
+      {!issues.length && <p>All {health.length} configured links use valid, unique Steam and Discord IDs.</p>}
+      {issues.map(item=><div className="identity-health-row" key={`${item.serverId}:${item.line}`}>
+        <span>{item.serverName}</span><code>LINE {item.line}</code><code>{item.steamId || 'missing Steam ID'}</code><code>{item.discordId || 'missing Discord ID'}</code><strong>{item.issue}</strong>
+      </div>)}
+    </section>}
     <div className="global-player-grid">{filtered.map(record => {
       const player=record.player
       return <button className="global-player-card" key={`${record.serverId}:${player.id}`} onClick={()=>setSelected(record)}>

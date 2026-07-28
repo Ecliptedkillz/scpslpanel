@@ -9,7 +9,7 @@ public sealed class SnowflakeStringConverter : JsonConverter<string>
         reader.TokenType switch
         {
             JsonTokenType.String => reader.GetString() ?? "",
-            JsonTokenType.Number => reader.GetRawText(),
+            JsonTokenType.Number => reader.GetUInt64().ToString(),
             JsonTokenType.Null => "",
             _ => throw new JsonException("Discord snowflake must be a string or number.")
         };
