@@ -201,8 +201,41 @@ internal sealed class BridgeClient : IDisposable
 
     public void CheckDiscordGameRole(Player player)
     {
-        if (player == null || player.IsHost || string.IsNullOrWhiteSpace(player.UserId)) return;
-        _ = CheckDiscordGameRoleAsync(player.PlayerId, player.UserId);
+        if (player == null || player.IsHost) return;
+        _ = CheckDiscordGameRoleWhenReadyAsync(player.PlayerId);
+    }
+
+    private async Task CheckDiscordGameRoleWhenReadyAsync(int playerId)
+    {
+        // PlayerJoined can fire before Steam authentication and the native RA Members
+        // assignment have completed. Resolve the ready player and apply the panel role
+        // afterwards so Discord-synchronized permissions are authoritative.
+        for (var attempt = 0; attempt < 8 && !_disposed; attempt++)
+        {
+            if (attempt > 0)
+                await Task.Delay(1000).ConfigureAwait(false);
+
+            Player? current = null;
+            try
+            {
+                current = Player.ReadyList?.FirstOrDefault(candidate =>
+                    candidate.PlayerId == playerId);
+            }
+            catch
+            {
+                // The ready list can be unavailable while the connection initializes.
+            }
+
+            if (current == null || string.IsNullOrWhiteSpace(current.UserId)) continue;
+
+            // Give SCP:SL's native permissions handler time to finish applying the
+            // static Members entry before the panel replaces it.
+            await Task.Delay(750).ConfigureAwait(false);
+            await CheckDiscordGameRoleAsync(playerId, current.UserId).ConfigureAwait(false);
+            return;
+        }
+
+        Logger.Warn($"SCP Control could not synchronize an in-game role for player {playerId}: the authenticated player was not ready.");
     }
 
     private async Task CheckDiscordGameRoleAsync(int playerId, string userId)
