@@ -253,11 +253,16 @@ internal sealed class BridgeClient : IDisposable
             var serializer = new DataContractJsonSerializer(typeof(GameRolePayload));
             using var stream = await response.Content.ReadAsStreamAsync().ConfigureAwait(false);
             var assignment = serializer.ReadObject(stream) as GameRolePayload;
-            if (assignment?.Assigned != true || string.IsNullOrWhiteSpace(assignment.GroupName)) return;
+            if (assignment?.Assigned != true || string.IsNullOrWhiteSpace(assignment.GroupName))
+            {
+                PanelPermissionProvider.Clear(userId);
+                return;
+            }
             Dispatch(() =>
             {
                 var current = Player.ReadyList?.FirstOrDefault(candidate => candidate.PlayerId == playerId);
                 if (current == null) return;
+                PanelPermissionProvider.Set(current.UserId, assignment.PluginPermissions);
                 if (!TryApplyRemoteAdminGroup(current, assignment, out var error))
                 {
                     Logger.Warn($"SCP Control could not assign RA group '{assignment.GroupName}': {error}");

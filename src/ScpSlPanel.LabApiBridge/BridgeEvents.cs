@@ -17,6 +17,7 @@ internal sealed class BridgeEvents(BridgeClient client) : CustomEventsHandler
 
     public override void OnPlayerLeft(PlayerLeftEventArgs ev)
     {
+        PanelPermissionProvider.Clear(ev.Player?.UserId);
         client.RecordEvent("leave", ev.Player);
         client.CaptureSnapshot(ev.Player);
     }
