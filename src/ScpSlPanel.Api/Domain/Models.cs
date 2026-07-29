@@ -130,7 +130,8 @@ public sealed record PanelIntegrationSettings(
     [property: JsonConverter(typeof(SnowflakeStringConverter))] string DiscordModerationChannelId = "",
     [property: JsonConverter(typeof(SnowflakeStringConverter))] string DiscordAuditChannelId = "",
     bool DiscordDailyReportEnabled = false, int DiscordDailyReportHourUtc = 12,
-    IReadOnlyList<DiscordGameRoleGrant>? DiscordGameRoleGrants = null);
+    IReadOnlyList<DiscordGameRoleGrant>? DiscordGameRoleGrants = null,
+    IReadOnlyList<DiscordDonorRoleGrant>? DiscordDonorRoleGrants = null);
 public sealed record DiscordBotStatus(bool Enabled, bool Connected, string? BotName, string? Error);
 public sealed record DiscordChannelDiagnostic(
     string Purpose, string ChannelId, bool Found, string? Name, bool CanView, bool CanSend);
@@ -148,6 +149,12 @@ public sealed record DiscordGameRoleGrant(
     string BadgeText = "", string BadgeColor = "silver", bool Hidden = false,
     bool Cover = true, bool ReservedSlot = false, byte KickPower = 0,
     byte RequiredKickPower = 0, IReadOnlyList<string>? PluginPermissions = null);
+public sealed record DiscordDonorRoleGrant(
+    [property: JsonConverter(typeof(SnowflakeStringConverter))] string RoleId,
+    Guid ServerId, int Tier, int Priority = 0, bool Enabled = true);
+public sealed record DonorSyncResult(
+    Guid ServerId, string ServerName, int Donors, int Added, int Updated, int Removed,
+    string Path);
 public sealed record BridgeGameRoleAssignment(
     bool Assigned, string? GroupName = null, string? DiscordId = null,
     string? DiscordRoleId = null, IReadOnlyList<string>? Permissions = null,

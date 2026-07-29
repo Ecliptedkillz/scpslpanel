@@ -30,6 +30,7 @@ builder.Services.AddSingleton<OperationTracker>();
 builder.Services.AddSingleton<BridgeCommandService>();
 builder.Services.AddSingleton<PlayerDataService>();
 builder.Services.AddSingleton<DiscordLinkService>();
+builder.Services.AddSingleton<DiscordDonorSyncService>();
 builder.Services.AddSingleton<PermissionManagementService>();
 builder.Services.AddSingleton<OperationsDataService>();
 builder.Services.AddSingleton<NotificationService>();
@@ -1135,6 +1136,14 @@ api.MapPost("/integrations/discord/test", async (NotificationService notificatio
 {
     await notifications.TestAsync();
     return Results.NoContent();
+}).RequireAuthorization("Owner");
+api.MapPost("/integrations/discord/donors/sync", async (
+    DiscordBotService bot, AuditService audit, ClaimsPrincipal user) =>
+{
+    var results = await bot.SyncDonorsAsync();
+    await audit.AddAsync(Actor(user), "discord.donor-sync", "Donators.csv",
+        $"Synchronized {results.Sum(x => x.Donors)} donor rows across {results.Count} server(s).");
+    return Results.Ok(results);
 }).RequireAuthorization("Owner");
 api.MapGet("/integrations/discord/diagnostics", (DiscordBotService bot) => bot.DiagnoseAsync())
     .RequireAuthorization("Owner");

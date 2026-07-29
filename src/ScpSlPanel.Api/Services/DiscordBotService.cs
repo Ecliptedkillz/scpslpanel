@@ -6,14 +6,29 @@ namespace ScpSlPanel.Api.Services;
 
 public sealed class DiscordBotService(
     NotificationService settingsService, ServerManager servers, BridgeStateService bridge,
-    BridgeCommandService bridgeCommands, AuditService audit, ILogger<DiscordBotService> logger) : BackgroundService
+    BridgeCommandService bridgeCommands, AuditService audit, DiscordDonorSyncService donorSync,
+    ILogger<DiscordBotService> logger) : BackgroundService
 {
     private DiscordSocketClient? _client;
     private string _activeToken = "";
     private volatile string? _error;
     private volatile bool _restartRequested;
+    private DateTimeOffset _nextDonorSync = DateTimeOffset.MinValue;
 
     public void RequestReconnect() => _restartRequested = true;
+
+    public async Task<IReadOnlyList<DonorSyncResult>> SyncDonorsAsync(
+        CancellationToken cancellationToken = default)
+    {
+        var settings = await settingsService.GetAsync();
+        if (_client?.ConnectionState != ConnectionState.Connected)
+            throw new InvalidOperationException("The Discord bot is not connected.");
+        if (!ulong.TryParse(settings.DiscordGuildId, out var guildId)
+            || _client.GetGuild(guildId) is not { } guild)
+            throw new InvalidOperationException("The configured Discord guild is not available.");
+        await guild.DownloadUsersAsync();
+        return await donorSync.SyncAsync(guild, cancellationToken);
+    }
 
     public DiscordBotStatus Status
     {
@@ -72,6 +87,11 @@ public sealed class DiscordBotService(
                     _restartRequested = false;
                     await ConnectAsync(settings.DiscordBotToken);
                 }
+                else if (DateTimeOffset.UtcNow >= _nextDonorSync)
+                {
+                    _nextDonorSync = DateTimeOffset.UtcNow.AddMinutes(5);
+                    await SyncDonorsAsync(stoppingToken);
+                }
             }
             catch (Exception ex) { _error = ex.Message; logger.LogError(ex, "Discord bot connection failed"); }
             await Task.Delay(TimeSpan.FromSeconds(10), stoppingToken);
@@ -88,6 +108,11 @@ public sealed class DiscordBotService(
         });
         client.Log += message => { logger.Log((LogLevel)Math.Max(0, (int)LogLevel.Critical - (int)message.Severity), "{Message}", message.Message); return Task.CompletedTask; };
         client.Ready += RegisterCommandsAsync;
+        client.Ready += async () => {
+            _nextDonorSync = DateTimeOffset.UtcNow.AddMinutes(5);
+            try { await SyncDonorsAsync(); }
+            catch (Exception ex) { logger.LogWarning(ex, "Initial Discord donor synchronization failed"); }
+        };
         client.SlashCommandExecuted += HandleCommandAsync;
         _client = client;
         _activeToken = token;

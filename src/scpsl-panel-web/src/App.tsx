@@ -804,6 +804,7 @@ type IntegrationSettings = {
   discordGameRoleGrants: {roleId:string;serverId:string;groupName:string;priority:number;enabled:boolean;
     permissions:string[];inheritedGroups:string[];badgeText:string;badgeColor:string;hidden:boolean;
     cover:boolean;reservedSlot:boolean;kickPower:number;requiredKickPower:number;pluginPermissions:string[]}[]
+  discordDonorRoleGrants: {roleId:string;serverId:string;tier:number;priority:number;enabled:boolean}[]
   discordDailyReportEnabled: boolean; discordDailyReportHourUtc: number
 }
 const defaultIntegration: IntegrationSettings = {
@@ -819,7 +820,7 @@ const defaultIntegration: IntegrationSettings = {
   discordBotEnabled: false, discordBotToken: '', discordGuildId: '', discordControlRoleIds: '',
   discordNotificationChannelId: '', steamWebApiKey: '',
   discordModerationChannelId: '', discordAuditChannelId: '', discordRoleGrants: [],
-  discordGameRoleGrants: [],
+  discordGameRoleGrants: [], discordDonorRoleGrants: [],
   discordDailyReportEnabled: false, discordDailyReportHourUtc: 12,
 }
 
@@ -1018,6 +1019,7 @@ function DiscordBotPanel({ servers, onError }: { servers: Server[]; onError: (e:
       ...value,
       discordRoleGrants:value.discordRoleGrants ?? [],
       discordGameRoleGrants:value.discordGameRoleGrants ?? [],
+      discordDonorRoleGrants:value.discordDonorRoleGrants ?? [],
     })).catch(e => onError(e.message)), [onError])
   const loadStatus = useCallback(() =>
     api<typeof status>('/integrations/discord/bot/status').then(setStatus).catch(e=>onError(e.message)),[onError])
@@ -1032,6 +1034,8 @@ function DiscordBotPanel({ servers, onError }: { servers: Server[]; onError: (e:
   const updateGrant=(index:number,patch:Partial<IntegrationSettings['discordRoleGrants'][number]>)=>setSettings({...settings,discordRoleGrants:(settings.discordRoleGrants ?? []).map((grant,i)=>i===index?{...grant,...patch}:grant)})
   const addGameRole=()=>setSettings({...settings,discordGameRoleGrants:[...(settings.discordGameRoleGrants ?? []),{roleId:'',serverId:servers[0]?.id ?? '',groupName:'',priority:0,enabled:true,permissions:[],inheritedGroups:[],badgeText:'',badgeColor:'silver',hidden:false,cover:true,reservedSlot:false,kickPower:0,requiredKickPower:0,pluginPermissions:[]}]})
   const updateGameRole=(index:number,patch:Partial<IntegrationSettings['discordGameRoleGrants'][number]>)=>setSettings({...settings,discordGameRoleGrants:(settings.discordGameRoleGrants ?? []).map((grant,i)=>i===index?{...grant,...patch}:grant)})
+  const addDonorRole=()=>setSettings({...settings,discordDonorRoleGrants:[...(settings.discordDonorRoleGrants ?? []),{roleId:'',serverId:servers[0]?.id ?? '',tier:1,priority:0,enabled:true}]})
+  const updateDonorRole=(index:number,patch:Partial<IntegrationSettings['discordDonorRoleGrants'][number]>)=>setSettings({...settings,discordDonorRoleGrants:(settings.discordDonorRoleGrants ?? []).map((grant,i)=>i===index?{...grant,...patch}:grant)})
   return <form className="panel settings-alerts discord-settings" onSubmit={async e => {
     e.preventDefault()
     try { await api('/integrations',{method:'PUT',body:JSON.stringify(settings)}); setTimeout(()=>void loadStatus(),1200) }
@@ -1042,6 +1046,10 @@ function DiscordBotPanel({ servers, onError }: { servers: Server[]; onError: (e:
     <label className="check-row"><input type="checkbox" checked={settings.discordBotEnabled} onChange={e=>setSettings({...settings,discordBotEnabled:e.target.checked})}/> Enable embedded Discord bot</label>
     <div className="form-row"><label>BOT TOKEN<input type="password" value={settings.discordBotToken} onChange={e=>setSettings({...settings,discordBotToken:e.target.value})}/></label><label>GUILD ID<input value={settings.discordGuildId} onChange={e=>setSettings({...settings,discordGuildId:e.target.value.trim()})}/></label><label>TECHNICAL CHANNEL ID<input value={settings.discordNotificationChannelId} onChange={e=>setSettings({...settings,discordNotificationChannelId:e.target.value.trim()})}/></label><label>MODERATION CHANNEL ID<input value={settings.discordModerationChannelId} onChange={e=>setSettings({...settings,discordModerationChannelId:e.target.value.trim()})}/></label><label>AUDIT CHANNEL ID<input value={settings.discordAuditChannelId} onChange={e=>setSettings({...settings,discordAuditChannelId:e.target.value.trim()})}/></label><label>FULL CONTROL ROLE IDS<input value={settings.discordControlRoleIds} onChange={e=>setSettings({...settings,discordControlRoleIds:e.target.value})} placeholder="123…, 456…"/></label><label>STEAM WEB API KEY<input type="password" value={settings.steamWebApiKey} onChange={e=>setSettings({...settings,steamWebApiKey:e.target.value})}/></label></div>
     <div className="form-row"><label className="check-row"><input type="checkbox" checked={settings.discordDailyReportEnabled} onChange={e=>setSettings({...settings,discordDailyReportEnabled:e.target.checked})}/> Send daily fleet report</label><label>REPORT HOUR (UTC)<input type="number" min={0} max={23} value={settings.discordDailyReportHourUtc} onChange={e=>setSettings({...settings,discordDailyReportHourUtc:Number(e.target.value)})}/></label></div>
+    <div className="role-grant-editor"><div className="panel-head"><div><span className="eyebrow">DONOR SYNC</span><h3>Discord roles → Donators.csv</h3><p>Runs every five minutes. Higher priority wins when a member has multiple donor roles; pet indices are preserved.</p></div><div className="button-row"><button type="button" onClick={async()=>{try{const result=await api<{donors:number}[]>('/integrations/discord/donors/sync',{method:'POST'});alert(`Synced ${result.reduce((sum,item)=>sum+item.donors,0)} donor rows.`)}catch(error){onError(error instanceof Error?error.message:'Donor sync failed')}}}>SYNC NOW</button><button type="button" onClick={addDonorRole}>ADD DONOR ROLE</button></div></div>
+      {(settings.discordDonorRoleGrants ?? []).map((grant,index)=><section className="role-grant-card" key={index}><label className="check-row"><input type="checkbox" checked={grant.enabled} onChange={e=>updateDonorRole(index,{enabled:e.target.checked})}/> Mapping enabled</label><div className="form-row"><label>DISCORD ROLE ID<input value={grant.roleId} onChange={e=>updateDonorRole(index,{roleId:e.target.value.trim()})}/></label><label>SERVER<select value={grant.serverId} onChange={e=>updateDonorRole(index,{serverId:e.target.value})}>{servers.map(server=><option value={server.id} key={server.id}>{server.name}</option>)}</select></label><label>DONOR TIER<input type="number" min={1} value={grant.tier} onChange={e=>updateDonorRole(index,{tier:Number(e.target.value)})}/></label><label>PRIORITY<input type="number" value={grant.priority} onChange={e=>updateDonorRole(index,{priority:Number(e.target.value)})}/></label><button type="button" className="danger" onClick={()=>setSettings({...settings,discordDonorRoleGrants:(settings.discordDonorRoleGrants ?? []).filter((_,i)=>i!==index)})}>REMOVE</button></div></section>)}
+      {!(settings.discordDonorRoleGrants?.length)&&<p className="muted">No donor roles configured.</p>}
+    </div>
     <div className="role-grant-editor"><div className="panel-head"><div><span className="eyebrow">PER-SERVER ACCESS</span><h3>Discord role permissions</h3></div><button type="button" onClick={addGrant}>ADD ROLE</button></div>
       {(settings.discordRoleGrants ?? []).map((grant,index)=><section className="role-grant-card" key={index}>
         <div className="form-row"><label>ROLE ID<input value={grant.roleId} onChange={e=>updateGrant(index,{roleId:e.target.value.trim()})}/></label><label>SERVER<select value={grant.serverId} onChange={e=>updateGrant(index,{serverId:e.target.value})}>{servers.map(server=><option value={server.id} key={server.id}>{server.name}</option>)}</select></label><button type="button" className="danger" onClick={()=>setSettings({...settings,discordRoleGrants:(settings.discordRoleGrants ?? []).filter((_,i)=>i!==index)})}>REMOVE</button></div>

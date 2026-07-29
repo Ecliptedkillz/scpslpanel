@@ -164,6 +164,16 @@ Discord sends are retried up to three times, including rate-limit delays, and th
 delivery results are retained in Settings. Optional daily fleet reports use the configured UTC
 hour. Technical, moderation, and audit messages may be routed to separate channels.
 
+### Discord donor synchronization
+
+Under **Settings → Discord → Donor sync**, map each Discord donor role to a server and numeric
+donor tier. Linked identities are read from that server's
+`LabAPI\configs\<query-port>\PlayhousePlugin\DiscordLinks.csv`, and the bot updates
+`PlayhousePlugin\Donators.csv` when it connects, every five minutes, or when **Sync now** is used.
+When multiple donor roles match, the mapping with the highest priority wins. The Discord server
+booster state is written to the third column, existing pet indices are preserved, and new donors
+start with pet index `0`.
+
 ## Account security
 
 Each panel account can enable TOTP two-factor authentication in Settings using an authenticator
