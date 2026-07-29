@@ -47,6 +47,13 @@ public sealed class PanelPermissionProvider : IPermissionsProvider
         return permissions != null && permissions.All(permission => IsGranted(granted, permission));
     }
 
+    public bool HasPermission(Player player, string permission)
+    {
+        if (player == null) return false;
+        if (player.IsHost) return true;
+        return IsGranted(GetPermissions(player), permission);
+    }
+
     public bool HasAnyPermission(Player player, params string[] permissions)
     {
         if (player == null) return false;
@@ -67,6 +74,11 @@ public sealed class PanelPermissionProvider : IPermissionsProvider
         var removed = new HashSet<string>(permissions ?? Array.Empty<string>(),
             StringComparer.OrdinalIgnoreCase);
         Set(player.UserId, GetPermissions(player).Where(permission => !removed.Contains(permission)));
+    }
+
+    public void ReloadPermissions()
+    {
+        // Permissions are supplied live by the panel when a Discord role is resolved.
     }
 
     private static bool IsGranted(IEnumerable<string> grantedPermissions, string requested)
