@@ -317,6 +317,17 @@ app.MapGet("/api/bridge/{serverId:guid}/ban-check", async (
         ? new BridgeBanCheck(false)
         : new BridgeBanCheck(true, match.Reason, match.ExpiresAt));
 });
+app.MapGet("/api/bridge/{serverId:guid}/game-role", async (
+    Guid serverId, string? userId, HttpContext context, ServerManager servers,
+    DiscordLinkService discordLinks) =>
+{
+    if (!await servers.ValidateBridgeTokenAsync(serverId, context.Request.Headers["X-Bridge-Token"].FirstOrDefault()))
+        return Results.Unauthorized();
+    if (string.IsNullOrWhiteSpace(userId)) return Results.Ok(new BridgeGameRoleAssignment(false));
+    var server = await servers.FindAsync(serverId);
+    return server is null ? Results.NotFound()
+        : Results.Ok(await discordLinks.ResolveGameRoleAsync(server, userId));
+});
 app.MapGet("/api/bridge/{serverId:guid}/commands", async (
     Guid serverId, HttpContext context, ServerManager servers, BridgeCommandService commands) =>
 {
@@ -385,6 +396,13 @@ app.MapPost("/api/bridge/{serverId:guid}/events", async (
         }
         await audit.AddAsync(actor, $"player.{value.Type}", target,
             value.DurationSeconds is > 0 ? $"{reason} ({TimeSpan.FromSeconds(value.DurationSeconds.Value)})" : reason);
+    }
+    else if (value.Type == "role-sync")
+    {
+        var target = !string.IsNullOrWhiteSpace(value.UserId) ? value.UserId
+            : value.DisplayName ?? value.PlayerId ?? "unknown";
+        await audit.AddAsync("Discord role sync", "player.role-sync", target,
+            value.Detail ?? "Assigned an in-game Remote Admin group");
     }
     await hub.Clients.All.SendAsync("BridgeActivity", serverId);
     return Results.NoContent();

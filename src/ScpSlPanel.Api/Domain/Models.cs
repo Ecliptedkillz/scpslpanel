@@ -129,7 +129,8 @@ public sealed record PanelIntegrationSettings(
     string SteamWebApiKey = "", IReadOnlyList<DiscordRoleGrant>? DiscordRoleGrants = null,
     [property: JsonConverter(typeof(SnowflakeStringConverter))] string DiscordModerationChannelId = "",
     [property: JsonConverter(typeof(SnowflakeStringConverter))] string DiscordAuditChannelId = "",
-    bool DiscordDailyReportEnabled = false, int DiscordDailyReportHourUtc = 12);
+    bool DiscordDailyReportEnabled = false, int DiscordDailyReportHourUtc = 12,
+    IReadOnlyList<DiscordGameRoleGrant>? DiscordGameRoleGrants = null);
 public sealed record DiscordBotStatus(bool Enabled, bool Connected, string? BotName, string? Error);
 public sealed record DiscordChannelDiagnostic(
     string Purpose, string ChannelId, bool Found, string? Name, bool CanView, bool CanSend);
@@ -139,6 +140,12 @@ public sealed record DiscordDiagnostic(
 public sealed record DiscordRoleGrant(
     [property: JsonConverter(typeof(SnowflakeStringConverter))] string RoleId,
     Guid ServerId, IReadOnlyList<string> Permissions);
+public sealed record DiscordGameRoleGrant(
+    [property: JsonConverter(typeof(SnowflakeStringConverter))] string RoleId,
+    Guid ServerId, string GroupName, int Priority = 0, bool Enabled = true);
+public sealed record BridgeGameRoleAssignment(
+    bool Assigned, string? GroupName = null, string? DiscordId = null,
+    string? DiscordRoleId = null);
 public sealed record IdentityLinkHealth(
     Guid ServerId, string ServerName, int Line, string SteamId, string DiscordId,
     bool Valid, string? Issue);

@@ -34,6 +34,46 @@ public sealed class DiscordLinkService(NotificationService settingsService, ILog
     public async Task<PlayerRecord> EnrichAsync(ServerDefinition server, PlayerRecord player) =>
         (await EnrichAsync(server, [player]))[0];
 
+    public async Task<BridgeGameRoleAssignment> ResolveGameRoleAsync(
+        ServerDefinition server, string userId)
+    {
+        var steamId = userId.Split('@', 2)[0].Trim();
+        if (string.IsNullOrWhiteSpace(steamId)) return new(false);
+        var links = ReadLinks(server);
+        if (!links.TryGetValue(steamId, out var discordId)) return new(false);
+        var settings = await settingsService.GetAsync();
+        var grants = settings.DiscordGameRoleGrants?
+            .Where(grant => grant.Enabled && grant.ServerId == server.Id
+                && !string.IsNullOrWhiteSpace(grant.RoleId)
+                && !string.IsNullOrWhiteSpace(grant.GroupName))
+            .OrderByDescending(grant => grant.Priority).ToArray() ?? [];
+        if (grants.Length == 0 || string.IsNullOrWhiteSpace(settings.DiscordBotToken)
+            || string.IsNullOrWhiteSpace(settings.DiscordGuildId)) return new(false);
+        try
+        {
+            using var request = new HttpRequestMessage(HttpMethod.Get,
+                $"https://discord.com/api/v10/guilds/{settings.DiscordGuildId}/members/{discordId}");
+            request.Headers.Authorization = new AuthenticationHeaderValue("Bot", settings.DiscordBotToken);
+            using var response = await _http.SendAsync(request);
+            if (!response.IsSuccessStatusCode)
+            {
+                logger.LogWarning("Discord game-role lookup for {DiscordId} returned {Status}",
+                    discordId, (int)response.StatusCode);
+                return new(false);
+            }
+            using var document = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+            var roleIds = document.RootElement.GetProperty("roles").EnumerateArray()
+                .Select(role => role.GetString()).Where(role => role is not null).ToHashSet();
+            var match = grants.FirstOrDefault(grant => roleIds.Contains(grant.RoleId));
+            return match is null ? new(false) : new(true, match.GroupName.Trim(), discordId, match.RoleId);
+        }
+        catch (Exception exception)
+        {
+            logger.LogWarning(exception, "Discord game-role synchronization failed for {UserId}", userId);
+            return new(false);
+        }
+    }
+
     public IReadOnlyList<IdentityLinkHealth> Health(ServerDefinition server)
     {
         var path = LinkPath(server);

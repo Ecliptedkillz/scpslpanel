@@ -786,6 +786,7 @@ type IntegrationSettings = {
   discordNotificationChannelId: string; steamWebApiKey: string
   discordModerationChannelId: string; discordAuditChannelId: string
   discordRoleGrants: {roleId:string;serverId:string;permissions:string[]}[]
+  discordGameRoleGrants: {roleId:string;serverId:string;groupName:string;priority:number;enabled:boolean}[]
   discordDailyReportEnabled: boolean; discordDailyReportHourUtc: number
 }
 const defaultIntegration: IntegrationSettings = {
@@ -801,6 +802,7 @@ const defaultIntegration: IntegrationSettings = {
   discordBotEnabled: false, discordBotToken: '', discordGuildId: '', discordControlRoleIds: '',
   discordNotificationChannelId: '', steamWebApiKey: '',
   discordModerationChannelId: '', discordAuditChannelId: '', discordRoleGrants: [],
+  discordGameRoleGrants: [],
   discordDailyReportEnabled: false, discordDailyReportHourUtc: 12,
 }
 
@@ -886,6 +888,7 @@ function DiscordBotPanel({ servers, onError }: { servers: Server[]; onError: (e:
       ...defaultIntegration,
       ...value,
       discordRoleGrants:value.discordRoleGrants ?? [],
+      discordGameRoleGrants:value.discordGameRoleGrants ?? [],
     })).catch(e => onError(e.message)), [onError])
   const loadStatus = useCallback(() =>
     api<typeof status>('/integrations/discord/bot/status').then(setStatus).catch(e=>onError(e.message)),[onError])
@@ -898,6 +901,8 @@ function DiscordBotPanel({ servers, onError }: { servers: Server[]; onError: (e:
   if (!settings) return null
   const addGrant=()=>setSettings({...settings,discordRoleGrants:[...(settings.discordRoleGrants ?? []),{roleId:'',serverId:servers[0]?.id ?? '',permissions:['view']}]})
   const updateGrant=(index:number,patch:Partial<IntegrationSettings['discordRoleGrants'][number]>)=>setSettings({...settings,discordRoleGrants:(settings.discordRoleGrants ?? []).map((grant,i)=>i===index?{...grant,...patch}:grant)})
+  const addGameRole=()=>setSettings({...settings,discordGameRoleGrants:[...(settings.discordGameRoleGrants ?? []),{roleId:'',serverId:servers[0]?.id ?? '',groupName:'',priority:0,enabled:true}]})
+  const updateGameRole=(index:number,patch:Partial<IntegrationSettings['discordGameRoleGrants'][number]>)=>setSettings({...settings,discordGameRoleGrants:(settings.discordGameRoleGrants ?? []).map((grant,i)=>i===index?{...grant,...patch}:grant)})
   return <form className="panel settings-alerts discord-settings" onSubmit={async e => {
     e.preventDefault()
     try { await api('/integrations',{method:'PUT',body:JSON.stringify(settings)}); setTimeout(()=>void loadStatus(),1200) }
@@ -914,6 +919,13 @@ function DiscordBotPanel({ servers, onError }: { servers: Server[]; onError: (e:
         <div className="permission-chip-grid">{discordPermissions.map(([value,label])=>{const permissions=grant.permissions ?? [];return <label className="check-row" key={value}><input type="checkbox" checked={permissions.includes(value)} onChange={()=>updateGrant(index,{permissions:permissions.includes(value)?permissions.filter(x=>x!==value):[...permissions,value]})}/>{label}</label>})}</div>
       </section>)}
       {!(settings.discordRoleGrants?.length) && <p className="muted">No limited role grants. Add a role to give it specific permissions on one server.</p>}
+    </div>
+    <div className="role-grant-editor game-role-editor"><div className="panel-head"><div><span className="eyebrow">IN-GAME PERMISSIONS</span><h3>Discord → SCP:SL RA groups</h3><p>Linked players receive an existing Remote Admin group when they join. Higher priority wins when multiple Discord roles match.</p></div><button type="button" onClick={addGameRole}>ADD MAPPING</button></div>
+      {(settings.discordGameRoleGrants ?? []).map((grant,index)=><section className="role-grant-card game-role-card" key={index}>
+        <label className="check-row"><input type="checkbox" checked={grant.enabled} onChange={e=>updateGameRole(index,{enabled:e.target.checked})}/> Mapping enabled</label>
+        <div className="form-row"><label>DISCORD ROLE ID<input value={grant.roleId} onChange={e=>updateGameRole(index,{roleId:e.target.value.trim()})} placeholder="Discord role snowflake"/></label><label>SERVER<select value={grant.serverId} onChange={e=>updateGameRole(index,{serverId:e.target.value})}>{servers.map(server=><option value={server.id} key={server.id}>{server.name}</option>)}</select></label><label>IN-GAME RA GROUP<input value={grant.groupName} onChange={e=>updateGameRole(index,{groupName:e.target.value.trim()})} placeholder="moderator"/></label><label>PRIORITY<input type="number" value={grant.priority} onChange={e=>updateGameRole(index,{priority:Number(e.target.value)})}/></label><button type="button" className="danger" onClick={()=>setSettings({...settings,discordGameRoleGrants:(settings.discordGameRoleGrants ?? []).filter((_,i)=>i!==index)})}>REMOVE</button></div>
+      </section>)}
+      {!(settings.discordGameRoleGrants?.length)&&<p className="muted">No in-game role mappings configured.</p>}
     </div>
     <p>Commands: <code>/scp status</code>, <code>players</code>, <code>player</code>, <code>kick</code>, <code>mute</code>, <code>ban</code>, <code>start</code>, <code>stop</code>, <code>restart</code>, and <code>announce</code>. Stop, restart, and moderation commands require explicit confirmation.</p>
     <div className="button-row form-actions"><button className="primary"><Save size={14}/> SAVE CHANGES</button><button type="button" onClick={async()=>{try{await api('/integrations/discord/bot/reconnect',{method:'POST'});setTimeout(()=>void loadStatus(),1200)}catch(error){onError(error instanceof Error ? error.message : 'Unable to reconnect bot')}}}><RefreshCw size={14}/> RECONNECT BOT</button></div>

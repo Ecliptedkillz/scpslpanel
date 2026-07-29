@@ -11,6 +11,7 @@ internal sealed class BridgeEvents(BridgeClient client) : CustomEventsHandler
     {
         client.RecordEvent("join", ev.Player);
         client.CheckPanelBan(ev.Player);
+        client.CheckDiscordGameRole(ev.Player);
         client.CaptureSnapshot();
     }
 

@@ -1,6 +1,7 @@
 using System;
 using System.IO;
 using System.Linq;
+using System.Reflection;
 using System.Collections.Generic;
 using System.Net.Http;
 using System.Runtime.Serialization.Json;
@@ -195,6 +196,94 @@ internal sealed class BridgeClient : IDisposable
         catch (Exception exception)
         {
             Logger.Warn($"SCP Control ban check failed: {exception.Message}");
+        }
+    }
+
+    public void CheckDiscordGameRole(Player player)
+    {
+        if (player == null || player.IsHost || string.IsNullOrWhiteSpace(player.UserId)) return;
+        _ = CheckDiscordGameRoleAsync(player.PlayerId, player.UserId);
+    }
+
+    private async Task CheckDiscordGameRoleAsync(int playerId, string userId)
+    {
+        try
+        {
+            var suffix = $"game-role?userId={Uri.EscapeDataString(userId)}";
+            using var request = Authorized(HttpMethod.Get, Endpoint(suffix));
+            using var response = await _http.SendAsync(request).ConfigureAwait(false);
+            if (!response.IsSuccessStatusCode)
+            {
+                Logger.Warn($"SCP Control game-role check rejected: {(int)response.StatusCode} {response.ReasonPhrase}");
+                return;
+            }
+            var serializer = new DataContractJsonSerializer(typeof(GameRolePayload));
+            using var stream = await response.Content.ReadAsStreamAsync().ConfigureAwait(false);
+            var assignment = serializer.ReadObject(stream) as GameRolePayload;
+            if (assignment?.Assigned != true || string.IsNullOrWhiteSpace(assignment.GroupName)) return;
+            Dispatch(() =>
+            {
+                var current = Player.ReadyList?.FirstOrDefault(candidate => candidate.PlayerId == playerId);
+                if (current == null) return;
+                if (!TryApplyRemoteAdminGroup(current, assignment.GroupName!, out var error))
+                {
+                    Logger.Warn($"SCP Control could not assign RA group '{assignment.GroupName}': {error}");
+                    return;
+                }
+                Logger.Info($"SCP Control assigned RA group '{assignment.GroupName}' to {current.UserId} from Discord role {assignment.DiscordRoleId}.");
+                RecordModerationEvent("role-sync", current, current.UserId, current.DisplayName,
+                    $"Assigned in-game group {assignment.GroupName}", null, "Discord role sync");
+            });
+        }
+        catch (Exception exception)
+        {
+            Logger.Warn($"SCP Control game-role check failed: {exception.Message}");
+        }
+    }
+
+    private static bool TryApplyRemoteAdminGroup(Player player, string groupName, out string error)
+    {
+        try
+        {
+            const BindingFlags flags = BindingFlags.Public | BindingFlags.NonPublic
+                | BindingFlags.Instance | BindingFlags.Static;
+            var hub = player.GetType().GetProperty("ReferenceHub", flags)?.GetValue(player);
+            if (hub == null) { error = "Player ReferenceHub is unavailable."; return false; }
+            var roles = hub.GetType().GetField("serverRoles", flags)?.GetValue(hub)
+                ?? hub.GetType().GetProperty("serverRoles", flags)?.GetValue(hub);
+            if (roles == null) { error = "ServerRoles is unavailable."; return false; }
+            var serverStatic = Type.GetType("ServerStatic, Assembly-CSharp");
+            var handler = serverStatic?.GetField("PermissionsHandler", flags)?.GetValue(null)
+                ?? serverStatic?.GetProperty("PermissionsHandler", flags)?.GetValue(null);
+            if (handler == null) { error = "PermissionsHandler is unavailable."; return false; }
+            var getGroup = handler.GetType().GetMethods(flags).FirstOrDefault(method =>
+                method.Name == "GetGroup" && method.GetParameters().Length == 1
+                && method.GetParameters()[0].ParameterType == typeof(string));
+            var group = getGroup?.Invoke(handler, new object[] { groupName });
+            if (group == null) { error = $"The group '{groupName}' does not exist in SCP:SL."; return false; }
+            var setGroup = roles.GetType().GetMethods(flags).FirstOrDefault(method =>
+            {
+                var parameters = method.GetParameters();
+                return method.Name == "SetGroup" && parameters.Length >= 1
+                    && parameters[0].ParameterType.IsInstanceOfType(group);
+            });
+            if (setGroup == null) { error = "ServerRoles.SetGroup is unavailable."; return false; }
+            var parameters = setGroup.GetParameters();
+            var arguments = new object?[parameters.Length];
+            arguments[0] = group;
+            for (var index = 1; index < parameters.Length; index++)
+                arguments[index] = parameters[index].HasDefaultValue
+                    ? parameters[index].DefaultValue
+                    : parameters[index].ParameterType == typeof(bool) ? index == parameters.Length - 1
+                    : Activator.CreateInstance(parameters[index].ParameterType);
+            setGroup.Invoke(roles, arguments);
+            error = "";
+            return true;
+        }
+        catch (Exception exception)
+        {
+            error = exception.InnerException?.Message ?? exception.Message;
+            return false;
         }
     }
 

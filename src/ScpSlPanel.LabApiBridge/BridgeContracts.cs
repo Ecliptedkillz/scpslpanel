@@ -78,6 +78,15 @@ internal sealed class BanCheckPayload
 }
 
 [DataContract]
+internal sealed class GameRolePayload
+{
+    [DataMember(Name = "assigned")] public bool Assigned { get; set; }
+    [DataMember(Name = "groupName")] public string? GroupName { get; set; }
+    [DataMember(Name = "discordId")] public string? DiscordId { get; set; }
+    [DataMember(Name = "discordRoleId")] public string? DiscordRoleId { get; set; }
+}
+
+[DataContract]
 internal sealed class EventPayload
 {
     [DataMember(Name = "type")] public string Type { get; set; } = "";
