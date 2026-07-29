@@ -79,4 +79,5 @@ internal sealed class EventPayload
     [DataMember(Name = "displayName")] public string? DisplayName { get; set; }
     [DataMember(Name = "detail")] public string? Detail { get; set; }
     [DataMember(Name = "durationSeconds")] public int? DurationSeconds { get; set; }
+    [DataMember(Name = "actor")] public string? Actor { get; set; }
 }

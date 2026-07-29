@@ -58,7 +58,7 @@ public sealed class BridgeCommandService(JsonStore store, OperationTracker opera
         {
             var activities = await store.ReadAsync<ServerActivityEntry>("server-activity");
             activities.Add(new(Guid.NewGuid(), serverId, value.At, value.Type, value.PlayerId,
-                value.UserId, value.DisplayName, value.Detail ?? ""));
+                value.UserId, value.DisplayName, value.Detail ?? "", value.Actor, value.DurationSeconds));
             if (activities.Count > 10000)
                 activities = activities.OrderByDescending(x => x.At).Take(10000).ToList();
             await store.WriteAsync("server-activity", activities);

@@ -20,9 +20,12 @@ internal sealed class BridgeEvents(BridgeClient client) : CustomEventsHandler
     }
 
     public override void OnPlayerChangedRole(PlayerChangedRoleEventArgs ev) => client.CaptureSnapshot();
-    public override void OnPlayerKicked(PlayerKickedEventArgs ev) => client.RecordEvent("kick", ev.Player, ev.Reason);
+    public override void OnPlayerKicked(PlayerKickedEventArgs ev) =>
+        client.RecordModerationEvent("kick", ev.Player, ev.Player.UserId, ev.Player.DisplayName,
+            ev.Reason, null, Actor(ev.Issuer));
     public override void OnPlayerBanned(PlayerBannedEventArgs ev) =>
-        client.RecordEvent("ban", ev.Player, ev.Reason, (int)Math.Min(int.MaxValue, ev.Duration));
+        client.RecordModerationEvent(ev.Player is null ? "oban" : "ban", ev.Player, ev.PlayerId,
+            ev.Player?.DisplayName, ev.Reason, (int)Math.Min(int.MaxValue, ev.Duration), Actor(ev.Issuer));
     public override void OnPlayerMuted(PlayerMutedEventArgs ev) => client.RecordEvent("mute", ev.Player);
     public override void OnPlayerUnmuted(PlayerUnmutedEventArgs ev) => client.RecordEvent("unmute", ev.Player);
     public override void OnServerWaitingForPlayers() => client.SetRoundState("waiting");
@@ -39,4 +42,9 @@ internal sealed class BridgeEvents(BridgeClient client) : CustomEventsHandler
         client.RecordEvent("round-end", detail: ev.LeadingTeam.ToString());
     }
     public override void OnServerRoundRestarted() => client.SetRoundState("waiting");
+
+    private static string Actor(LabApi.Features.Wrappers.Player? player) =>
+        player is null ? "Server Console"
+        : string.IsNullOrWhiteSpace(player.UserId) ? player.DisplayName
+        : $"{player.DisplayName} ({player.UserId})";
 }

@@ -29,6 +29,8 @@ public sealed record ServerSnapshot(
     Guid Id, string Name, ServerState State, int? ProcessId, DateTimeOffset? StartedAt,
     long MemoryBytes, double CpuPercent, int Players, int MaxPlayers, string? LastError,
     string Icon = "gamepad", string AccentColor = "#e44343");
+public sealed record ManagedProcessRecord(
+    Guid ServerId, int ProcessId, string ExecutablePath, DateTimeOffset StartedAt);
 
 public sealed record PlayerInfo(
     string Id, string Nickname, string UserId, string IpAddress, string Role, int Ping,
@@ -152,10 +154,12 @@ public sealed record BridgeCommand(
 public sealed record BridgeCommandResult(bool Success, string? Message);
 public sealed record BridgeEventRequest(
     string Type, DateTimeOffset At, string? PlayerId = null, string? UserId = null,
-    string? DisplayName = null, string? Detail = null, int? DurationSeconds = null);
+    string? DisplayName = null, string? Detail = null, int? DurationSeconds = null,
+    string? Actor = null);
 public sealed record ServerActivityEntry(
     Guid Id, Guid ServerId, DateTimeOffset At, string Type, string? PlayerId,
-    string? UserId, string? DisplayName, string Detail);
+    string? UserId, string? DisplayName, string Detail, string? Actor = null,
+    int? DurationSeconds = null);
 public sealed record RoundHistoryEntry(
     Guid Id, Guid ServerId, DateTimeOffset StartedAt, DateTimeOffset? EndedAt,
     string? LeadingTeam, long? DurationSeconds);

@@ -20,6 +20,7 @@ public sealed class ServerManager(
         public long PreviousCpuTicks;
         public DateTimeOffset PreviousSample = DateTimeOffset.UtcNow;
         public bool StopInProgress;
+        public bool Reattached;
         public TaskCompletionSource StopCompletion = CreateCompletedStop();
 
         private static TaskCompletionSource CreateCompletedStop()
@@ -31,6 +32,7 @@ public sealed class ServerManager(
     }
 
     private readonly ConcurrentDictionary<Guid, Runtime> _runtime = new();
+    private readonly SemaphoreSlim _processRecordGate = new(1, 1);
 
     public Task<List<ServerDefinition>> DefinitionsAsync() => store.ReadAsync<ServerDefinition>("servers");
 
@@ -178,11 +180,13 @@ public sealed class ServerManager(
             process.Exited += (_, _) => _ = OnExitedAsync(definition, runtime, process);
             if (!process.Start()) throw new InvalidOperationException("The server process did not start.");
             runtime.Process = process;
+            runtime.Reattached = false;
             runtime.StartedAt = DateTimeOffset.UtcNow;
             runtime.State = ServerState.Online;
             process.BeginOutputReadLine();
             process.BeginErrorReadLine();
         }
+        await SaveProcessRecordAsync(definition, runtime.Process!);
         await audit.AddAsync(actor, "server.start", definition.Name, $"Started server {definition.Name}");
         await hub.Clients.All.SendAsync("ServerChanged", Snapshot(definition));
     }
@@ -209,6 +213,7 @@ public sealed class ServerManager(
         }
         try
         {
+            if (runtime.Reattached) force = true;
             if (!force)
             {
                 try { await process.StandardInput.WriteLineAsync("shutdown"); }
@@ -239,11 +244,14 @@ public sealed class ServerManager(
             {
                 if (ReferenceEquals(runtime.Process, process))
                     runtime.Process = null;
+                runtime.Reattached = false;
                 runtime.State = ServerState.Offline;
                 runtime.StopInProgress = false;
                 stopCompletion = runtime.StopCompletion;
             }
+            var stoppedProcessId = process.Id;
             process.Dispose();
+            await RemoveProcessRecordAsync(id, stoppedProcessId);
             stopCompletion.TrySetResult();
         }
     }
@@ -263,6 +271,9 @@ public sealed class ServerManager(
         var definition = await FindAsync(id) ?? throw new KeyNotFoundException("Server not found.");
         var runtime = _runtime.GetOrAdd(id, _ => new Runtime());
         if (runtime.Process is not { HasExited: false } process) throw new InvalidOperationException("Server is offline.");
+        if (runtime.Reattached)
+            throw new InvalidOperationException(
+                "The panel reattached to this process after restarting. Restart the game server once to restore console input.");
         await process.StandardInput.WriteLineAsync(command);
         await PublishLine(id, "command", $"> {command}");
         await audit.AddAsync(actor, "console.command", definition.Name, command);
@@ -270,8 +281,10 @@ public sealed class ServerManager(
 
     public async Task InitializeAsync()
     {
-        foreach (var definition in await DefinitionsAsync())
-            if (definition.AutoStart)
+        var definitions = await DefinitionsAsync();
+        await ReattachProcessesAsync(definitions);
+        foreach (var definition in definitions)
+            if (definition.AutoStart && !IsRunning(definition.Id))
                 try { await StartAsync(definition.Id, "system"); }
                 catch (Exception ex) { logger.LogError(ex, "Failed to auto-start {Server}", definition.Name); }
     }
@@ -300,9 +313,12 @@ public sealed class ServerManager(
             catch { exitCode = null; }
             runtime.State = ServerState.Offline;
             runtime.Process = null;
+            runtime.Reattached = false;
             disposeProcess = !runtime.StopInProgress;
         }
+        var exitedProcessId = exitedProcess.Id;
         if (disposeProcess) exitedProcess.Dispose();
+        await RemoveProcessRecordAsync(definition.Id, exitedProcessId);
         await PublishLine(definition.Id, "system", $"Process exited with code {exitCode}.");
         if (priorState != ServerState.Stopping)
         {
@@ -330,6 +346,84 @@ public sealed class ServerManager(
                 logger.LogError(ex, "Auto-restart failed for {Server}", definition.Name);
             }
         }
+    }
+
+    private bool IsRunning(Guid id) =>
+        _runtime.TryGetValue(id, out var runtime)
+        && runtime.Process is { } process && !SafeHasExited(process);
+
+    private async Task ReattachProcessesAsync(IReadOnlyList<ServerDefinition> definitions)
+    {
+        var records = await store.ReadAsync<ManagedProcessRecord>("managed-processes");
+        var retained = new List<ManagedProcessRecord>();
+        foreach (var record in records)
+        {
+            var definition = definitions.FirstOrDefault(x => x.Id == record.ServerId);
+            if (definition is null) continue;
+            Process? process = null;
+            try
+            {
+                process = Process.GetProcessById(record.ProcessId);
+                if (process.HasExited) { process.Dispose(); continue; }
+                process.Refresh();
+                var actualPath = process.MainModule?.FileName;
+                var actualStart = new DateTimeOffset(process.StartTime);
+                if (string.IsNullOrWhiteSpace(actualPath)
+                    || !Path.GetFullPath(actualPath).Equals(
+                        Path.GetFullPath(record.ExecutablePath), StringComparison.OrdinalIgnoreCase)
+                    || Math.Abs((actualStart - record.StartedAt).TotalSeconds) > 5)
+                {
+                    logger.LogWarning("Discarded stale PID {ProcessId} for {Server}; executable does not match",
+                        record.ProcessId, definition.Name);
+                    process.Dispose();
+                    continue;
+                }
+                process.EnableRaisingEvents = true;
+                var runtime = _runtime.GetOrAdd(definition.Id, _ => new Runtime());
+                runtime.Process = process;
+                runtime.Reattached = true;
+                runtime.StartedAt = record.StartedAt;
+                runtime.State = ServerState.Online;
+                runtime.PreviousCpuTicks = process.TotalProcessorTime.Ticks;
+                runtime.PreviousSample = DateTimeOffset.UtcNow;
+                process.Exited += (_, _) => _ = OnExitedAsync(definition, runtime, process);
+                retained.Add(record);
+                logger.LogInformation("Reattached {Server} to process {ProcessId}", definition.Name, process.Id);
+            }
+            catch (Exception ex)
+            {
+                process?.Dispose();
+                logger.LogWarning(ex, "Could not reattach PID {ProcessId} for {Server}",
+                    record.ProcessId, definition.Name);
+            }
+        }
+        await store.WriteAsync("managed-processes", retained);
+    }
+
+    private async Task SaveProcessRecordAsync(ServerDefinition definition, Process process)
+    {
+        await _processRecordGate.WaitAsync();
+        try
+        {
+            var records = await store.ReadAsync<ManagedProcessRecord>("managed-processes");
+            records.RemoveAll(x => x.ServerId == definition.Id);
+            var startedAt = new DateTimeOffset(process.StartTime);
+            records.Add(new(definition.Id, process.Id, definition.ExecutablePath, startedAt));
+            await store.WriteAsync("managed-processes", records);
+        }
+        finally { _processRecordGate.Release(); }
+    }
+
+    private async Task RemoveProcessRecordAsync(Guid serverId, int processId)
+    {
+        await _processRecordGate.WaitAsync();
+        try
+        {
+            var records = await store.ReadAsync<ManagedProcessRecord>("managed-processes");
+            if (records.RemoveAll(x => x.ServerId == serverId && x.ProcessId == processId) > 0)
+                await store.WriteAsync("managed-processes", records);
+        }
+        finally { _processRecordGate.Release(); }
     }
 
     private static bool SafeHasExited(Process process)

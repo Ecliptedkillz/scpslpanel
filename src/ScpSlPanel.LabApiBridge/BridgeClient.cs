@@ -100,6 +100,24 @@ internal sealed class BridgeClient : IDisposable
         }, typeof(EventPayload));
     }
 
+    public void RecordModerationEvent(
+        string type, Player? player, string? targetId, string? displayName,
+        string? reason, int? durationSeconds, string? actor)
+    {
+        var hideIdentity = player != null && _config.RespectDoNotTrack && player.DoNotTrack;
+        _ = PostJsonAsync("events", new EventPayload
+        {
+            Type = type,
+            At = DateTimeOffset.UtcNow.ToString("O"),
+            PlayerId = player?.PlayerId.ToString(),
+            UserId = hideIdentity ? "" : (player?.UserId ?? targetId),
+            DisplayName = player?.DisplayName ?? displayName ?? targetId,
+            Detail = reason,
+            DurationSeconds = durationSeconds,
+            Actor = actor,
+        }, typeof(EventPayload));
+    }
+
     private async Task PollCommandsAsync()
     {
         if (_disposed || string.IsNullOrWhiteSpace(_config.PanelUrl)) return;

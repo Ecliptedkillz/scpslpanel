@@ -69,10 +69,15 @@ public sealed class PlayerDataService(JsonStore store)
         try
         {
             var records = await store.ReadAsync<PlayerRecord>("players");
+            static string Normalize(string value) => value.Split('@')[0].Trim();
             var index = records.FindIndex(x => x.ServerId == serverId
-                && x.UserId.Equals(identity, StringComparison.OrdinalIgnoreCase));
+                && (x.UserId.Equals(identity, StringComparison.OrdinalIgnoreCase)
+                    || Normalize(x.UserId).Equals(Normalize(identity), StringComparison.OrdinalIgnoreCase)));
             if (index < 0) return;
             var record = records[index];
+            if (record.ModerationHistory.Any(x => x.Type == type && x.Reason == reason
+                && DateTimeOffset.UtcNow - x.At < TimeSpan.FromSeconds(10)))
+                return;
             records[index] = record with
             {
                 CurrentName = displayName,

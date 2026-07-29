@@ -305,11 +305,53 @@ app.MapPost("/api/bridge/{serverId:guid}/commands/{commandId:guid}/result", asyn
 });
 app.MapPost("/api/bridge/{serverId:guid}/events", async (
     Guid serverId, BridgeEventRequest value, HttpContext context, ServerManager servers,
-    BridgeCommandService commands, IHubContext<PanelHub> hub) =>
+    BridgeCommandService commands, PlayerDataService playerData, JsonStore store,
+    AuditService audit, IHubContext<PanelHub> hub) =>
 {
     if (!await servers.ValidateBridgeTokenAsync(serverId, context.Request.Headers["X-Bridge-Token"].FirstOrDefault()))
         return Results.Unauthorized();
     await commands.RecordEventAsync(serverId, value);
+    if (value.Type is "kick" or "ban" or "oban" or "unban")
+    {
+        var actor = string.IsNullOrWhiteSpace(value.Actor) ? "In-game Remote Admin" : value.Actor;
+        var target = !string.IsNullOrWhiteSpace(value.UserId) ? value.UserId
+            : !string.IsNullOrWhiteSpace(value.DisplayName) ? value.DisplayName : value.PlayerId ?? "unknown";
+        var reason = string.IsNullOrWhiteSpace(value.Detail) ? "No reason provided" : value.Detail;
+        if (value.Type != "unban")
+            await playerData.RecordModerationAsync(serverId, target, value.DisplayName ?? target,
+                value.Type, reason, actor, value.DurationSeconds is null ? null
+                    : Math.Max(1, (int)Math.Ceiling(value.DurationSeconds.Value / 60d)));
+
+        var bans = await store.ReadAsync<BanEntry>("bans");
+        if (value.Type is "ban" or "oban")
+        {
+            var issuedAt = value.At == default ? DateTimeOffset.UtcNow : value.At;
+            var duplicate = bans.Any(x => !x.Revoked && x.Target == target && x.Reason == reason
+                && issuedAt - x.IssuedAt < TimeSpan.FromSeconds(10));
+            if (!duplicate)
+            {
+                bans.Insert(0, new(Guid.NewGuid(), target, value.DisplayName ?? target, reason, actor,
+                    issuedAt, value.DurationSeconds is > 0 ? issuedAt.AddSeconds(value.DurationSeconds.Value) : null, false));
+                await store.WriteAsync("bans", bans);
+            }
+        }
+        else if (value.Type == "unban")
+        {
+            static string NormalizeBanTarget(string input) => input.Split('@')[0].Trim();
+            var changed = false;
+            for (var index = 0; index < bans.Count; index++)
+                if (!bans[index].Revoked
+                    && NormalizeBanTarget(bans[index].Target).Equals(
+                        NormalizeBanTarget(target), StringComparison.OrdinalIgnoreCase))
+                {
+                    bans[index] = bans[index] with { Revoked = true };
+                    changed = true;
+                }
+            if (changed) await store.WriteAsync("bans", bans);
+        }
+        await audit.AddAsync(actor, $"player.{value.Type}", target,
+            value.DurationSeconds is > 0 ? $"{reason} ({TimeSpan.FromSeconds(value.DurationSeconds.Value)})" : reason);
+    }
     await hub.Clients.All.SendAsync("BridgeActivity", serverId);
     return Results.NoContent();
 });
