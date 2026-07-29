@@ -96,6 +96,14 @@ internal sealed class GameRolePayload
 }
 
 [DataContract]
+internal sealed class CustomBadgePayload
+{
+    [DataMember(Name = "assigned")] public bool Assigned { get; set; }
+    [DataMember(Name = "badgeText")] public string BadgeText { get; set; } = "";
+    [DataMember(Name = "badgeColor")] public string BadgeColor { get; set; } = "silver";
+}
+
+[DataContract]
 internal sealed class EventPayload
 {
     [DataMember(Name = "type")] public string Type { get; set; } = "";

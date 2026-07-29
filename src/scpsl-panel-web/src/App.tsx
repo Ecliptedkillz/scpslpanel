@@ -12,7 +12,7 @@ import { PlayerHistoryView, type StoredPlayer } from './components/PlayerHistory
 import { GlobalPlayerDatabase } from './components/GlobalPlayerDatabase'
 import type { AuditEntry, Ban, BridgeSetup, BridgeStatus, Overview, Player, Schedule, Server } from './types'
 
-type Page = 'overview' | 'servers' | 'server' | 'players' | 'permissions' | 'bans' | 'schedules' | 'audit' | 'admins' | 'settings'
+type Page = 'overview' | 'servers' | 'server' | 'players' | 'permissions' | 'donors' | 'bans' | 'schedules' | 'audit' | 'admins' | 'settings'
 type ServerTab = 'overview' | 'monitoring' | 'console' | 'players' | 'player-history' | 'activity' | 'restarts' | 'plugins' | 'files' | 'maintenance'
 type ServerAccessGrant = { serverId: string; permissions: string[] }
 type User = { username: string; role: string; serverIds: string[]; permissions: string[]; serverAccess?: ServerAccessGrant[]; twoFactorEnabled?: boolean }
@@ -28,6 +28,7 @@ const nav: { page: Page; label: string; icon: typeof LayoutDashboard }[] = [
   { page: 'servers', label: 'Servers', icon: ServerIcon },
   { page: 'players', label: 'Player Database', icon: Users },
   { page: 'permissions', label: 'In-game Permissions', icon: Shield },
+  { page: 'donors', label: 'Donors & Badges', icon: Users },
   { page: 'bans', label: 'Ban Manager', icon: BanIcon },
   { page: 'schedules', label: 'Scheduler', icon: CalendarClock },
   { page: 'audit', label: 'Audit Log', icon: History },
@@ -37,7 +38,7 @@ const nav: { page: Page; label: string; icon: typeof LayoutDashboard }[] = [
 
 const fmtBytes = (bytes: number) => bytes ? `${(bytes / 1024 / 1024).toFixed(0)} MB` : '0 MB'
 const fmtState = (state: unknown) => typeof state === 'string' ? state.toUpperCase() : 'UNKNOWN'
-const topLevelPages = new Set<Page>(['overview', 'servers', 'players', 'permissions', 'bans', 'schedules', 'audit', 'admins', 'settings'])
+const topLevelPages = new Set<Page>(['overview', 'servers', 'players', 'permissions', 'donors', 'bans', 'schedules', 'audit', 'admins', 'settings'])
 const serverTabs = new Set<ServerTab>(['overview', 'monitoring', 'console', 'players', 'player-history', 'activity', 'restarts', 'plugins', 'files', 'maintenance'])
 const readRoute = () => {
   const parts = window.location.pathname.split('/').filter(Boolean).map(decodeURIComponent)
@@ -234,6 +235,7 @@ function Panel({ user, onLogout, theme, setTheme }: { user: User; onLogout: () =
         {page === 'servers' && <ServersPage user={user} servers={servers} refresh={load} openServer={openServer} onError={setError}/>}
         {page === 'players' && <GlobalPlayerDatabase onError={setError}/>}
         {page === 'permissions' && user.role === 'Owner' && <IngamePermissionsPage servers={servers} onError={setError}/>}
+        {page === 'donors' && user.role === 'Owner' && <DonorManagementPage servers={servers} onError={setError}/>}
         {page === 'server' && <ServerWorkspace user={user} server={selectedServer} tab={serverTab} setTab={navigateServerTab} refresh={load} back={() => navigatePage('servers')} onError={setError}/>}
         {page === 'bans' && <BansPage onError={setError}/>}
         {page === 'schedules' && <SchedulesPage servers={servers} onError={setError}/>}
@@ -805,6 +807,7 @@ type IntegrationSettings = {
     permissions:string[];inheritedGroups:string[];badgeText:string;badgeColor:string;hidden:boolean;
     cover:boolean;reservedSlot:boolean;kickPower:number;requiredKickPower:number;pluginPermissions:string[]}[]
   discordDonorRoleGrants: {roleId:string;serverId:string;tier:number;priority:number;enabled:boolean}[]
+  customUserBadges: {serverId:string;steamId:string;badgeText:string;badgeColor:string}[]
   discordDailyReportEnabled: boolean; discordDailyReportHourUtc: number
 }
 const defaultIntegration: IntegrationSettings = {
@@ -820,7 +823,7 @@ const defaultIntegration: IntegrationSettings = {
   discordBotEnabled: false, discordBotToken: '', discordGuildId: '', discordControlRoleIds: '',
   discordNotificationChannelId: '', steamWebApiKey: '',
   discordModerationChannelId: '', discordAuditChannelId: '', discordRoleGrants: [],
-  discordGameRoleGrants: [], discordDonorRoleGrants: [],
+  discordGameRoleGrants: [], discordDonorRoleGrants: [], customUserBadges: [],
   discordDailyReportEnabled: false, discordDailyReportHourUtc: 12,
 }
 
@@ -1010,6 +1013,56 @@ function IngamePermissionsPage({servers,onError}:{servers:Server[];onError:(mess
   </>
 }
 
+function DonorManagementPage({servers,onError}:{servers:Server[];onError:(e:string)=>void}){
+  const [settings,setSettings]=useState<IntegrationSettings|null>(null)
+  const [roles,setRoles]=useState<{id:string;name:string;position:number;color:number}[]>([])
+  const [players,setPlayers]=useState<{serverId:string;serverName:string;player:StoredPlayer}[]>([])
+  const [busy,setBusy]=useState(false)
+  useEffect(()=>{
+    api<IntegrationSettings>('/integrations').then(value=>setSettings({...defaultIntegration,...value,discordDonorRoleGrants:value.discordDonorRoleGrants??[],customUserBadges:value.customUserBadges??[]})).catch(error=>onError(error.message))
+    api<typeof roles>('/integrations/discord/roles').then(setRoles).catch(error=>onError(error.message))
+    api<typeof players>('/players/global').then(setPlayers).catch(error=>onError(error.message))
+  },[onError])
+  if(!settings)return <Skeleton/>
+  const grants=settings.discordDonorRoleGrants??[]
+  const update=(index:number,patch:Partial<IntegrationSettings['discordDonorRoleGrants'][number]>)=>setSettings({...settings,discordDonorRoleGrants:grants.map((grant,i)=>i===index?{...grant,...patch}:grant)})
+  const badges=settings.customUserBadges??[]
+  const add=()=>setSettings({...settings,discordDonorRoleGrants:[...grants,{roleId:'',serverId:servers[0]?.id??'',tier:1,priority:0,enabled:true}]})
+  const addBadge=()=>setSettings({...settings,customUserBadges:[...badges,{serverId:servers[0]?.id??'',steamId:'',badgeText:'',badgeColor:'silver'}]})
+  const updateBadge=(index:number,patch:Partial<IntegrationSettings['customUserBadges'][number]>)=>setSettings({...settings,customUserBadges:badges.map((badge,i)=>i===index?{...badge,...patch}:badge)})
+  const save=async(sync=false)=>{
+    setBusy(true)
+    try{
+      await api('/integrations',{method:'PUT',body:JSON.stringify(settings)})
+      let message='Donor role mappings saved.'
+      if(sync){
+        const result=await api<{donors:number}[]>('/integrations/discord/donors/sync',{method:'POST'})
+        message=`Saved and synchronized ${result.reduce((sum,item)=>sum+item.donors,0)} donor rows.`
+      }
+      window.dispatchEvent(new CustomEvent('panel-success',{detail:message}))
+    }catch(error){onError(error instanceof Error?error.message:'Unable to save donor mappings')}
+    finally{setBusy(false)}
+  }
+  return <><PageTitle eyebrow="DISCORD INTEGRATION" title="Donors & Custom Badges"><button onClick={()=>void save(true)} disabled={busy}><RefreshCw size={15}/> SAVE & SYNC NOW</button><button className="primary" onClick={add}><Plus size={15}/> ADD DONOR ROLE</button></PageTitle>
+    <article className="panel ingame-permissions-intro"><Users size={28}/><div><h2>Role-based donor synchronization</h2><p>Discord roles update Donators.csv every five minutes. The LabAPI bridge applies custom badges live in-game.</p></div><span className="tag">{grants.length} MAPPINGS</span></article>
+    <form className="ingame-permissions-page" onSubmit={event=>{event.preventDefault();void save(false)}}>
+      {grants.map((grant,index)=>{const selected=roles.find(role=>role.id===grant.roleId);return <article className="panel ingame-role-editor open" key={index}><header><div><span className="eyebrow">DONOR MAPPING {index+1}</span><h2>{selected?.name??'New donor role'}</h2><p>Tier {grant.tier} · Priority {grant.priority}</p></div><div><label className="check-row"><input type="checkbox" checked={grant.enabled} onChange={event=>update(index,{enabled:event.target.checked})}/> Enabled</label><button type="button" className="danger" onClick={()=>setSettings({...settings,discordDonorRoleGrants:grants.filter((_,i)=>i!==index)})}><Trash2 size={14}/> REMOVE</button></div></header>
+        <div className="form-row"><label>DISCORD ROLE<select value={grant.roleId} onChange={event=>update(index,{roleId:event.target.value})}><option value="">Select a Discord role…</option>{grant.roleId&&!roles.some(role=>role.id===grant.roleId)&&<option value={grant.roleId}>Unknown role ({grant.roleId})</option>}{roles.map(role=><option value={role.id} key={role.id}>{role.name} · {role.id}</option>)}</select></label><label>SERVER<select value={grant.serverId} onChange={event=>update(index,{serverId:event.target.value})}>{servers.map(server=><option value={server.id} key={server.id}>{server.name}</option>)}</select></label><label>DONOR TIER<input type="number" min={1} value={grant.tier} onChange={event=>update(index,{tier:Number(event.target.value)})}/></label><label>PRIORITY<input type="number" value={grant.priority} onChange={event=>update(index,{priority:Number(event.target.value)})}/></label></div>
+      </article>})}
+      {!grants.length&&<div className="empty-page"><Users/><h2>No donor mappings</h2><p>Add a Discord donor role to synchronize linked users, tiers, booster state, and custom badges.</p><button type="button" className="primary" onClick={add}>ADD FIRST DONOR ROLE</button></div>}
+      {!!grants.length&&<div className="sticky-save-bar"><span>Save mappings before they are used by automatic synchronization.</span><button className="primary" disabled={busy}><Save size={15}/> {busy?'SAVING…':'SAVE CHANGES'}</button></div>}
+    </form>
+    <PageTitle eyebrow="PLAYER COSMETICS" title="Custom User Badges"><button className="primary" onClick={addBadge}><Plus size={15}/> ADD USER BADGE</button></PageTitle>
+    <section className="ingame-permissions-page">
+      {badges.map((badge,index)=>{const available=players.filter(record=>record.serverId===badge.serverId&&record.player.discordId);return <article className="panel ingame-role-editor open" key={index}><header><div><span className="eyebrow">USER BADGE {index+1}</span><h2>{badge.badgeText||'New custom badge'}</h2><p>{badge.steamId||'No linked user selected'} · {badge.badgeColor}</p></div><button type="button" className="danger" onClick={()=>setSettings({...settings,customUserBadges:badges.filter((_,i)=>i!==index)})}><Trash2 size={14}/> REMOVE</button></header>
+        <div className="form-row"><label>SERVER<select value={badge.serverId} onChange={event=>updateBadge(index,{serverId:event.target.value,steamId:''})}>{servers.map(server=><option value={server.id} key={server.id}>{server.name}</option>)}</select></label><label>LINKED USER<select value={badge.steamId} onChange={event=>updateBadge(index,{steamId:event.target.value})}><option value="">Select a linked user…</option>{badge.steamId&&!available.some(record=>record.player.userId.split('@')[0]===badge.steamId)&&<option value={badge.steamId}>{badge.steamId}</option>}{available.map(record=>{const steam=record.player.userId.split('@')[0];return <option value={steam} key={record.player.id}>{record.player.discordDisplayName??record.player.currentName} · {steam}</option>})}</select></label><label>BADGE TEXT<input maxLength={64} value={badge.badgeText} onChange={event=>updateBadge(index,{badgeText:event.target.value})} placeholder="SUPPORTER"/></label><label>BADGE COLOR<select value={badge.badgeColor} onChange={event=>updateBadge(index,{badgeColor:event.target.value})}>{gameBadgeColors.map(color=><option value={color} key={color}>{color.replaceAll('_',' ')}</option>)}</select></label></div>
+      </article>})}
+      {!badges.length&&<div className="empty-page"><Shield/><h2>No custom user badges</h2><p>Add a badge to a linked Discord and Steam user.</p><button type="button" className="primary" onClick={addBadge}>ADD FIRST USER BADGE</button></div>}
+      {!!badges.length&&<div className="sticky-save-bar"><span>The bridge refreshes saved badges for connected players every minute.</span><button type="button" className="primary" disabled={busy} onClick={()=>void save(false)}><Save size={15}/> {busy?'SAVING…':'SAVE BADGES'}</button></div>}
+    </section>
+  </>
+}
+
 function DiscordBotPanel({ servers, onError }: { servers: Server[]; onError: (e: string) => void }) {
   const [settings,setSettings] = useState<IntegrationSettings | null>(null)
   const [status,setStatus] = useState<{enabled:boolean;connected:boolean;botName:string|null;error:string|null}|null>(null)
@@ -1034,8 +1087,6 @@ function DiscordBotPanel({ servers, onError }: { servers: Server[]; onError: (e:
   const updateGrant=(index:number,patch:Partial<IntegrationSettings['discordRoleGrants'][number]>)=>setSettings({...settings,discordRoleGrants:(settings.discordRoleGrants ?? []).map((grant,i)=>i===index?{...grant,...patch}:grant)})
   const addGameRole=()=>setSettings({...settings,discordGameRoleGrants:[...(settings.discordGameRoleGrants ?? []),{roleId:'',serverId:servers[0]?.id ?? '',groupName:'',priority:0,enabled:true,permissions:[],inheritedGroups:[],badgeText:'',badgeColor:'silver',hidden:false,cover:true,reservedSlot:false,kickPower:0,requiredKickPower:0,pluginPermissions:[]}]})
   const updateGameRole=(index:number,patch:Partial<IntegrationSettings['discordGameRoleGrants'][number]>)=>setSettings({...settings,discordGameRoleGrants:(settings.discordGameRoleGrants ?? []).map((grant,i)=>i===index?{...grant,...patch}:grant)})
-  const addDonorRole=()=>setSettings({...settings,discordDonorRoleGrants:[...(settings.discordDonorRoleGrants ?? []),{roleId:'',serverId:servers[0]?.id ?? '',tier:1,priority:0,enabled:true}]})
-  const updateDonorRole=(index:number,patch:Partial<IntegrationSettings['discordDonorRoleGrants'][number]>)=>setSettings({...settings,discordDonorRoleGrants:(settings.discordDonorRoleGrants ?? []).map((grant,i)=>i===index?{...grant,...patch}:grant)})
   return <form className="panel settings-alerts discord-settings" onSubmit={async e => {
     e.preventDefault()
     try { await api('/integrations',{method:'PUT',body:JSON.stringify(settings)}); setTimeout(()=>void loadStatus(),1200) }
@@ -1046,10 +1097,6 @@ function DiscordBotPanel({ servers, onError }: { servers: Server[]; onError: (e:
     <label className="check-row"><input type="checkbox" checked={settings.discordBotEnabled} onChange={e=>setSettings({...settings,discordBotEnabled:e.target.checked})}/> Enable embedded Discord bot</label>
     <div className="form-row"><label>BOT TOKEN<input type="password" value={settings.discordBotToken} onChange={e=>setSettings({...settings,discordBotToken:e.target.value})}/></label><label>GUILD ID<input value={settings.discordGuildId} onChange={e=>setSettings({...settings,discordGuildId:e.target.value.trim()})}/></label><label>TECHNICAL CHANNEL ID<input value={settings.discordNotificationChannelId} onChange={e=>setSettings({...settings,discordNotificationChannelId:e.target.value.trim()})}/></label><label>MODERATION CHANNEL ID<input value={settings.discordModerationChannelId} onChange={e=>setSettings({...settings,discordModerationChannelId:e.target.value.trim()})}/></label><label>AUDIT CHANNEL ID<input value={settings.discordAuditChannelId} onChange={e=>setSettings({...settings,discordAuditChannelId:e.target.value.trim()})}/></label><label>FULL CONTROL ROLE IDS<input value={settings.discordControlRoleIds} onChange={e=>setSettings({...settings,discordControlRoleIds:e.target.value})} placeholder="123…, 456…"/></label><label>STEAM WEB API KEY<input type="password" value={settings.steamWebApiKey} onChange={e=>setSettings({...settings,steamWebApiKey:e.target.value})}/></label></div>
     <div className="form-row"><label className="check-row"><input type="checkbox" checked={settings.discordDailyReportEnabled} onChange={e=>setSettings({...settings,discordDailyReportEnabled:e.target.checked})}/> Send daily fleet report</label><label>REPORT HOUR (UTC)<input type="number" min={0} max={23} value={settings.discordDailyReportHourUtc} onChange={e=>setSettings({...settings,discordDailyReportHourUtc:Number(e.target.value)})}/></label></div>
-    <div className="role-grant-editor"><div className="panel-head"><div><span className="eyebrow">DONOR SYNC</span><h3>Discord roles → Donators.csv</h3><p>Runs every five minutes. Higher priority wins when a member has multiple donor roles; pet indices are preserved.</p></div><div className="button-row"><button type="button" onClick={async()=>{try{const result=await api<{donors:number}[]>('/integrations/discord/donors/sync',{method:'POST'});alert(`Synced ${result.reduce((sum,item)=>sum+item.donors,0)} donor rows.`)}catch(error){onError(error instanceof Error?error.message:'Donor sync failed')}}}>SYNC NOW</button><button type="button" onClick={addDonorRole}>ADD DONOR ROLE</button></div></div>
-      {(settings.discordDonorRoleGrants ?? []).map((grant,index)=><section className="role-grant-card" key={index}><label className="check-row"><input type="checkbox" checked={grant.enabled} onChange={e=>updateDonorRole(index,{enabled:e.target.checked})}/> Mapping enabled</label><div className="form-row"><label>DISCORD ROLE ID<input value={grant.roleId} onChange={e=>updateDonorRole(index,{roleId:e.target.value.trim()})}/></label><label>SERVER<select value={grant.serverId} onChange={e=>updateDonorRole(index,{serverId:e.target.value})}>{servers.map(server=><option value={server.id} key={server.id}>{server.name}</option>)}</select></label><label>DONOR TIER<input type="number" min={1} value={grant.tier} onChange={e=>updateDonorRole(index,{tier:Number(e.target.value)})}/></label><label>PRIORITY<input type="number" value={grant.priority} onChange={e=>updateDonorRole(index,{priority:Number(e.target.value)})}/></label><button type="button" className="danger" onClick={()=>setSettings({...settings,discordDonorRoleGrants:(settings.discordDonorRoleGrants ?? []).filter((_,i)=>i!==index)})}>REMOVE</button></div></section>)}
-      {!(settings.discordDonorRoleGrants?.length)&&<p className="muted">No donor roles configured.</p>}
-    </div>
     <div className="role-grant-editor"><div className="panel-head"><div><span className="eyebrow">PER-SERVER ACCESS</span><h3>Discord role permissions</h3></div><button type="button" onClick={addGrant}>ADD ROLE</button></div>
       {(settings.discordRoleGrants ?? []).map((grant,index)=><section className="role-grant-card" key={index}>
         <div className="form-row"><label>ROLE ID<input value={grant.roleId} onChange={e=>updateGrant(index,{roleId:e.target.value.trim()})}/></label><label>SERVER<select value={grant.serverId} onChange={e=>updateGrant(index,{serverId:e.target.value})}>{servers.map(server=><option value={server.id} key={server.id}>{server.name}</option>)}</select></label><button type="button" className="danger" onClick={()=>setSettings({...settings,discordRoleGrants:(settings.discordRoleGrants ?? []).filter((_,i)=>i!==index)})}>REMOVE</button></div>

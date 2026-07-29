@@ -30,6 +30,8 @@ internal sealed class BridgeClient : IDisposable
     private readonly HashSet<Guid> _receivedCommands = new();
     private readonly HashSet<string> _assignedGameRoleUsers =
         new(StringComparer.OrdinalIgnoreCase);
+    private readonly HashSet<string> _assignedCustomBadgeUsers =
+        new(StringComparer.OrdinalIgnoreCase);
     private string _roundState = "waiting";
     private HeartbeatPayload _snapshot = new();
     private bool _disposed;
@@ -310,6 +312,69 @@ internal sealed class BridgeClient : IDisposable
         {
             Logger.Warn($"SCP Control game-role check failed: {exception.Message}");
         }
+        finally
+        {
+            await CheckCustomBadgeAsync(playerId, userId).ConfigureAwait(false);
+        }
+    }
+
+    private async Task CheckCustomBadgeAsync(int playerId, string userId)
+    {
+        try
+        {
+            using var request = Authorized(HttpMethod.Get,
+                Endpoint($"custom-badge?userId={Uri.EscapeDataString(userId)}"));
+            using var response = await _http.SendAsync(request).ConfigureAwait(false);
+            if (!response.IsSuccessStatusCode) return;
+            var serializer = new DataContractJsonSerializer(typeof(CustomBadgePayload));
+            using var stream = await response.Content.ReadAsStreamAsync().ConfigureAwait(false);
+            var badge = serializer.ReadObject(stream) as CustomBadgePayload;
+            Dispatch(() =>
+            {
+                var current = Player.ReadyList?.FirstOrDefault(candidate => candidate.PlayerId == playerId);
+                if (current == null) return;
+                if (badge?.Assigned == true && !string.IsNullOrWhiteSpace(badge.BadgeText))
+                {
+                    if (TrySetCustomBadge(current, badge.BadgeText, badge.BadgeColor))
+                        _assignedCustomBadgeUsers.Add(current.UserId);
+                }
+                else if (_assignedCustomBadgeUsers.Remove(current.UserId))
+                    RefreshBadge(current);
+            });
+        }
+        catch (Exception exception)
+        {
+            Logger.Warn($"SCP Control custom-badge check failed: {exception.Message}");
+        }
+    }
+
+    private static bool TrySetCustomBadge(Player player, string text, string color)
+    {
+        var roles = GetServerRoles(player);
+        if (roles == null) return false;
+        const BindingFlags flags = BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance;
+        roles.GetType().GetMethod("SetText", flags, null, new[] { typeof(string) }, null)?.Invoke(roles, new object[] { text });
+        roles.GetType().GetMethod("SetColor", flags, null, new[] { typeof(string) }, null)?.Invoke(roles, new object[] { color });
+        return true;
+    }
+
+    private static void RefreshBadge(Player player)
+    {
+        var roles = GetServerRoles(player);
+        const BindingFlags flags = BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance;
+        roles?.GetType().GetMethods(flags).FirstOrDefault(method =>
+            method.Name == "RefreshPermissions" && method.GetParameters().Length <= 1)
+            ?.Invoke(roles, roles.GetType().GetMethods(flags).First(method =>
+                method.Name == "RefreshPermissions" && method.GetParameters().Length <= 1)
+                .GetParameters().Length == 0 ? null : new object[] { true });
+    }
+
+    private static object? GetServerRoles(Player player)
+    {
+        const BindingFlags flags = BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance;
+        var hub = player.GetType().GetProperty("ReferenceHub", flags)?.GetValue(player);
+        return hub?.GetType().GetField("serverRoles", flags)?.GetValue(hub)
+            ?? hub?.GetType().GetProperty("serverRoles", flags)?.GetValue(hub);
     }
 
     private static bool TryApplyRemoteAdminGroup(Player player, GameRolePayload assignment, out string error)

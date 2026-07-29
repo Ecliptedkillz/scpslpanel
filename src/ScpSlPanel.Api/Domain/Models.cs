@@ -131,7 +131,8 @@ public sealed record PanelIntegrationSettings(
     [property: JsonConverter(typeof(SnowflakeStringConverter))] string DiscordAuditChannelId = "",
     bool DiscordDailyReportEnabled = false, int DiscordDailyReportHourUtc = 12,
     IReadOnlyList<DiscordGameRoleGrant>? DiscordGameRoleGrants = null,
-    IReadOnlyList<DiscordDonorRoleGrant>? DiscordDonorRoleGrants = null);
+    IReadOnlyList<DiscordDonorRoleGrant>? DiscordDonorRoleGrants = null,
+    IReadOnlyList<CustomUserBadge>? CustomUserBadges = null);
 public sealed record DiscordBotStatus(bool Enabled, bool Connected, string? BotName, string? Error);
 public sealed record DiscordChannelDiagnostic(
     string Purpose, string ChannelId, bool Found, string? Name, bool CanView, bool CanSend);
@@ -152,6 +153,9 @@ public sealed record DiscordGameRoleGrant(
 public sealed record DiscordDonorRoleGrant(
     [property: JsonConverter(typeof(SnowflakeStringConverter))] string RoleId,
     Guid ServerId, int Tier, int Priority = 0, bool Enabled = true);
+public sealed record CustomUserBadge(
+    Guid ServerId, string SteamId, string BadgeText, string BadgeColor = "silver");
+public sealed record BridgeCustomBadge(bool Assigned, string BadgeText = "", string BadgeColor = "silver");
 public sealed record DonorSyncResult(
     Guid ServerId, string ServerName, int Donors, int Added, int Updated, int Removed,
     string Path);

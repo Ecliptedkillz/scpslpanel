@@ -330,6 +330,22 @@ app.MapGet("/api/bridge/{serverId:guid}/game-role", async (
     return server is null ? Results.NotFound()
         : Results.Ok(await discordLinks.ResolveGameRoleAsync(server, userId));
 });
+app.MapGet("/api/bridge/{serverId:guid}/custom-badge", async (
+    Guid serverId, string? userId, HttpContext context, ServerManager servers,
+    NotificationService notifications) =>
+{
+    if (!await servers.ValidateBridgeTokenAsync(serverId, context.Request.Headers["X-Bridge-Token"].FirstOrDefault()))
+        return Results.Unauthorized();
+    var steamId = userId?.Split('@', 2)[0].Trim() ?? "";
+    var badge = (await notifications.GetAsync()).CustomUserBadges?
+        .LastOrDefault(x => x.ServerId == serverId
+            && x.SteamId.Equals(steamId, StringComparison.OrdinalIgnoreCase)
+            && !string.IsNullOrWhiteSpace(x.BadgeText));
+    return Results.Ok(badge is null
+        ? new BridgeCustomBadge(false)
+        : new BridgeCustomBadge(true, badge.BadgeText.Trim(),
+            string.IsNullOrWhiteSpace(badge.BadgeColor) ? "silver" : badge.BadgeColor.Trim()));
+});
 app.MapGet("/api/bridge/{serverId:guid}/commands", async (
     Guid serverId, HttpContext context, ServerManager servers, BridgeCommandService commands) =>
 {
@@ -1126,7 +1142,8 @@ api.MapPut("/integrations", async (PanelIntegrationSettings request, Notificatio
         $"Runtime roles changed: {oldRoles} → {newRoles}. Added: {string.Join(", ", addedValues.DefaultIfEmpty("none"))}. "
         + $"Removed: {string.Join(", ", removedValues.DefaultIfEmpty("none"))}. "
         + $"Validation warnings: {issues.Count(issue => issue.Severity != "error")}.");
-    foreach (var serverId in (request.DiscordGameRoleGrants ?? []).Select(role => role.ServerId).Distinct())
+    foreach (var serverId in (request.DiscordGameRoleGrants ?? []).Select(role => role.ServerId)
+        .Concat((request.CustomUserBadges ?? []).Select(badge => badge.ServerId)).Distinct())
         if (bridge.Get(serverId).Connected)
             foreach (var player in bridge.Get(serverId).Players)
                 _ = Task.Run(() => commands.ExecuteAsync(serverId, "role-sync", player.Id));
