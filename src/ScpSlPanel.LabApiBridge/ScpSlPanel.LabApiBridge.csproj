@@ -11,6 +11,7 @@
 
   <ItemGroup>
     <PackageReference Include="Microsoft.NETFramework.ReferenceAssemblies" Version="1.0.3" PrivateAssets="all" />
+    <PackageReference Include="Lib.Harmony" Version="2.4.1" />
     <Reference Include="LabApi" HintPath="$(ScpSlManagedPath)\LabApi.dll" Private="false" />
     <Reference Include="Assembly-CSharp" HintPath="$(ScpSlManagedPath)\Assembly-CSharp.dll" Private="false" />
     <Reference Include="UnityEngine.CoreModule" HintPath="$(ScpSlManagedPath)\UnityEngine.CoreModule.dll" Private="false" />

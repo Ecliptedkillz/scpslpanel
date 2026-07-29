@@ -364,7 +364,27 @@ app.MapPost("/api/bridge/{serverId:guid}/events", async (
     if (!await servers.ValidateBridgeTokenAsync(serverId, context.Request.Headers["X-Bridge-Token"].FirstOrDefault()))
         return Results.Unauthorized();
     await commands.RecordEventAsync(serverId, value);
-    if (value.Type is "kick" or "ban" or "oban" or "unban")
+    if (value.Type == "report")
+    {
+        var ticket = new ReportTicket(Guid.NewGuid(), serverId,
+            value.At == default ? DateTimeOffset.UtcNow : value.At, "open",
+            value.UserId ?? "", value.DisplayName ?? "Unknown reporter",
+            value.TargetUserId ?? "", value.TargetDisplayName ?? "Unknown player",
+            string.IsNullOrWhiteSpace(value.Detail) ? "No reason provided" : value.Detail.Trim());
+        var reports = await store.ReadAsync<ReportTicket>("report-tickets");
+        reports.Insert(0, ticket);
+        await store.WriteAsync("report-tickets", reports.Take(5000));
+        var server = await servers.FindAsync(serverId);
+        var notifications = app.Services.GetRequiredService<NotificationService>();
+        await notifications.SendAsync($"New in-game report · {server?.Name ?? "Unknown server"}",
+            $"**Reporter:** {ticket.ReporterName} (`{ticket.ReporterUserId}`)\n"
+            + $"**Reported player:** {ticket.TargetName} (`{ticket.TargetUserId}`)\n"
+            + $"**Reason:** {ticket.Reason}\n**Ticket:** `{ticket.Id}`",
+            "warning", "moderation");
+        await audit.AddAsync("Built-in report system", "report.created",
+            ticket.TargetUserId, $"{ticket.ReporterName}: {ticket.Reason}");
+    }
+    else if (value.Type is "kick" or "ban" or "oban" or "unban")
     {
         var actor = string.IsNullOrWhiteSpace(value.Actor) ? "In-game Remote Admin" : value.Actor;
         var target = !string.IsNullOrWhiteSpace(value.UserId) ? value.UserId
@@ -463,6 +483,37 @@ api.MapGet("/staff-dashboard", async (JsonStore store, ServerManager servers, Br
 });
 api.MapGet("/operations", (int? take, OperationTracker operations) =>
     operations.ListAsync(take ?? 100));
+api.MapGet("/reports", async (JsonStore store, ServerManager servers, ClaimsPrincipal user) =>
+{
+    var reports = await store.ReadAsync<ReportTicket>("report-tickets");
+    if (user.IsInRole("Owner")) return Results.Ok(reports.OrderByDescending(x => x.CreatedAt));
+    var visible = new List<ReportTicket>();
+    foreach (var report in reports)
+        if (await Can(user, store, report.ServerId, "players.history")) visible.Add(report);
+    return Results.Ok(visible.OrderByDescending(x => x.CreatedAt));
+});
+api.MapPut("/reports/{id:guid}", async (
+    Guid id, ReportTicketUpdate request, JsonStore store, AuditService audit, ClaimsPrincipal user) =>
+{
+    var reports = await store.ReadAsync<ReportTicket>("report-tickets");
+    var index = reports.FindIndex(x => x.Id == id);
+    if (index < 0) return Results.NotFound();
+    if (!await Can(user, store, reports[index].ServerId, "players.actions")) return Results.Forbid();
+    var status = request.Status.Trim().ToLowerInvariant();
+    if (status is not ("open" or "claimed" or "resolved" or "dismissed"))
+        return Results.BadRequest(new { error = "Invalid report status." });
+    reports[index] = reports[index] with
+    {
+        Status = status,
+        AssignedTo = status == "open" ? null : Actor(user),
+        Resolution = request.Resolution?.Trim(),
+        UpdatedAt = DateTimeOffset.UtcNow
+    };
+    await store.WriteAsync("report-tickets", reports);
+    await audit.AddAsync(Actor(user), $"report.{status}", id.ToString(),
+        request.Resolution ?? reports[index].Reason);
+    return Results.Ok(reports[index]);
+});
 api.MapGet("/servers", async (ServerManager servers, ClaimsPrincipal principal, JsonStore store) =>
 {
     var values = await servers.SnapshotsAsync();

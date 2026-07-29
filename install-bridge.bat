@@ -48,6 +48,8 @@ if errorlevel 1 goto :error
 
 copy /y "src\ScpSlPanel.LabApiBridge\bin\Release\net48\ScpSlPanel.LabApiBridge.dll" "%PLUGIN_DIR%\ScpSlPanel.LabApiBridge.dll" >nul
 if errorlevel 1 goto :error
+copy /y "src\ScpSlPanel.LabApiBridge\bin\Release\net48\0Harmony.dll" "%PLUGIN_DIR%\0Harmony.dll" >nul
+if errorlevel 1 goto :error
 
 (
     echo panel_url: "%PANEL_URL%"

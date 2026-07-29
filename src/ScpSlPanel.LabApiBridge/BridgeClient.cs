@@ -177,6 +177,23 @@ internal sealed class BridgeClient : IDisposable
         }, typeof(EventPayload));
     }
 
+    public void RecordReport(Player reporter, Player target, string reason)
+    {
+        var hideReporter = _config.RespectDoNotTrack && reporter.DoNotTrack;
+        var hideTarget = _config.RespectDoNotTrack && target.DoNotTrack;
+        _ = PostJsonAsync("events", new EventPayload
+        {
+            Type = "report",
+            At = DateTimeOffset.UtcNow.ToString("O"),
+            PlayerId = reporter.PlayerId.ToString(),
+            UserId = hideReporter ? "" : reporter.UserId,
+            DisplayName = reporter.DisplayName,
+            TargetUserId = hideTarget ? "" : target.UserId,
+            TargetDisplayName = target.DisplayName,
+            Detail = string.IsNullOrWhiteSpace(reason) ? "No reason provided" : reason.Trim(),
+        }, typeof(EventPayload));
+    }
+
     public void CheckPanelBan(Player player)
     {
         if (player == null || player.IsHost) return;

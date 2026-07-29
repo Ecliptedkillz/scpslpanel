@@ -20,7 +20,7 @@ public sealed class BridgePlugin : Plugin<BridgeConfig>
     public override string Name => "SCP Control Bridge";
     public override string Description => "Secure live player telemetry bridge for the SCP Control panel.";
     public override string Author => "Ecliptedkillz";
-    public override Version Version => new(0, 8, 0);
+    public override Version Version => new(0, 9, 0);
     public override Version RequiredApiVersion { get; } = new(LabApiProperties.CompiledVersion);
     public override bool IsTransparent => true;
     public override string ConfigFileName { get; set; } = "scp-control-bridge.yml";
@@ -34,12 +34,14 @@ public sealed class BridgePlugin : Plugin<BridgeConfig>
         PermissionsManager.RegisterProvider<PanelPermissionProvider>();
         _events = new BridgeEvents(_client);
         CustomHandlersManager.RegisterEventsHandler(_events);
+        BuiltInReportHook.Enable(_client);
         ServerEvents.CommandExecuted += OnCommandExecuted;
         Logger.Info("SCP Control Bridge enabled.");
     }
 
     public override void Disable()
     {
+        BuiltInReportHook.Disable();
         ServerEvents.CommandExecuted -= OnCommandExecuted;
         if (_events is not null) CustomHandlersManager.UnregisterEventsHandler(_events);
         _client?.Dispose();

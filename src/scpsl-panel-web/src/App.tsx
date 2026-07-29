@@ -12,7 +12,7 @@ import { PlayerHistoryView, type StoredPlayer } from './components/PlayerHistory
 import { GlobalPlayerDatabase } from './components/GlobalPlayerDatabase'
 import type { AuditEntry, Ban, BridgeSetup, BridgeStatus, Overview, Player, Schedule, Server } from './types'
 
-type Page = 'overview' | 'servers' | 'server' | 'players' | 'permissions' | 'donors' | 'bans' | 'schedules' | 'audit' | 'admins' | 'settings'
+type Page = 'overview' | 'servers' | 'server' | 'players' | 'reports' | 'permissions' | 'donors' | 'bans' | 'schedules' | 'audit' | 'admins' | 'settings'
 type ServerTab = 'overview' | 'monitoring' | 'console' | 'players' | 'player-history' | 'activity' | 'restarts' | 'plugins' | 'files' | 'maintenance'
 type ServerAccessGrant = { serverId: string; permissions: string[] }
 type User = { username: string; role: string; serverIds: string[]; permissions: string[]; serverAccess?: ServerAccessGrant[]; twoFactorEnabled?: boolean }
@@ -27,6 +27,7 @@ const nav: { page: Page; label: string; icon: typeof LayoutDashboard }[] = [
   { page: 'overview', label: 'Overview', icon: LayoutDashboard },
   { page: 'servers', label: 'Servers', icon: ServerIcon },
   { page: 'players', label: 'Player Database', icon: Users },
+  { page: 'reports', label: 'Report Tickets', icon: Shield },
   { page: 'permissions', label: 'In-game Permissions', icon: Shield },
   { page: 'donors', label: 'Donors & Badges', icon: Users },
   { page: 'bans', label: 'Ban Manager', icon: BanIcon },
@@ -38,7 +39,7 @@ const nav: { page: Page; label: string; icon: typeof LayoutDashboard }[] = [
 
 const fmtBytes = (bytes: number) => bytes ? `${(bytes / 1024 / 1024).toFixed(0)} MB` : '0 MB'
 const fmtState = (state: unknown) => typeof state === 'string' ? state.toUpperCase() : 'UNKNOWN'
-const topLevelPages = new Set<Page>(['overview', 'servers', 'players', 'permissions', 'donors', 'bans', 'schedules', 'audit', 'admins', 'settings'])
+const topLevelPages = new Set<Page>(['overview', 'servers', 'players', 'reports', 'permissions', 'donors', 'bans', 'schedules', 'audit', 'admins', 'settings'])
 const serverTabs = new Set<ServerTab>(['overview', 'monitoring', 'console', 'players', 'player-history', 'activity', 'restarts', 'plugins', 'files', 'maintenance'])
 const readRoute = () => {
   const parts = window.location.pathname.split('/').filter(Boolean).map(decodeURIComponent)
@@ -234,6 +235,7 @@ function Panel({ user, onLogout, theme, setTheme }: { user: User; onLogout: () =
         {page === 'overview' && <OverviewPage data={overview} navigatePage={navigatePage} openServer={openServer}/>}
         {page === 'servers' && <ServersPage user={user} servers={servers} refresh={load} openServer={openServer} onError={setError}/>}
         {page === 'players' && <GlobalPlayerDatabase onError={setError}/>}
+        {page === 'reports' && <ReportTicketsPage servers={servers} onError={setError}/>}
         {page === 'permissions' && user.role === 'Owner' && <IngamePermissionsPage servers={servers} onError={setError}/>}
         {page === 'donors' && user.role === 'Owner' && <DonorManagementPageV2 servers={servers} onError={setError}/>}
         {page === 'server' && <ServerWorkspace user={user} server={selectedServer} tab={serverTab} setTab={navigateServerTab} refresh={load} back={() => navigatePage('servers')} onError={setError}/>}
@@ -245,6 +247,25 @@ function Panel({ user, onLogout, theme, setTheme }: { user: User; onLogout: () =
       </div>
     </main>
   </div>
+}
+
+type ReportTicket={id:string;serverId:string;createdAt:string;status:string;reporterUserId:string;reporterName:string;targetUserId:string;targetName:string;reason:string;assignedTo?:string;resolution?:string}
+function ReportTicketsPage({servers,onError}:{servers:Server[];onError:(value:string)=>void}){
+  const [reports,setReports]=useState<ReportTicket[]|null>(null)
+  const [filter,setFilter]=useState('open')
+  const [selected,setSelected]=useState<ReportTicket|null>(null)
+  const [resolution,setResolution]=useState('')
+  const load=useCallback(()=>api<ReportTicket[]>('/reports').then(setReports).catch(error=>onError(error.message)),[onError])
+  useEffect(()=>{load();const timer=setInterval(load,5000);return()=>clearInterval(timer)},[load])
+  const update=async(status:string)=>{if(!selected)return;try{await api(`/reports/${selected.id}`,{method:'PUT',body:JSON.stringify({status,resolution})});setSelected(null);setResolution('');load()}catch(error){onError(error instanceof Error?error.message:'Unable to update report')}}
+  if(!reports)return <Skeleton/>
+  const visible=filter==='all'?reports:reports.filter(item=>item.status===filter)
+  return <><PageTitle eyebrow="MODERATION" title="In-game report tickets"><button onClick={load}><RefreshCw size={15}/> REFRESH</button></PageTitle>
+    <section className="stat-grid report-stats"><article className="stat-card"><span>OPEN</span><strong>{reports.filter(x=>x.status==='open').length}</strong></article><article className="stat-card"><span>CLAIMED</span><strong>{reports.filter(x=>x.status==='claimed').length}</strong></article><article className="stat-card"><span>RESOLVED</span><strong>{reports.filter(x=>x.status==='resolved').length}</strong></article></section>
+    <div className="page-tabs">{['open','claimed','resolved','dismissed','all'].map(value=><button className={filter===value?'active':''} onClick={()=>setFilter(value)} key={value}>{value.toUpperCase()}</button>)}</div>
+    <section className="panel moderation-center">{visible.map(item=><button className="moderation-feed-row" key={item.id} onClick={()=>{setSelected(item);setResolution(item.resolution??'')}}><span className={`tag ${item.status==='open'?'red':''}`}>{item.status.toUpperCase()}</span><strong>{item.reporterName}<small>{item.reporterUserId}</small></strong><strong>reported {item.targetName}<small>{item.targetUserId}</small></strong><p>{item.reason}</p><small>{servers.find(x=>x.id===item.serverId)?.name??'Unknown server'} · {new Date(item.createdAt).toLocaleString()}</small></button>)}{!visible.length&&<EmptyMini text="No report tickets match this filter."/>}</section>
+    {selected&&<div className="modal-backdrop"><article className="modal moderation-detail-modal"><header><div><span className="eyebrow">REPORT TICKET</span><h2>{selected.targetName}</h2></div><button className="icon-button" onClick={()=>setSelected(null)}><X/></button></header><section className="action-dialog-body"><div><strong>{selected.reporterName}</strong> reported <strong>{selected.targetName}</strong></div><p>{selected.reason}</p><label>STAFF NOTES / RESOLUTION<textarea value={resolution} onChange={event=>setResolution(event.target.value)} placeholder="Investigation notes or outcome…"/></label></section><footer className="modal-actions"><button onClick={()=>void update('dismissed')}>DISMISS</button>{selected.status==='open'&&<button onClick={()=>void update('claimed')}>CLAIM</button>}<button className="primary" onClick={()=>void update('resolved')}>RESOLVE</button></footer></article></div>}
+  </>
 }
 
 function PageTitle({ eyebrow, title, children }: { eyebrow: string; title: string; children?: React.ReactNode }) {
