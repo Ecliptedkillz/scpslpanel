@@ -359,8 +359,13 @@ app.MapPost("/api/bridge/{serverId:guid}/events", async (
                 && issuedAt - x.IssuedAt < TimeSpan.FromSeconds(10));
             if (!duplicate)
             {
+                var eventUserId = target.Contains('@') ? target : null;
+                var eventIpAddress = System.Net.IPAddress.TryParse(
+                    target.StartsWith("ip:", StringComparison.OrdinalIgnoreCase) ? target[3..] : target,
+                    out var parsedAddress) ? parsedAddress.ToString() : null;
                 bans.Insert(0, new(Guid.NewGuid(), target, value.DisplayName ?? target, reason, actor,
-                    issuedAt, value.DurationSeconds is > 0 ? issuedAt.AddSeconds(value.DurationSeconds.Value) : null, false));
+                    issuedAt, value.DurationSeconds is > 0 ? issuedAt.AddSeconds(value.DurationSeconds.Value) : null,
+                    false, serverId, eventUserId, eventIpAddress));
                 await store.WriteAsync("bans", bans);
             }
         }
@@ -674,6 +679,43 @@ static string ScpConfigRoot(ServerDefinition server) => Path.Combine(
     Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
     "SCP Secret Laboratory", "config", server.QueryPort.ToString());
 
+static async Task<int> RemoveLegacyGameBanAsync(ServerDefinition server, BanEntry ban)
+{
+    static string Normalize(string value) =>
+        value.Trim().StartsWith("ip:", StringComparison.OrdinalIgnoreCase)
+            ? value.Trim()[3..]
+            : value.Split('@')[0].Trim();
+
+    var identifiers = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+    foreach (var value in new[] { ban.Target, ban.UserId, ban.IpAddress })
+        if (!string.IsNullOrWhiteSpace(value))
+        {
+            identifiers.Add(value.Trim());
+            identifiers.Add(Normalize(value));
+        }
+
+    var removed = 0;
+    foreach (var fileName in new[] { "UserIdBans.txt", "IpBans.txt" })
+    {
+        var path = Path.Combine(ScpConfigRoot(server), fileName);
+        if (!File.Exists(path)) continue;
+        var lines = await File.ReadAllLinesAsync(path);
+        var retained = lines.Where(line =>
+        {
+            if (string.IsNullOrWhiteSpace(line) || line.TrimStart().StartsWith("#")) return true;
+            var fields = line.Split(';');
+            if (fields.Length < 2) return true;
+            var storedTarget = fields[1].Trim();
+            var matches = identifiers.Contains(storedTarget) || identifiers.Contains(Normalize(storedTarget));
+            if (matches) removed++;
+            return !matches;
+        }).ToArray();
+        if (retained.Length != lines.Length)
+            await File.WriteAllLinesAsync(path, retained);
+    }
+    return removed;
+}
+
 api.MapGet("/servers/{id:guid}/server-config", async (
     Guid id, ServerManager servers, ClaimsPrincipal user, JsonStore store) =>
 {
@@ -723,15 +765,25 @@ api.MapPost("/bans", async (ModerationRequest request, JsonStore store, AuditSer
     await audit.AddAsync(Actor(user), "player.ban", request.PlayerId, entry.Reason);
     return Results.Created($"/api/bans/{entry.Id}", entry);
 }).RequireAuthorization("Owner");
-api.MapDelete("/bans/{id:guid}", async (Guid id, JsonStore store, AuditService audit, ClaimsPrincipal user) =>
+api.MapDelete("/bans/{id:guid}", async (
+    Guid id, JsonStore store, ServerManager servers, AuditService audit, ClaimsPrincipal user) =>
 {
     var bans = await store.ReadAsync<BanEntry>("bans");
     var index = bans.FindIndex(x => x.Id == id);
     if (index < 0) return Results.NotFound();
+    var ban = bans[index];
+    var definitions = await servers.DefinitionsAsync();
+    var affectedServers = ban.ServerId is null
+        ? definitions
+        : definitions.Where(server => server.Id == ban.ServerId).ToList();
+    var removedLegacyEntries = 0;
+    foreach (var server in affectedServers)
+        removedLegacyEntries += await RemoveLegacyGameBanAsync(server, ban);
     bans[index] = bans[index] with { Revoked = true };
     await store.WriteAsync("bans", bans);
-    await audit.AddAsync(Actor(user), "player.unban", bans[index].Target, bans[index].Reason);
-    return Results.NoContent();
+    await audit.AddAsync(Actor(user), "player.unban", bans[index].Target,
+        $"{bans[index].Reason}; removed {removedLegacyEntries} legacy game-ban entries");
+    return Results.Ok(new { revoked = true, removedLegacyEntries });
 }).RequireAuthorization("Owner");
 api.MapGet("/audit", (int? take, string? query, string? actor, string? action,
     DateTimeOffset? from, DateTimeOffset? to, AuditService audit) =>
@@ -993,5 +1045,34 @@ api.MapPost("/integrations/discord/bot/reconnect", (DiscordBotService bot) =>
 
 app.MapHub<PanelHub>("/hub/panel");
 app.MapFallbackToFile("index.html");
+
+// Reconcile bans revoked before legacy game-file cleanup was introduced.
+// This makes upgrading sufficient even when the UI no longer offers an Unban action.
+await using (var reconciliationScope = app.Services.CreateAsyncScope())
+{
+    var reconciliationStore = reconciliationScope.ServiceProvider.GetRequiredService<JsonStore>();
+    var reconciliationServers = reconciliationScope.ServiceProvider.GetRequiredService<ServerManager>();
+    var reconciliationLogger = reconciliationScope.ServiceProvider
+        .GetRequiredService<ILoggerFactory>().CreateLogger("BanReconciliation");
+    try
+    {
+        var revokedBans = (await reconciliationStore.ReadAsync<BanEntry>("bans"))
+            .Where(ban => ban.Revoked).ToList();
+        var definitions = await reconciliationServers.DefinitionsAsync();
+        var removed = 0;
+        foreach (var ban in revokedBans)
+            foreach (var server in ban.ServerId is null
+                ? definitions
+                : definitions.Where(server => server.Id == ban.ServerId))
+                removed += await RemoveLegacyGameBanAsync(server, ban);
+        if (removed > 0)
+            reconciliationLogger.LogInformation(
+                "Removed {Count} legacy SCP:SL ban entries for previously revoked panel bans", removed);
+    }
+    catch (Exception exception)
+    {
+        reconciliationLogger.LogWarning(exception, "Legacy SCP:SL ban reconciliation failed");
+    }
+}
 
 app.Run();
