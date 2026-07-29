@@ -45,13 +45,11 @@ internal sealed class BridgeClient : IDisposable
     {
         try
         {
-            _roundState = Round.IsRoundInProgress ? "active"
-                : Round.IsRoundEnded ? "ended" : _roundState;
             CaptureSnapshot();
         }
         catch (Exception exception)
         {
-            Logger.Warn($"SCP Control snapshot unavailable while the server initializes: {exception.Message}");
+            Logger.Warn($"SCP Control snapshot failed unexpectedly: {exception}");
         }
     }
 
@@ -59,15 +57,27 @@ internal sealed class BridgeClient : IDisposable
     {
         var now = DateTimeOffset.UtcNow;
         var activeIds = new HashSet<int>();
-        var players = Player.ReadyList
-            .Where(player => !player.IsHost && player != excluded)
-            .Select(player =>
+        Player[] readyPlayers;
+        try
+        {
+            readyPlayers = Player.ReadyList?.ToArray() ?? Array.Empty<Player>();
+        }
+        catch (Exception exception)
+        {
+            Logger.Warn($"SCP Control could not read the player list yet: {exception.Message}");
+            readyPlayers = Array.Empty<Player>();
+        }
+
+        var players = new List<PlayerPayload>();
+        foreach (var player in readyPlayers.Where(player => player != null && !player.IsHost && player != excluded))
+        {
+            try
             {
                 activeIds.Add(player.PlayerId);
                 if (!_sessions.TryGetValue(player.PlayerId, out var connectedAt))
                     _sessions[player.PlayerId] = connectedAt = now;
                 var hideIdentity = _config.RespectDoNotTrack && player.DoNotTrack;
-                return new PlayerPayload
+                players.Add(new PlayerPayload
                 {
                     PlayerId = player.PlayerId,
                     DisplayName = player.DisplayName ?? "Unknown",
@@ -77,16 +87,28 @@ internal sealed class BridgeClient : IDisposable
                     Ping = ReadPing(player),
                     SessionSeconds = Math.Max(0, (long)(now - connectedAt).TotalSeconds),
                     IsMuted = player.IsMuted,
-                };
-            }).ToList();
+                });
+            }
+            catch (Exception exception)
+            {
+                Logger.Warn($"SCP Control skipped an unavailable player snapshot: {exception.Message}");
+            }
+        }
         foreach (var id in _sessions.Keys.Where(id => !activeIds.Contains(id)).ToList()) _sessions.Remove(id);
+
+        var maxPlayers = 0;
+        try { maxPlayers = CustomNetworkManager.slots; }
+        catch (Exception exception)
+        {
+            Logger.Warn($"SCP Control could not read the slot count yet: {exception.Message}");
+        }
 
         var snapshot = new HeartbeatPayload
         {
             BridgeVersion = typeof(BridgePlugin).Assembly.GetName().Version.ToString(),
             ApiVersion = LabApiProperties.CompiledVersion,
             RoundState = _roundState,
-            MaxPlayers = CustomNetworkManager.slots,
+            MaxPlayers = maxPlayers,
             Players = players,
         };
         lock (_snapshotGate) _snapshot = snapshot;
