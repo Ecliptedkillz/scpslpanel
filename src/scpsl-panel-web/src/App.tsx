@@ -822,7 +822,7 @@ type IntegrationSettings = {
   highMemoryMessage: string; restartFailureMessage: string; scheduleFailureMessage: string
   discordBotEnabled: boolean; discordBotToken: string; discordGuildId: string; discordControlRoleIds: string
   discordNotificationChannelId: string; steamWebApiKey: string
-  discordModerationChannelId: string; discordAuditChannelId: string
+  discordModerationChannelId: string; discordReportChannelId: string; discordAuditChannelId: string
   discordRoleGrants: {roleId:string;serverId:string;permissions:string[]}[]
   discordGameRoleGrants: {roleId:string;serverId:string;groupName:string;priority:number;enabled:boolean;
     permissions:string[];inheritedGroups:string[];badgeText:string;badgeColor:string;hidden:boolean;
@@ -844,7 +844,7 @@ const defaultIntegration: IntegrationSettings = {
   scheduleFailureMessage: "Schedule '{schedule}' failed for {server}: {error}",
   discordBotEnabled: false, discordBotToken: '', discordGuildId: '', discordControlRoleIds: '',
   discordNotificationChannelId: '', steamWebApiKey: '',
-  discordModerationChannelId: '', discordAuditChannelId: '', discordRoleGrants: [],
+  discordModerationChannelId: '', discordReportChannelId: '', discordAuditChannelId: '', discordRoleGrants: [],
   discordGameRoleGrants: [], discordDonorRoleGrants: [], customUserBadges: [], customRoleBadges: [],
   discordDailyReportEnabled: false, discordDailyReportHourUtc: 12,
 }
@@ -1174,7 +1174,7 @@ function DiscordBotPanel({ servers, onError }: { servers: Server[]; onError: (e:
     <Bot size={26}/><h2>Discord bot</h2>
     <p><span className={`status-dot ${status?.connected ? '' : 'off'}`}/>{status?.connected ? `Connected as ${status.botName}` : status?.error || 'Not connected'}</p>
     <label className="check-row"><input type="checkbox" checked={settings.discordBotEnabled} onChange={e=>setSettings({...settings,discordBotEnabled:e.target.checked})}/> Enable embedded Discord bot</label>
-    <div className="form-row"><label>BOT TOKEN<input type="password" value={settings.discordBotToken} onChange={e=>setSettings({...settings,discordBotToken:e.target.value})}/></label><label>GUILD ID<input value={settings.discordGuildId} onChange={e=>setSettings({...settings,discordGuildId:e.target.value.trim()})}/></label><label>TECHNICAL CHANNEL ID<input value={settings.discordNotificationChannelId} onChange={e=>setSettings({...settings,discordNotificationChannelId:e.target.value.trim()})}/></label><label>MODERATION CHANNEL ID<input value={settings.discordModerationChannelId} onChange={e=>setSettings({...settings,discordModerationChannelId:e.target.value.trim()})}/></label><label>AUDIT CHANNEL ID<input value={settings.discordAuditChannelId} onChange={e=>setSettings({...settings,discordAuditChannelId:e.target.value.trim()})}/></label><label>FULL CONTROL ROLE IDS<input value={settings.discordControlRoleIds} onChange={e=>setSettings({...settings,discordControlRoleIds:e.target.value})} placeholder="123…, 456…"/></label><label>STEAM WEB API KEY<input type="password" value={settings.steamWebApiKey} onChange={e=>setSettings({...settings,steamWebApiKey:e.target.value})}/></label></div>
+    <div className="form-row"><label>BOT TOKEN<input type="password" value={settings.discordBotToken} onChange={e=>setSettings({...settings,discordBotToken:e.target.value})}/></label><label>GUILD ID<input value={settings.discordGuildId} onChange={e=>setSettings({...settings,discordGuildId:e.target.value.trim()})}/></label><label>TECHNICAL CHANNEL ID<input value={settings.discordNotificationChannelId} onChange={e=>setSettings({...settings,discordNotificationChannelId:e.target.value.trim()})}/></label><label>MODERATION CHANNEL ID<input value={settings.discordModerationChannelId} onChange={e=>setSettings({...settings,discordModerationChannelId:e.target.value.trim()})}/></label><label>REPORT CHANNEL ID<input value={settings.discordReportChannelId} onChange={e=>setSettings({...settings,discordReportChannelId:e.target.value.trim()})}/></label><label>AUDIT CHANNEL ID<input value={settings.discordAuditChannelId} onChange={e=>setSettings({...settings,discordAuditChannelId:e.target.value.trim()})}/></label><label>FULL CONTROL ROLE IDS<input value={settings.discordControlRoleIds} onChange={e=>setSettings({...settings,discordControlRoleIds:e.target.value})} placeholder="123…, 456…"/></label><label>STEAM WEB API KEY<input type="password" value={settings.steamWebApiKey} onChange={e=>setSettings({...settings,steamWebApiKey:e.target.value})}/></label></div>
     <div className="form-row"><label className="check-row"><input type="checkbox" checked={settings.discordDailyReportEnabled} onChange={e=>setSettings({...settings,discordDailyReportEnabled:e.target.checked})}/> Send daily fleet report</label><label>REPORT HOUR (UTC)<input type="number" min={0} max={23} value={settings.discordDailyReportHourUtc} onChange={e=>setSettings({...settings,discordDailyReportHourUtc:Number(e.target.value)})}/></label></div>
     <div className="role-grant-editor"><div className="panel-head"><div><span className="eyebrow">PER-SERVER ACCESS</span><h3>Discord role permissions</h3></div><button type="button" onClick={addGrant}>ADD ROLE</button></div>
       {(settings.discordRoleGrants ?? []).map((grant,index)=><section className="role-grant-card" key={index}>

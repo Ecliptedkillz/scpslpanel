@@ -57,6 +57,7 @@ public sealed class DiscordBotService(
         foreach (var item in new[] {
             ("Notifications", settings.DiscordNotificationChannelId),
             ("Moderation", settings.DiscordModerationChannelId),
+            ("Reports", settings.DiscordReportChannelId),
             ("Audit", settings.DiscordAuditChannelId) })
         {
             var channel = ulong.TryParse(item.Item2, out var channelId) ? guild?.GetTextChannel(channelId) : null;

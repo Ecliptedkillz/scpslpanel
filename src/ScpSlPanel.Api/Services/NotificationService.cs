@@ -73,6 +73,8 @@ public sealed class NotificationService(
         var settings = await GetAsync();
         if (!settings.DiscordBotEnabled || string.IsNullOrWhiteSpace(settings.DiscordBotToken)) return;
         var channelId = category switch {
+            "reports" when !string.IsNullOrWhiteSpace(settings.DiscordReportChannelId) => settings.DiscordReportChannelId,
+            "reports" when !string.IsNullOrWhiteSpace(settings.DiscordModerationChannelId) => settings.DiscordModerationChannelId,
             "moderation" when !string.IsNullOrWhiteSpace(settings.DiscordModerationChannelId) => settings.DiscordModerationChannelId,
             "audit" when !string.IsNullOrWhiteSpace(settings.DiscordAuditChannelId) => settings.DiscordAuditChannelId,
             _ => settings.DiscordNotificationChannelId

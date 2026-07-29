@@ -380,7 +380,7 @@ app.MapPost("/api/bridge/{serverId:guid}/events", async (
             $"**Reporter:** {ticket.ReporterName} (`{ticket.ReporterUserId}`)\n"
             + $"**Reported player:** {ticket.TargetName} (`{ticket.TargetUserId}`)\n"
             + $"**Reason:** {ticket.Reason}\n**Ticket:** `{ticket.Id}`",
-            "warning", "moderation");
+            "warning", "reports");
         await audit.AddAsync("Built-in report system", "report.created",
             ticket.TargetUserId, $"{ticket.ReporterName}: {ticket.Reason}");
     }

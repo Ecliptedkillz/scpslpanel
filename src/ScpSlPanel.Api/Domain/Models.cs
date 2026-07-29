@@ -128,6 +128,7 @@ public sealed record PanelIntegrationSettings(
     [property: JsonConverter(typeof(SnowflakeStringConverter))] string DiscordNotificationChannelId = "",
     string SteamWebApiKey = "", IReadOnlyList<DiscordRoleGrant>? DiscordRoleGrants = null,
     [property: JsonConverter(typeof(SnowflakeStringConverter))] string DiscordModerationChannelId = "",
+    [property: JsonConverter(typeof(SnowflakeStringConverter))] string DiscordReportChannelId = "",
     [property: JsonConverter(typeof(SnowflakeStringConverter))] string DiscordAuditChannelId = "",
     bool DiscordDailyReportEnabled = false, int DiscordDailyReportHourUtc = 12,
     IReadOnlyList<DiscordGameRoleGrant>? DiscordGameRoleGrants = null,

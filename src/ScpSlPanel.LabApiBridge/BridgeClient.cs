@@ -192,7 +192,23 @@ internal sealed class BridgeClient : IDisposable
             TargetDisplayName = target.DisplayName,
             Detail = string.IsNullOrWhiteSpace(reason) ? "No reason provided" : reason.Trim(),
         }, typeof(EventPayload));
+        var reporterName = EscapeRichText(reporter.DisplayName ?? "Unknown");
+        var targetName = EscapeRichText(target.DisplayName ?? "Unknown");
+        var staffMessage = $"<color=#ff6868><b>NEW PLAYER REPORT</b></color>\n"
+            + $"{reporterName} reported {targetName}. Check Report Tickets or Discord.";
+        foreach (var staff in Player.ReadyList.Where(player =>
+                     player != null && !player.IsDummy && player.RemoteAdminAccess))
+        {
+            global::Broadcast.Singleton.TargetAddElement(
+                staff.ReferenceHub.connectionToClient,
+                staffMessage,
+                10,
+                global::Broadcast.BroadcastFlags.AdminChat);
+        }
     }
+
+    private static string EscapeRichText(string value) =>
+        value.Replace("<", "&lt;").Replace(">", "&gt;");
 
     public void CheckPanelBan(Player player)
     {
