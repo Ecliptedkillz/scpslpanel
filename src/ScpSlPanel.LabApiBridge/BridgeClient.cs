@@ -33,12 +33,26 @@ internal sealed class BridgeClient : IDisposable
     {
         _config = config;
         _http.Timeout = TimeSpan.FromSeconds(8);
-        _roundState = Round.IsRoundInProgress ? "active" : Round.IsRoundEnded ? "ended" : "waiting";
-        CaptureSnapshot();
         var interval = TimeSpan.FromSeconds(Math.Max(2, config.HeartbeatSeconds));
-        _timer = new Timer(_ => Dispatch(() => CaptureSnapshot()), null, TimeSpan.Zero, interval);
+        // LabAPI enables plugins before every game wrapper is guaranteed to be ready.
+        // Defer the first snapshot instead of touching Round/Player state in the constructor.
+        _timer = new Timer(_ => Dispatch(CaptureSnapshotSafely), null, TimeSpan.FromSeconds(2), interval);
         _commandTimer = new Timer(_ => _ = PollCommandsAsync(), null,
-            TimeSpan.FromSeconds(1), TimeSpan.FromSeconds(1));
+            TimeSpan.FromSeconds(3), TimeSpan.FromSeconds(1));
+    }
+
+    private void CaptureSnapshotSafely()
+    {
+        try
+        {
+            _roundState = Round.IsRoundInProgress ? "active"
+                : Round.IsRoundEnded ? "ended" : _roundState;
+            CaptureSnapshot();
+        }
+        catch (Exception exception)
+        {
+            Logger.Warn($"SCP Control snapshot unavailable while the server initializes: {exception.Message}");
+        }
     }
 
     public void CaptureSnapshot(Player? excluded = null)
