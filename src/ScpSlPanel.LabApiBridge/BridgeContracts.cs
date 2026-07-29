@@ -70,6 +70,14 @@ internal sealed class CommandResultPayload
 }
 
 [DataContract]
+internal sealed class BanCheckPayload
+{
+    [DataMember(Name = "banned")] public bool Banned { get; set; }
+    [DataMember(Name = "reason")] public string? Reason { get; set; }
+    [DataMember(Name = "expiresAt")] public string? ExpiresAt { get; set; }
+}
+
+[DataContract]
 internal sealed class EventPayload
 {
     [DataMember(Name = "type")] public string Type { get; set; } = "";

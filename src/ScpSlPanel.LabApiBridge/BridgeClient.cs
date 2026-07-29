@@ -154,6 +154,50 @@ internal sealed class BridgeClient : IDisposable
         }, typeof(EventPayload));
     }
 
+    public void CheckPanelBan(Player player)
+    {
+        if (player == null || player.IsHost) return;
+        var playerId = player.PlayerId;
+        var userId = player.UserId ?? "";
+        var ipAddress = player.IpAddress ?? "";
+        _ = CheckPanelBanAsync(playerId, userId, ipAddress);
+    }
+
+    private async Task CheckPanelBanAsync(int playerId, string userId, string ipAddress)
+    {
+        try
+        {
+            var suffix = $"ban-check?userId={Uri.EscapeDataString(userId)}&ipAddress={Uri.EscapeDataString(ipAddress)}";
+            using var request = Authorized(HttpMethod.Get, Endpoint(suffix));
+            using var response = await _http.SendAsync(request).ConfigureAwait(false);
+            if (!response.IsSuccessStatusCode)
+            {
+                Logger.Warn($"SCP Control ban check rejected: {(int)response.StatusCode} {response.ReasonPhrase}");
+                return;
+            }
+
+            var serializer = new DataContractJsonSerializer(typeof(BanCheckPayload));
+            using var stream = await response.Content.ReadAsStreamAsync().ConfigureAwait(false);
+            var result = serializer.ReadObject(stream) as BanCheckPayload;
+            if (result?.Banned != true) return;
+
+            Dispatch(() =>
+            {
+                var current = Player.ReadyList?.FirstOrDefault(candidate => candidate.PlayerId == playerId);
+                if (current == null) return;
+                var reason = string.IsNullOrWhiteSpace(result.Reason)
+                    ? "You are banned from this server." : $"Banned: {result.Reason}";
+                current.Kick(reason);
+                RecordModerationEvent("ban-enforced", current, userId, current.DisplayName,
+                    result.Reason, null, "SCP Control");
+            });
+        }
+        catch (Exception exception)
+        {
+            Logger.Warn($"SCP Control ban check failed: {exception.Message}");
+        }
+    }
+
     private async Task PollCommandsAsync()
     {
         if (_disposed || string.IsNullOrWhiteSpace(_config.PanelUrl)) return;
@@ -193,8 +237,9 @@ internal sealed class BridgeClient : IDisposable
                     result.Message = player == null ? "Player is no longer connected." : result.Success ? "Kick confirmed." : "Kick was rejected.";
                     break;
                 case "ban":
-                    result.Success = player != null && player.Ban(command.Reason ?? "Banned by SCP Control", Math.Max(1, command.DurationSeconds ?? 3600));
-                    result.Message = player == null ? "Player is no longer connected." : result.Success ? "Ban confirmed." : "Ban was rejected.";
+                    result.Success = player != null && player.Kick(command.Reason ?? "Banned by SCP Control");
+                    result.Message = player == null ? "Player is no longer connected."
+                        : result.Success ? "Panel ban saved and player removed." : "Player removal was rejected.";
                     break;
                 case "mute":
                     if (player == null) { result.Message = "Player is no longer connected."; break; }

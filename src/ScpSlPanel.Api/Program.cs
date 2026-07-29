@@ -288,6 +288,35 @@ app.MapPost("/api/bridge/{serverId:guid}/heartbeat", async (
     await hub.Clients.All.SendAsync("BridgeChanged", serverId);
     return Results.NoContent();
 });
+app.MapGet("/api/bridge/{serverId:guid}/ban-check", async (
+    Guid serverId, string? userId, string? ipAddress, HttpContext context,
+    ServerManager servers, JsonStore store) =>
+{
+    if (!await servers.ValidateBridgeTokenAsync(serverId, context.Request.Headers["X-Bridge-Token"].FirstOrDefault()))
+        return Results.Unauthorized();
+
+    static string NormalizeUserId(string? value) =>
+        string.IsNullOrWhiteSpace(value) ? "" : value.Split('@')[0].Trim();
+
+    var normalizedUserId = NormalizeUserId(userId);
+    var normalizedIp = ipAddress?.Trim() ?? "";
+    var now = DateTimeOffset.UtcNow;
+    var match = (await store.ReadAsync<BanEntry>("bans"))
+        .Where(entry => !entry.Revoked && (entry.ExpiresAt is null || entry.ExpiresAt > now)
+            && (entry.ServerId is null || entry.ServerId == serverId))
+        .OrderByDescending(entry => entry.IssuedAt)
+        .FirstOrDefault(entry =>
+            (!string.IsNullOrWhiteSpace(normalizedUserId)
+                && (NormalizeUserId(entry.UserId).Equals(normalizedUserId, StringComparison.OrdinalIgnoreCase)
+                    || NormalizeUserId(entry.Target).Equals(normalizedUserId, StringComparison.OrdinalIgnoreCase)))
+            || (!string.IsNullOrWhiteSpace(normalizedIp)
+                && (string.Equals(entry.IpAddress?.Trim(), normalizedIp, StringComparison.OrdinalIgnoreCase)
+                    || string.Equals(entry.Target.Trim(), $"ip:{normalizedIp}", StringComparison.OrdinalIgnoreCase))));
+
+    return Results.Ok(match is null
+        ? new BridgeBanCheck(false)
+        : new BridgeBanCheck(true, match.Reason, match.ExpiresAt));
+});
 app.MapGet("/api/bridge/{serverId:guid}/commands", async (
     Guid serverId, HttpContext context, ServerManager servers, BridgeCommandService commands) =>
 {
@@ -472,18 +501,28 @@ api.MapPost("/servers/{id:guid}/players/{playerId}/kick", async (Guid id, string
             player.Nickname, "kick", reason, Actor(user), null);
     return Results.Ok(result);
 });
-api.MapPost("/servers/{id:guid}/players/{playerId}/ban", async (Guid id, string playerId, ModerationRequest request, BridgeCommandService commands, BridgeStateService bridge, PlayerDataService playerData, ClaimsPrincipal user, JsonStore store, CancellationToken cancellationToken) =>
+api.MapPost("/servers/{id:guid}/players/{playerId}/ban", async (Guid id, string playerId, ModerationRequest request, BridgeCommandService commands, BridgeStateService bridge, PlayerDataService playerData, AuditService audit, ClaimsPrincipal user, JsonStore store, CancellationToken cancellationToken) =>
 {
     if (!await Can(user, store, id, "players.ban")) return Results.Forbid();
     var duration = Math.Max(1, request.DurationMinutes ?? 60);
     if (!bridge.Get(id).Connected) return Results.Conflict(new { error = "The LabAPI bridge must be connected to verify a ban." });
     var reason = request.Reason ?? "Banned by panel";
+    var player = bridge.Get(id).Players.FirstOrDefault(x => x.Id == playerId);
+    if (player is null) return Results.NotFound(new { error = "Player is no longer connected." });
     var result = await commands.ExecuteAsync(id, "ban", playerId, reason, duration * 60, cancellationToken: cancellationToken);
     if (!result.Success) return Results.Conflict(new { error = result.Message ?? "The game server rejected the ban." });
-    var player = bridge.Get(id).Players.FirstOrDefault(x => x.Id == playerId);
-    if (player is not null)
-        await playerData.RecordModerationAsync(id, string.IsNullOrWhiteSpace(player.UserId) ? $"ip:{player.IpAddress}" : player.UserId,
-            player.Nickname, "ban", reason, Actor(user), duration);
+
+    var actor = Actor(user);
+    var target = string.IsNullOrWhiteSpace(player.UserId) ? $"ip:{player.IpAddress}" : player.UserId;
+    var issuedAt = DateTimeOffset.UtcNow;
+    var bans = await store.ReadAsync<BanEntry>("bans");
+    bans.Insert(0, new BanEntry(Guid.NewGuid(), target, player.Nickname, reason, actor,
+        issuedAt, issuedAt.AddMinutes(duration), false, id,
+        string.IsNullOrWhiteSpace(player.UserId) ? null : player.UserId,
+        string.IsNullOrWhiteSpace(player.IpAddress) ? null : player.IpAddress));
+    await store.WriteAsync("bans", bans);
+    await playerData.RecordModerationAsync(id, target, player.Nickname, "ban", reason, actor, duration);
+    await audit.AddAsync(actor, "player.ban", target, $"{reason} ({duration} minutes)");
     return Results.Ok(result);
 });
 api.MapPost("/servers/{id:guid}/players/{playerId}/mute", async (Guid id, string playerId, ModerationRequest request, BridgeCommandService commands, BridgeStateService bridge, PlayerDataService playerData, ClaimsPrincipal user, JsonStore store, CancellationToken cancellationToken) =>

@@ -38,7 +38,11 @@ public sealed record PlayerInfo(
 
 public sealed record BanEntry(
     Guid Id, string Target, string DisplayName, string Reason, string IssuedBy,
-    DateTimeOffset IssuedAt, DateTimeOffset? ExpiresAt, bool Revoked);
+    DateTimeOffset IssuedAt, DateTimeOffset? ExpiresAt, bool Revoked,
+    Guid? ServerId = null, string? UserId = null, string? IpAddress = null);
+
+public sealed record BridgeBanCheck(
+    bool Banned, string? Reason = null, DateTimeOffset? ExpiresAt = null);
 
 public sealed record AuditEntry(
     Guid Id, DateTimeOffset At, string Actor, string Action, string Target, string Detail);

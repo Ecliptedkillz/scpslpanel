@@ -10,6 +10,7 @@ internal sealed class BridgeEvents(BridgeClient client) : CustomEventsHandler
     public override void OnPlayerJoined(PlayerJoinedEventArgs ev)
     {
         client.RecordEvent("join", ev.Player);
+        client.CheckPanelBan(ev.Player);
         client.CaptureSnapshot();
     }
 
