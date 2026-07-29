@@ -1,4 +1,5 @@
 using System;
+using System.Collections;
 using System.IO;
 using System.Linq;
 using System.Reflection;
@@ -325,6 +326,17 @@ internal sealed class BridgeClient : IDisposable
             SetGroupMember(group, "HiddenByDefault", assignment.Hidden);
             SetGroupMember(group, "Hidden", assignment.Hidden);
             SetGroupMember(group, "ReservedSlot", assignment.ReservedSlot);
+            SetGroupMember(group, "Name", assignment.GroupName);
+
+            // Register the dynamic role under its panel rank name. Some LabAPI
+            // plugins resolve features (for example animated tags) by looking up
+            // ServerStatic.PermissionsHandler.Groups rather than reading the
+            // currently displayed badge from ServerRoles.
+            var groups = handler.GetType().GetField("Groups", flags)?.GetValue(handler)
+                ?? handler.GetType().GetProperty("Groups", flags)?.GetValue(handler);
+            if (groups is IDictionary groupDictionary)
+                groupDictionary[assignment.GroupName] = group;
+
             var setGroup = roles.GetType().GetMethods(flags).FirstOrDefault(method =>
             {
                 var parameters = method.GetParameters();
