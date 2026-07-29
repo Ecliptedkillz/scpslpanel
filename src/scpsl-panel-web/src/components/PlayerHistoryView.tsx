@@ -9,7 +9,7 @@ export type StoredPlayer = {
   discordDisplayName?: string | null; discordAvatarUrl?: string | null; discordRoles?: string[] | null
   firstConnectedAt: string; lastConnectedAt: string; playtimeSeconds: number; connections: number
   nameHistory: { name: string; firstSeenAt: string; lastSeenAt: string }[]
-  moderationHistory: { id: string; type: string; reason: string; actor: string; at: string; durationMinutes: number | null }[]
+  moderationHistory: { id: string; type: string; reason: string; actor: string; at: string; durationMinutes: number | null; revoked?: boolean }[]
   notes: { id: string; text: string; actor: string; at: string }[]
 }
 

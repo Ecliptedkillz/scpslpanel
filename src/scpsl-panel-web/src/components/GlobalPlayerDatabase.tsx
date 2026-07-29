@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import { AlertTriangle, Ban, Clock3, ExternalLink, FileText, History, IdCard,
-  Link2, Search, Shield, StickyNote, Tags, UserCheck, UserRound, Users, X } from 'lucide-react'
+  Link2, RotateCcw, Search, Shield, StickyNote, Tags, UserCheck, UserRound, Users, X } from 'lucide-react'
 import { api } from '../api'
 import type { StoredPlayer } from './PlayerHistoryView'
 
@@ -98,6 +98,7 @@ function GlobalProfileModal({record,close,onError,onUpdated}:{record:GlobalPlaye
   const [pendingAction,setPendingAction]=useState<string|null>(null)
   const [actionReason,setActionReason]=useState('')
   const [profileTab,setProfileTab]=useState<'info'|'history'|'notes'|'names'|'ids'>('info')
+  const [selectedProfileAction,setSelectedProfileAction]=useState<StoredPlayer['moderationHistory'][number]|null>(null)
   const risk=Math.min(100,player.moderationHistory.reduce((score,item)=>score+(item.type==='ban'?35:item.type==='kick'?20:item.type==='warning'?10:item.type==='watchlist'?25:5),0)+Math.max(0,player.nameHistory.length-2)*3)
   const openAction=(type:string)=>{setPendingAction(type);setActionReason(`${type} added from global profile`)}
   const recordAction=async()=>{
@@ -110,6 +111,13 @@ function GlobalProfileModal({record,close,onError,onUpdated}:{record:GlobalPlaye
   }
   const saveLink=async()=>{
     try{await api(`/servers/${record.serverId}/players/identity-link`,{method:'PUT',body:JSON.stringify({steamId:player.userId.split('@')[0],discordId})});onUpdated({...player,discordId})}catch(error){onError(error instanceof Error?error.message:'Unable to save identity link')}
+  }
+  const revokeBan=async()=>{
+    if(!selectedProfileAction)return
+    try{
+      const updated=await api<StoredPlayer>(`/servers/${record.serverId}/player-history/${player.id}/actions/${selectedProfileAction.id}/revoke`,{method:'POST'})
+      onUpdated(updated);setSelectedProfileAction(null)
+    }catch(error){onError(error instanceof Error?error.message:'Unable to revoke ban')}
   }
   return <div className="modal-backdrop"><article className="modal global-profile-modal">
     <header className="global-profile-hero">
@@ -144,11 +152,12 @@ function GlobalProfileModal({record,close,onError,onUpdated}:{record:GlobalPlaye
     </div>
     <div className="global-profile-columns">
       <section><h3>KNOWN NAMES</h3>{player.nameHistory.slice().reverse().map(name=><div className="history-entry" key={name.name}><strong>{name.name}</strong><small>{new Date(name.lastSeenAt).toLocaleString()}</small></div>)}</section>
-      <section><h3>MODERATION HISTORY</h3>{player.moderationHistory.slice().reverse().map(item=><div className="history-entry" key={item.id}><strong><span className="tag red">{item.type.toUpperCase()}</span> {item.reason}</strong><small>{item.actor} · {new Date(item.at).toLocaleString()}</small></div>)}{!player.moderationHistory.length && <div className="empty-mini">No moderation history.</div>}</section>
+      <section><h3>MODERATION HISTORY</h3>{player.moderationHistory.slice().reverse().map(item=><button className="history-entry history-action-row" key={item.id} onClick={()=>setSelectedProfileAction(item)}><strong><span className={`tag ${item.revoked?'':'red'}`}>{item.type.toUpperCase()}</span> {item.reason}</strong><small>{item.actor} · {new Date(item.at).toLocaleString()} {item.revoked?'· REVOKED':''}</small></button>)}{!player.moderationHistory.length && <div className="empty-mini">No moderation history.</div>}</section>
       <section><h3>STAFF NOTES</h3>{player.notes.slice().reverse().map(note=><div className="history-entry" key={note.id}><strong>{note.text}</strong><small>{note.actor} · {new Date(note.at).toLocaleString()}</small></div>)}{!player.notes.length && <div className="empty-mini">No staff notes.</div>}</section>
     </div>
       </main>
     </div>
     {pendingAction&&<div className="modal-backdrop nested-modal"><form className="modal action-dialog" onSubmit={e=>{e.preventDefault();void recordAction()}}><header><div><span className="eyebrow">PLAYER ACTION</span><h2>{pendingAction.toUpperCase()}</h2><p>Record this action for <strong>{player.currentName}</strong>.</p></div><button type="button" className="icon-button" onClick={()=>setPendingAction(null)}><X/></button></header><label>REASON<textarea autoFocus required value={actionReason} onChange={e=>setActionReason(e.target.value)} /></label><footer><button type="button" onClick={()=>setPendingAction(null)}>CANCEL</button><button className="primary">CONFIRM {pendingAction.toUpperCase()}</button></footer></form></div>}
+    {selectedProfileAction&&<div className="modal-backdrop nested-modal"><article className="modal player-action-detail"><header><div><span className="action-id">[{selectedProfileAction.id.slice(0,8).toUpperCase()}]</span><h2>{selectedProfileAction.type.toUpperCase()} · {player.currentName}</h2></div><button className="icon-button" onClick={()=>setSelectedProfileAction(null)}><X/></button></header><div className="player-action-detail-body"><dl><dt>Date/time</dt><dd>{new Date(selectedProfileAction.at).toLocaleString()}</dd><dt>Administrator</dt><dd>{selectedProfileAction.actor}</dd><dt>Duration</dt><dd>{selectedProfileAction.durationMinutes?`${selectedProfileAction.durationMinutes} minutes`:'Not specified'}</dd><dt>Status</dt><dd>{selectedProfileAction.revoked?'Revoked':'Active'}</dd></dl><h4>Reason</h4><p>{selectedProfileAction.reason}</p></div><footer><button onClick={()=>setSelectedProfileAction(null)}>CLOSE</button>{['ban','oban'].includes(selectedProfileAction.type)&&!selectedProfileAction.revoked&&<button className="danger solid" onClick={()=>void revokeBan()}><RotateCcw/>REVOKE BAN</button>}</footer></article></div>}
   </article></div>
 }

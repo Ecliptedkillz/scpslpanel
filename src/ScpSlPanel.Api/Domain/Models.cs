@@ -92,7 +92,8 @@ public sealed record BridgeHeartbeat(string BridgeVersion, string ApiVersion, st
 public sealed record BridgeStatus(bool Connected, DateTimeOffset? LastSeenAt, string? BridgeVersion, string? ApiVersion, string? RoundState, int MaxPlayers, IReadOnlyList<PlayerInfo> Players);
 public sealed record PlayerNameEntry(string Name, DateTimeOffset FirstSeenAt, DateTimeOffset LastSeenAt);
 public sealed record PlayerModerationEntry(
-    Guid Id, string Type, string Reason, string Actor, DateTimeOffset At, int? DurationMinutes);
+    Guid Id, string Type, string Reason, string Actor, DateTimeOffset At, int? DurationMinutes,
+    bool Revoked = false);
 public sealed record PlayerNote(Guid Id, string Text, string Actor, DateTimeOffset At);
 public sealed record PlayerRecord(
     Guid Id, Guid ServerId, string UserId, string LastIpAddress, string CurrentName,

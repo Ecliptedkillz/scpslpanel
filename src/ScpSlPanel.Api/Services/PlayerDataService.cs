@@ -130,6 +130,25 @@ public sealed class PlayerDataService(JsonStore store)
         finally { _gate.Release(); }
     }
 
+    public async Task<PlayerRecord?> RevokeActionAsync(Guid serverId, Guid playerId, Guid actionId)
+    {
+        await _gate.WaitAsync();
+        try
+        {
+            var records = await store.ReadAsync<PlayerRecord>("players");
+            var index = records.FindIndex(x => x.ServerId == serverId && x.Id == playerId);
+            if (index < 0) return null;
+            var history = records[index].ModerationHistory.ToList();
+            var actionIndex = history.FindIndex(x => x.Id == actionId);
+            if (actionIndex < 0) return null;
+            history[actionIndex] = history[actionIndex] with { Revoked = true };
+            records[index] = records[index] with { ModerationHistory = history };
+            await store.WriteAsync("players", records);
+            return records[index];
+        }
+        finally { _gate.Release(); }
+    }
+
     public async Task<int> CleanupAsync(Guid serverId, int olderThanDays)
     {
         await _gate.WaitAsync();

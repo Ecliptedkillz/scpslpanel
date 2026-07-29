@@ -648,6 +648,47 @@ api.MapPost("/servers/{id:guid}/player-history/{playerId:guid}/actions", async (
     return await players.AddActionAsync(id, playerId, type, request.Reason, Actor(user), request.DurationMinutes) is { } player
         ? Results.Ok(player) : Results.NotFound();
 });
+api.MapPost("/servers/{id:guid}/player-history/{playerId:guid}/actions/{actionId:guid}/revoke", async (
+    Guid id, Guid playerId, Guid actionId, PlayerDataService players, ServerManager servers,
+    ClaimsPrincipal user, JsonStore store, AuditService audit) =>
+{
+    if (!await Can(user, store, id, "players.ban")) return Results.Forbid();
+    var player = await players.FindAsync(id, playerId);
+    var action = player?.ModerationHistory.FirstOrDefault(entry => entry.Id == actionId);
+    if (player is null || action is null) return Results.NotFound();
+    if (action.Type is not ("ban" or "oban"))
+        return Results.BadRequest(new { error = "Only ban actions can be revoked." });
+    if (action.Revoked) return Results.Conflict(new { error = "This ban is already revoked." });
+
+    static string NormalizeTarget(string value) => value.Split('@')[0]
+        .Replace("ip:", "", StringComparison.OrdinalIgnoreCase).Trim();
+    var playerTargets = new[] { player.UserId, player.LastIpAddress }
+        .Where(value => !string.IsNullOrWhiteSpace(value)).Select(NormalizeTarget).ToHashSet(
+            StringComparer.OrdinalIgnoreCase);
+    var bans = await store.ReadAsync<BanEntry>("bans");
+    var matchIndex = bans.Select((ban, index) => new { ban, index })
+        .Where(item => !item.ban.Revoked && (item.ban.ServerId is null || item.ban.ServerId == id)
+            && item.ban.Reason.Equals(action.Reason, StringComparison.Ordinal)
+            && playerTargets.Contains(NormalizeTarget(item.ban.UserId ?? item.ban.Target)))
+        .OrderBy(item => Math.Abs((item.ban.IssuedAt - action.At).TotalSeconds))
+        .Select(item => item.index).FirstOrDefault(-1);
+
+    var removedLegacyEntries = 0;
+    if (matchIndex >= 0)
+    {
+        var ban = bans[matchIndex];
+        var server = await servers.FindAsync(id);
+        if (server is not null)
+            removedLegacyEntries = await RemoveLegacyGameBanAsync(server, ban, [player]);
+        bans[matchIndex] = ban with { Revoked = true };
+        await store.WriteAsync("bans", bans);
+    }
+    var updated = await players.RevokeActionAsync(id, playerId, actionId);
+    if (updated is null) return Results.NotFound();
+    await audit.AddAsync(Actor(user), "player.unban", player.UserId,
+        $"{action.Reason}; removed {removedLegacyEntries} legacy game-ban entries");
+    return Results.Ok(updated);
+});
 api.MapDelete("/servers/{id:guid}/player-history", async (
     Guid id, int? olderThanDays, PlayerDataService players, ClaimsPrincipal user, JsonStore store) =>
 {
