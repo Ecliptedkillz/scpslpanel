@@ -269,6 +269,7 @@ internal sealed class BridgeClient : IDisposable
                     Logger.Warn($"SCP Control could not assign RA group '{assignment.GroupName}': {error}");
                     return;
                 }
+                PanelRainbowTag.Attach(current);
                 Logger.Info($"SCP Control assigned RA group '{assignment.GroupName}' to {current.UserId} from Discord role {assignment.DiscordRoleId}.");
                 RecordModerationEvent("role-sync", current, current.UserId, current.DisplayName,
                     $"Assigned in-game group {assignment.GroupName}", null, "Discord role sync");
