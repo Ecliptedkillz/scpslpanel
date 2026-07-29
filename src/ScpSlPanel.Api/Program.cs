@@ -679,7 +679,8 @@ static string ScpConfigRoot(ServerDefinition server) => Path.Combine(
     Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
     "SCP Secret Laboratory", "config", server.QueryPort.ToString());
 
-static async Task<int> RemoveLegacyGameBanAsync(ServerDefinition server, BanEntry ban)
+static async Task<int> RemoveLegacyGameBanAsync(
+    ServerDefinition server, BanEntry ban, IReadOnlyList<PlayerRecord>? playerRecords = null)
 {
     static string Normalize(string value) =>
         value.Trim().StartsWith("ip:", StringComparison.OrdinalIgnoreCase)
@@ -693,6 +694,16 @@ static async Task<int> RemoveLegacyGameBanAsync(ServerDefinition server, BanEntr
             identifiers.Add(value.Trim());
             identifiers.Add(Normalize(value));
         }
+    var banUserId = Normalize(ban.UserId ?? ban.Target);
+    if (!string.IsNullOrWhiteSpace(banUserId) && playerRecords is not null)
+        foreach (var player in playerRecords.Where(player =>
+            player.ServerId == server.Id
+            && Normalize(player.UserId).Equals(banUserId, StringComparison.OrdinalIgnoreCase)))
+            if (!string.IsNullOrWhiteSpace(player.LastIpAddress))
+            {
+                identifiers.Add(player.LastIpAddress.Trim());
+                identifiers.Add(Normalize(player.LastIpAddress));
+            }
 
     var removed = 0;
     foreach (var fileName in new[] { "UserIdBans.txt", "IpBans.txt" })
@@ -707,6 +718,14 @@ static async Task<int> RemoveLegacyGameBanAsync(ServerDefinition server, BanEntr
             if (fields.Length < 2) return true;
             var storedTarget = fields[1].Trim();
             var matches = identifiers.Contains(storedTarget) || identifiers.Contains(Normalize(storedTarget));
+            // Older panel records may not contain the IP. Native SCP:SL writes matching
+            // UserId/IP rows with the same name, reason and issuer, so use that metadata
+            // to remove the paired IP row without affecting unrelated bans.
+            if (!matches && fileName.Equals("IpBans.txt", StringComparison.OrdinalIgnoreCase)
+                && fields.Length >= 5)
+                matches = fields[0].Trim().Equals(ban.DisplayName, StringComparison.OrdinalIgnoreCase)
+                    && fields[3].Trim().Equals(ban.Reason, StringComparison.Ordinal)
+                    && fields[4].Trim().Equals(ban.IssuedBy, StringComparison.OrdinalIgnoreCase);
             if (matches) removed++;
             return !matches;
         }).ToArray();
@@ -776,9 +795,10 @@ api.MapDelete("/bans/{id:guid}", async (
     var affectedServers = ban.ServerId is null
         ? definitions
         : definitions.Where(server => server.Id == ban.ServerId).ToList();
+    var playerRecords = await store.ReadAsync<PlayerRecord>("players");
     var removedLegacyEntries = 0;
     foreach (var server in affectedServers)
-        removedLegacyEntries += await RemoveLegacyGameBanAsync(server, ban);
+        removedLegacyEntries += await RemoveLegacyGameBanAsync(server, ban, playerRecords);
     bans[index] = bans[index] with { Revoked = true };
     await store.WriteAsync("bans", bans);
     await audit.AddAsync(Actor(user), "player.unban", bans[index].Target,
@@ -1058,13 +1078,14 @@ await using (var reconciliationScope = app.Services.CreateAsyncScope())
     {
         var revokedBans = (await reconciliationStore.ReadAsync<BanEntry>("bans"))
             .Where(ban => ban.Revoked).ToList();
+        var playerRecords = await reconciliationStore.ReadAsync<PlayerRecord>("players");
         var definitions = await reconciliationServers.DefinitionsAsync();
         var removed = 0;
         foreach (var ban in revokedBans)
             foreach (var server in ban.ServerId is null
                 ? definitions
                 : definitions.Where(server => server.Id == ban.ServerId))
-                removed += await RemoveLegacyGameBanAsync(server, ban);
+                removed += await RemoveLegacyGameBanAsync(server, ban, playerRecords);
         if (removed > 0)
             reconciliationLogger.LogInformation(
                 "Removed {Count} legacy SCP:SL ban entries for previously revoked panel bans", removed);

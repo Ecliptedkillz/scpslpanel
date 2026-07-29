@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
-import { ExternalLink, Search, UserRound, X } from 'lucide-react'
+import { AlertTriangle, Ban, Clock3, ExternalLink, FileText, History, IdCard,
+  Search, Shield, StickyNote, Tags, UserRound, Users, X } from 'lucide-react'
 import { api } from '../api'
 import type { StoredPlayer } from './PlayerHistoryView'
 
@@ -8,6 +9,7 @@ type LinkHealth = {
   serverId: string; serverName: string; line: number; steamId: string; discordId: string
   valid: boolean; issue?: string
 }
+type ModerationRow = { record: GlobalPlayer; item: StoredPlayer['moderationHistory'][number] }
 const playtime = (seconds: number) => seconds >= 3600
   ? `${Math.floor(seconds / 3600)}h ${Math.floor(seconds % 3600 / 60)}m`
   : `${Math.floor(seconds / 60)}m`
@@ -18,6 +20,10 @@ export function GlobalPlayerDatabase({ onError }: { onError: (message: string) =
   const [selected,setSelected] = useState<GlobalPlayer | null>(null)
   const [health,setHealth] = useState<LinkHealth[]>([])
   const [tab,setTab] = useState<'players'|'watchlist'|'moderation'|'links'>('players')
+  const [moderationSearch,setModerationSearch] = useState('')
+  const [moderationType,setModerationType] = useState('all')
+  const [moderationActor,setModerationActor] = useState('all')
+  const [selectedModeration,setSelectedModeration] = useState<ModerationRow|null>(null)
   useEffect(() => {
     Promise.all([
       api<GlobalPlayer[]>('/players/global').then(setRecords),
@@ -36,6 +42,24 @@ export function GlobalPlayerDatabase({ onError }: { onError: (message: string) =
       player.discordDisplayName,...(player.discordRoles ?? []),...player.nameHistory.map(x=>x.name),
     ].some(value=>value?.toLowerCase().includes(query)))
   },[displayedRecords,search])
+  const moderationRows=useMemo(()=>records.flatMap(record=>record.player.moderationHistory
+    .map(item=>({record,item}))).sort((a,b)=>b.item.at.localeCompare(a.item.at)),[records])
+  const moderationActors=[...new Set(moderationRows.map(row=>row.item.actor))].sort()
+  const visibleModeration=moderationRows.filter(({record,item})=>{
+    const query=moderationSearch.trim().toLowerCase()
+    return (moderationType==='all'||item.type===moderationType)
+      &&(moderationActor==='all'||item.actor===moderationActor)
+      &&(!query||[record.player.currentName,record.player.userId,item.reason,item.actor,item.id]
+        .some(value=>value.toLowerCase().includes(query)))
+  })
+  const sevenDaysAgo=Date.now()-7*86400000
+  const warnings=moderationRows.filter(row=>row.item.type==='warning')
+  const bans=moderationRows.filter(row=>row.item.type==='ban')
+  const staffActivity=moderationActors.map(actor=>{
+    const actions=moderationRows.filter(row=>row.item.actor===actor)
+    return {actor,total:actions.length,recent:actions.filter(row=>new Date(row.item.at).getTime()>=sevenDaysAgo).length,
+      warnings:actions.filter(row=>row.item.type==='warning').length,bans:actions.filter(row=>row.item.type==='ban').length}
+  }).sort((a,b)=>b.total-a.total).slice(0,4)
   return <>
     <div className="global-player-toolbar"><div><span className="eyebrow">IDENTITY INTELLIGENCE</span><h1>Player Database</h1><p>Search linked player identities across every server you can access.</p></div><label><Search size={18}/><input value={search} onChange={e=>setSearch(e.target.value)} placeholder="Search name, Steam, Discord, role…"/></label></div>
     <nav className="page-tabs database-tabs"><button className={tab==='players'?'active':''} onClick={()=>setTab('players')}>All players <span>{records.length}</span></button><button className={tab==='watchlist'?'active':''} onClick={()=>setTab('watchlist')}>Watchlist <span>{records.filter(x=>x.player.moderationHistory.some(item=>item.type==='watchlist')).length}</span></button><button className={tab==='moderation'?'active':''} onClick={()=>setTab('moderation')}>Moderation center <span>{records.reduce((n,x)=>n+x.player.moderationHistory.length,0)}</span></button><button className={tab==='links'?'active':''} onClick={()=>setTab('links')}>Identity links <span className={issues.length?'bad-count':''}>{issues.length||'OK'}</span></button></nav>
@@ -47,7 +71,12 @@ export function GlobalPlayerDatabase({ onError }: { onError: (message: string) =
         <span>{item.serverName}</span><code>LINE {item.line}</code><code>{item.steamId || 'missing Steam ID'}</code><code>{item.discordId || 'missing Discord ID'}</code><strong>{item.issue}</strong>
       </div>)}
     </section>}
-    {tab==='moderation'&&<section className="panel moderation-center">{records.flatMap(record=>record.player.moderationHistory.map(item=>({record,item}))).sort((a,b)=>b.item.at.localeCompare(a.item.at)).map(({record,item})=><button className="moderation-feed-row" key={item.id} onClick={()=>setSelected(record)}><span className="tag red">{item.type}</span><strong>{record.player.currentName}</strong><span>{record.serverName}</span><p>{item.reason}</p><small>{item.actor} · {new Date(item.at).toLocaleString()}</small></button>)}</section>}
+    {tab==='moderation'&&<section className="moderation-dashboard">
+      <div className="moderation-kpis"><div><span>Total warnings</span><AlertTriangle/><strong>{warnings.length}</strong></div><div><span>New warnings last 7d</span><Clock3/><strong>+{warnings.filter(row=>new Date(row.item.at).getTime()>=sevenDaysAgo).length}</strong></div><div><span>Total bans</span><Ban/><strong>{bans.length}</strong></div><div><span>New bans last 7d</span><Clock3/><strong>+{bans.filter(row=>new Date(row.item.at).getTime()>=sevenDaysAgo).length}</strong></div></div>
+      <section className="staff-activity-panel"><header><div><Shield size={16}/><strong>Staff activity</strong></div><span>{moderationActors.length} moderators</span></header><div className="staff-activity-grid">{staffActivity.map(staff=><article key={staff.actor}><div><strong>{staff.actor}</strong><b>{staff.total}</b></div><small>{staff.recent} in last 7d</small><i><span style={{width:`${Math.min(100,staff.total/Math.max(1,staffActivity[0]?.total)*100)}%`}}/></i><footer><span>{staff.warnings} warns</span><span>{staff.bans} bans</span></footer></article>)}</div></section>
+      <div className="moderation-filters"><label><Search size={17}/><input value={moderationSearch} onChange={e=>setModerationSearch(e.target.value)} placeholder="Search player, reason, action ID…"/></label><select value={moderationType} onChange={e=>setModerationType(e.target.value)}><option value="all">Any action</option>{[...new Set(moderationRows.map(row=>row.item.type))].map(type=><option key={type}>{type}</option>)}</select><select value={moderationActor} onChange={e=>setModerationActor(e.target.value)}><option value="all">Any administrator</option>{moderationActors.map(actor=><option key={actor}>{actor}</option>)}</select></div>
+      <div className="moderation-table-wrap"><table><thead><tr><th>ACTION</th><th>PLAYER</th><th>REASON</th><th>SERVER</th><th>AUTHOR</th><th>DATE / TIME</th></tr></thead><tbody>{visibleModeration.map(row=><tr key={row.item.id} onClick={()=>setSelectedModeration(row)}><td><span className={`action-kind ${row.item.type}`}>{row.item.type==='ban'?<Ban size={14}/>:<AlertTriangle size={14}/>}<b>{row.item.type.toUpperCase()}</b></span><small>{row.item.id.slice(0,8).toUpperCase()}</small></td><td><strong>{row.record.player.currentName}</strong><small>{row.record.player.userId}</small></td><td className="moderation-reason">{row.item.reason}</td><td>{row.record.serverName}</td><td>{row.item.actor}</td><td>{new Date(row.item.at).toLocaleString()}</td></tr>)}</tbody></table>{!visibleModeration.length&&<div className="empty-mini">No moderation actions match these filters.</div>}</div>
+    </section>}
     {tab!=='links'&&tab!=='moderation'&&<div className="global-player-grid">{filtered.map(record => {
       const player=record.player
       return <button className="global-player-card" key={`${record.serverId}:${player.id}`} onClick={()=>setSelected(record)}>
@@ -58,6 +87,7 @@ export function GlobalPlayerDatabase({ onError }: { onError: (message: string) =
     })}</div>}
     {tab!=='links'&&tab!=='moderation'&&!filtered.length && <div className="empty-mini">No matching players found.</div>}
     {selected && <GlobalProfileModal record={selected} close={()=>setSelected(null)} onError={onError} onUpdated={updated=>{const player={...selected.player,...updated};setSelected({...selected,player});setRecords(records.map(x=>x.serverId===selected.serverId&&x.player.id===player.id?{...x,player}:x))}}/>}
+    {selectedModeration&&<div className="modal-backdrop"><article className="modal moderation-detail-modal"><header><div><span className="action-id">[{selectedModeration.item.id.slice(0,8).toUpperCase()}]</span><h2>{selectedModeration.item.type.toUpperCase()} · {selectedModeration.record.player.currentName}</h2></div><button className="icon-button" onClick={()=>setSelectedModeration(null)}><X/></button></header><div className="moderation-detail-layout"><nav><button className="active"><FileText/>Info</button><button onClick={()=>{setSelected(selectedModeration.record);setSelectedModeration(null)}}><UserRound/>Player</button></nav><section><dl><dt>Date/time</dt><dd>{new Date(selectedModeration.item.at).toLocaleString()}</dd><dt>Administrator</dt><dd>{selectedModeration.item.actor}</dd><dt>Player</dt><dd>{selectedModeration.record.player.currentName}</dd><dt>Server</dt><dd>{selectedModeration.record.serverName}</dd></dl><h4>Reason</h4><p>{selectedModeration.item.reason}</p></section></div></article></div>}
   </>
 }
 
@@ -67,6 +97,7 @@ function GlobalProfileModal({record,close,onError,onUpdated}:{record:GlobalPlaye
   const [discordId,setDiscordId]=useState(player.discordId ?? '')
   const [pendingAction,setPendingAction]=useState<string|null>(null)
   const [actionReason,setActionReason]=useState('')
+  const [profileTab,setProfileTab]=useState<'info'|'history'|'notes'|'names'|'ids'>('info')
   const risk=Math.min(100,player.moderationHistory.reduce((score,item)=>score+(item.type==='ban'?35:item.type==='kick'?20:item.type==='warning'?10:item.type==='watchlist'?25:5),0)+Math.max(0,player.nameHistory.length-2)*3)
   const openAction=(type:string)=>{setPendingAction(type);setActionReason(`${type} added from global profile`)}
   const recordAction=async()=>{
@@ -86,6 +117,15 @@ function GlobalProfileModal({record,close,onError,onUpdated}:{record:GlobalPlaye
       <div><span className="eyebrow">{record.serverName} · PLAYER PROFILE</span><h2>{player.currentName}</h2><p>{player.steamDisplayName ?? player.userId} {player.discordDisplayName ? `· ${player.discordDisplayName}` : ''}</p></div>
       <button className="icon-button" onClick={close}><X/></button>
     </header>
+    <div className="global-profile-shell">
+      <nav className="global-profile-nav">
+        <button className={profileTab==='info'?'active':''} onClick={()=>setProfileTab('info')}><IdCard/>Info</button>
+        <button className={profileTab==='history'?'active':''} onClick={()=>setProfileTab('history')}><History/>History <span>{player.moderationHistory.length}</span></button>
+        <button className={profileTab==='notes'?'active':''} onClick={()=>setProfileTab('notes')}><StickyNote/>Notes <span>{player.notes.length}</span></button>
+        <button className={profileTab==='names'?'active':''} onClick={()=>setProfileTab('names')}><Users/>Names <span>{player.nameHistory.length}</span></button>
+        <button className={profileTab==='ids'?'active':''} onClick={()=>setProfileTab('ids')}><Tags/>IDs</button>
+      </nav>
+      <main className={`global-profile-content profile-tab-${profileTab}`}>
     <div className="identity-profile-grid">
       <section><span className="eyebrow">STEAM IDENTITY</span><strong>{player.steamDisplayName ?? player.currentName}</strong><code>{player.userId}</code>{player.steamProfileUrl && <a href={player.steamProfileUrl} target="_blank" rel="noreferrer">OPEN STEAM PROFILE <ExternalLink size={13}/></a>}</section>
       <section><span className="eyebrow">DISCORD IDENTITY</span><strong>{player.discordDisplayName ?? (player.discordId ? 'Linked · profile unavailable' : 'Not linked')}</strong><code>{player.discordId ?? 'No Discord ID'}</code><div>{player.discordRoles?.map(role=><span className="tag" key={role}>{role}</span>)}</div>{player.discordId && !player.discordRoles?.length && <small className="identity-hint">Enable Guild Members intent to load server nickname and roles.</small>}</section>
@@ -96,6 +136,8 @@ function GlobalProfileModal({record,close,onError,onUpdated}:{record:GlobalPlaye
       <section><h3>KNOWN NAMES</h3>{player.nameHistory.slice().reverse().map(name=><div className="history-entry" key={name.name}><strong>{name.name}</strong><small>{new Date(name.lastSeenAt).toLocaleString()}</small></div>)}</section>
       <section><h3>MODERATION HISTORY</h3>{player.moderationHistory.slice().reverse().map(item=><div className="history-entry" key={item.id}><strong><span className="tag red">{item.type.toUpperCase()}</span> {item.reason}</strong><small>{item.actor} · {new Date(item.at).toLocaleString()}</small></div>)}{!player.moderationHistory.length && <div className="empty-mini">No moderation history.</div>}</section>
       <section><h3>STAFF NOTES</h3>{player.notes.slice().reverse().map(note=><div className="history-entry" key={note.id}><strong>{note.text}</strong><small>{note.actor} · {new Date(note.at).toLocaleString()}</small></div>)}{!player.notes.length && <div className="empty-mini">No staff notes.</div>}</section>
+    </div>
+      </main>
     </div>
     {pendingAction&&<div className="modal-backdrop nested-modal"><form className="modal action-dialog" onSubmit={e=>{e.preventDefault();void recordAction()}}><header><div><span className="eyebrow">PLAYER ACTION</span><h2>{pendingAction.toUpperCase()}</h2><p>Record this action for <strong>{player.currentName}</strong>.</p></div><button type="button" className="icon-button" onClick={()=>setPendingAction(null)}><X/></button></header><label>REASON<textarea autoFocus required value={actionReason} onChange={e=>setActionReason(e.target.value)} /></label><footer><button type="button" onClick={()=>setPendingAction(null)}>CANCEL</button><button className="primary">CONFIRM {pendingAction.toUpperCase()}</button></footer></form></div>}
   </article></div>
