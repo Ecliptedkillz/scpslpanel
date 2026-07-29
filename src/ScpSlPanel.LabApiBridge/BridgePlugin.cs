@@ -13,13 +13,14 @@ namespace ScpSlPanel.LabApiBridge;
 
 public sealed class BridgePlugin : Plugin<BridgeConfig>
 {
+    internal static BridgeClient? ActiveClient { get; private set; }
     private BridgeClient? _client;
     private BridgeEvents? _events;
 
     public override string Name => "SCP Control Bridge";
     public override string Description => "Secure live player telemetry bridge for the SCP Control panel.";
     public override string Author => "Ecliptedkillz";
-    public override Version Version => new(0, 7, 0);
+    public override Version Version => new(0, 8, 0);
     public override Version RequiredApiVersion { get; } = new(LabApiProperties.CompiledVersion);
     public override bool IsTransparent => true;
     public override string ConfigFileName { get; set; } = "scp-control-bridge.yml";
@@ -29,6 +30,7 @@ public sealed class BridgePlugin : Plugin<BridgeConfig>
         if (!Guid.TryParse(Config.ServerId, out _) || string.IsNullOrWhiteSpace(Config.Token))
             Logger.Warn("SCP Control Bridge needs ServerId and Token in scp-control-bridge.yml.");
         _client = new BridgeClient(Config);
+        ActiveClient = _client;
         PermissionsManager.RegisterProvider<PanelPermissionProvider>();
         _events = new BridgeEvents(_client);
         CustomHandlersManager.RegisterEventsHandler(_events);
@@ -41,6 +43,7 @@ public sealed class BridgePlugin : Plugin<BridgeConfig>
         ServerEvents.CommandExecuted -= OnCommandExecuted;
         if (_events is not null) CustomHandlersManager.UnregisterEventsHandler(_events);
         _client?.Dispose();
+        ActiveClient = null;
         _events = null;
         _client = null;
     }

@@ -154,6 +154,23 @@ public sealed record BridgeGameRoleAssignment(
     string BadgeText = "", string BadgeColor = "silver", bool Hidden = false,
     bool Cover = true, bool ReservedSlot = false, byte KickPower = 0,
     byte RequiredKickPower = 0, IReadOnlyList<string>? PluginPermissions = null);
+public sealed record PermissionIssue(
+    string Severity, string Code, string Message, Guid? ServerId = null, string? GroupName = null);
+public sealed record PermissionRoleRuntime(
+    Guid ServerId, string ServerName, string GroupName, string DiscordRoleId, int Priority,
+    bool Enabled, int NativePermissionCount, int PluginPermissionCount, int OnlinePlayers,
+    bool BridgeConnected, DateTimeOffset? BridgeLastSeenAt);
+public sealed record PlayerPermissionDiagnostic(
+    Guid ServerId, string ServerName, string UserId, string? DisplayName, bool Online,
+    string? CurrentGameRole, BridgeGameRoleAssignment Assignment,
+    IReadOnlyList<string> InheritedGroups, IReadOnlyList<PermissionIssue> Issues);
+public sealed record PermissionHealth(
+    IReadOnlyList<PermissionIssue> Issues, IReadOnlyList<PermissionRoleRuntime> Roles,
+    IReadOnlyList<string> NativePermissionCatalog, IReadOnlyList<string> PluginPermissionCatalog);
+public sealed record NativeRaComparison(
+    Guid ServerId, string ServerName, bool Found, string? Path,
+    IReadOnlyList<string> NativeGroups, IReadOnlyList<string> PanelGroups,
+    IReadOnlyList<string> NativeMembers, IReadOnlyList<PermissionIssue> Issues);
 public sealed record IdentityLinkHealth(
     Guid ServerId, string ServerName, int Line, string SteamId, string DiscordId,
     bool Valid, string? Issue);

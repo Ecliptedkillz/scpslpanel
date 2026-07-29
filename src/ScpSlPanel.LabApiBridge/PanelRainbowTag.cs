@@ -14,6 +14,13 @@ internal static class PanelRainbowTag
             ?? player.GameObject.AddComponent<PanelRainbowTagBehaviour>();
         behaviour.Initialize();
     }
+
+    public static void Detach(Player player)
+    {
+        if (player?.GameObject == null) return;
+        var behaviour = player.GameObject.GetComponent<PanelRainbowTagBehaviour>();
+        if (behaviour != null) UnityEngine.Object.Destroy(behaviour);
+    }
 }
 
 internal sealed class PanelRainbowTagBehaviour : MonoBehaviour

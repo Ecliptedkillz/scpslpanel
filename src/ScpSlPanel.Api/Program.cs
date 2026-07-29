@@ -30,6 +30,7 @@ builder.Services.AddSingleton<OperationTracker>();
 builder.Services.AddSingleton<BridgeCommandService>();
 builder.Services.AddSingleton<PlayerDataService>();
 builder.Services.AddSingleton<DiscordLinkService>();
+builder.Services.AddSingleton<PermissionManagementService>();
 builder.Services.AddSingleton<OperationsDataService>();
 builder.Services.AddSingleton<NotificationService>();
 builder.Services.AddSingleton<DiscordBotService>();
@@ -403,6 +404,13 @@ app.MapPost("/api/bridge/{serverId:guid}/events", async (
             : value.DisplayName ?? value.PlayerId ?? "unknown";
         await audit.AddAsync("Discord role sync", "player.role-sync", target,
             value.Detail ?? "Assigned an in-game Remote Admin group");
+    }
+    else if (value.Type == "permission-denied")
+    {
+        var target = !string.IsNullOrWhiteSpace(value.UserId) ? value.UserId
+            : value.DisplayName ?? value.PlayerId ?? "unknown";
+        await audit.AddAsync("Runtime permission provider", "player.permission-denied", target,
+            $"Denied custom permission '{value.Detail ?? "unknown"}'.");
     }
     await hub.Clients.All.SendAsync("BridgeActivity", serverId);
     return Results.NoContent();
@@ -1090,11 +1098,38 @@ api.MapPost("/servers/{id:guid}/update", async (Guid id, MaintenanceService main
     return Results.Ok(new { output = await maintenance.UpdateAsync(id, Actor(user)) });
 });
 api.MapGet("/integrations", (NotificationService notifications) => notifications.ForClientAsync()).RequireAuthorization("Owner");
-api.MapPut("/integrations", async (PanelIntegrationSettings request, NotificationService notifications, AuditService audit, ClaimsPrincipal user) =>
+api.MapPut("/integrations", async (PanelIntegrationSettings request, NotificationService notifications,
+    PermissionManagementService permissionManagement, BridgeStateService bridge,
+    BridgeCommandService commands, AuditService audit, ClaimsPrincipal user) =>
 {
+    var before = await notifications.GetAsync();
+    var definitions = await app.Services.GetRequiredService<ServerManager>().DefinitionsAsync();
+    var issues = permissionManagement.Validate(request.DiscordGameRoleGrants?.ToArray() ?? [], definitions);
+    if (issues.Any(issue => issue.Severity == "error"))
+        return Results.BadRequest(new { error = "Permission configuration contains validation errors.", issues });
     await notifications.SaveFromClientAsync(request);
-    await audit.AddAsync(Actor(user), "integrations.update", "Discord", "Notification settings changed");
-    return Results.NoContent();
+    var oldRoles = before.DiscordGameRoleGrants?.Count ?? 0;
+    var newRoles = request.DiscordGameRoleGrants?.Count ?? 0;
+    var beforeNames = (before.DiscordGameRoleGrants ?? []).Select(role =>
+        $"{role.ServerId}:{role.GroupName}").ToHashSet(StringComparer.OrdinalIgnoreCase);
+    var afterNames = (request.DiscordGameRoleGrants ?? []).Select(role =>
+        $"{role.ServerId}:{role.GroupName}").ToHashSet(StringComparer.OrdinalIgnoreCase);
+    var added = afterNames.Except(beforeNames, StringComparer.OrdinalIgnoreCase).Select(value => value.Split(':', 2)[1]);
+    var removed = beforeNames.Except(afterNames, StringComparer.OrdinalIgnoreCase).Select(value => value.Split(':', 2)[1]);
+    var addedValues = added.ToArray();
+    var removedValues = removed.ToArray();
+    var auditAction = removedValues.Length > 0 && addedValues.Length == 0 ? "permissions.role-delete"
+        : addedValues.Length > 0 && removedValues.Length == 0 ? "permissions.role-create"
+        : "permissions.role-update";
+    await audit.AddAsync(Actor(user), auditAction, "In-game roles",
+        $"Runtime roles changed: {oldRoles} → {newRoles}. Added: {string.Join(", ", addedValues.DefaultIfEmpty("none"))}. "
+        + $"Removed: {string.Join(", ", removedValues.DefaultIfEmpty("none"))}. "
+        + $"Validation warnings: {issues.Count(issue => issue.Severity != "error")}.");
+    foreach (var serverId in (request.DiscordGameRoleGrants ?? []).Select(role => role.ServerId).Distinct())
+        if (bridge.Get(serverId).Connected)
+            foreach (var player in bridge.Get(serverId).Players)
+                _ = Task.Run(() => commands.ExecuteAsync(serverId, "role-sync", player.Id));
+    return Results.Ok(new { issues });
 }).RequireAuthorization("Owner");
 api.MapPost("/integrations/discord/test", async (NotificationService notifications) =>
 {
@@ -1105,6 +1140,35 @@ api.MapGet("/integrations/discord/diagnostics", (DiscordBotService bot) => bot.D
     .RequireAuthorization("Owner");
 api.MapGet("/integrations/discord/roles", (DiscordLinkService discordLinks) =>
     discordLinks.ListGuildRolesAsync()).RequireAuthorization("Owner");
+api.MapGet("/permissions/health", (PermissionManagementService permissions) =>
+    permissions.HealthAsync()).RequireAuthorization("Owner");
+api.MapGet("/permissions/diagnose/{serverId:guid}", async (
+    Guid serverId, string userId, PermissionManagementService permissions) =>
+    await permissions.DiagnoseAsync(serverId, userId) is { } result
+        ? Results.Ok(result) : Results.NotFound()).RequireAuthorization("Owner");
+api.MapGet("/permissions/native/{serverId:guid}", async (
+    Guid serverId, PermissionManagementService permissions) =>
+    await permissions.CompareNativeAsync(serverId) is { } result
+        ? Results.Ok(result) : Results.NotFound()).RequireAuthorization("Owner");
+api.MapPost("/permissions/sync/{serverId:guid}", async (
+    Guid serverId, string? playerId, BridgeStateService bridge, BridgeCommandService commands,
+    AuditService audit, ClaimsPrincipal user) =>
+{
+    var status = bridge.Get(serverId);
+    if (!status.Connected) return Results.Conflict(new { error = "The bridge is offline." });
+    var targets = string.IsNullOrWhiteSpace(playerId) ? status.Players
+        : status.Players.Where(player => player.Id == playerId || player.UserId == playerId).ToArray();
+    if (targets.Count == 0) return Results.NotFound(new { error = "No matching online player." });
+    var results = new List<object>();
+    foreach (var player in targets)
+    {
+        var result = await commands.ExecuteAsync(serverId, "role-sync", player.Id);
+        results.Add(new { player.Id, player.Nickname, result.Success, result.Message });
+    }
+    await audit.AddAsync(Actor(user), "permissions.sync", serverId.ToString(),
+        $"Requested live role synchronization for {targets.Count} player(s).");
+    return Results.Ok(results);
+}).RequireAuthorization("Owner");
 api.MapGet("/system/versions", (BridgeStateService bridge) => Results.Ok(new
 {
     panel = typeof(Program).Assembly.GetName().Version?.ToString() ?? "development",

@@ -21,12 +21,15 @@ internal sealed class BridgeClient : IDisposable
     private readonly HttpClient _http = new();
     private readonly Timer _timer;
     private readonly Timer _commandTimer;
+    private readonly Timer _roleSyncTimer;
     private readonly SemaphoreSlim _sendGate = new(1, 1);
     private readonly SemaphoreSlim _pollGate = new(1, 1);
     private readonly object _snapshotGate = new();
     private readonly SynchronizationContext? _mainThread = SynchronizationContext.Current;
     private readonly Dictionary<int, DateTimeOffset> _sessions = new();
     private readonly HashSet<Guid> _receivedCommands = new();
+    private readonly HashSet<string> _assignedGameRoleUsers =
+        new(StringComparer.OrdinalIgnoreCase);
     private string _roundState = "waiting";
     private HeartbeatPayload _snapshot = new();
     private bool _disposed;
@@ -41,6 +44,8 @@ internal sealed class BridgeClient : IDisposable
         _timer = new Timer(_ => Dispatch(CaptureSnapshotSafely), null, TimeSpan.FromSeconds(2), interval);
         _commandTimer = new Timer(_ => _ = PollCommandsAsync(), null,
             TimeSpan.FromSeconds(3), TimeSpan.FromSeconds(1));
+        _roleSyncTimer = new Timer(_ => Dispatch(SynchronizeReadyPlayers), null,
+            TimeSpan.FromSeconds(20), TimeSpan.FromSeconds(60));
     }
 
     private void CaptureSnapshotSafely()
@@ -52,6 +57,20 @@ internal sealed class BridgeClient : IDisposable
         catch (Exception exception)
         {
             Logger.Warn($"SCP Control snapshot failed unexpectedly: {exception}");
+        }
+    }
+
+    private void SynchronizeReadyPlayers()
+    {
+        if (_disposed) return;
+        try
+        {
+            foreach (var player in Player.ReadyList.Where(player => player != null && !player.IsHost))
+                CheckDiscordGameRole(player);
+        }
+        catch (Exception exception)
+        {
+            Logger.Warn($"SCP Control periodic role synchronization failed: {exception.Message}");
         }
     }
 
@@ -256,7 +275,18 @@ internal sealed class BridgeClient : IDisposable
             var assignment = serializer.ReadObject(stream) as GameRolePayload;
             if (assignment?.Assigned != true || string.IsNullOrWhiteSpace(assignment.GroupName))
             {
-                PanelPermissionProvider.Clear(userId);
+                Dispatch(() =>
+                {
+                    var current = Player.ReadyList?.FirstOrDefault(candidate =>
+                        candidate.PlayerId == playerId);
+                    if (current == null) return;
+                    if (!_assignedGameRoleUsers.Remove(current.UserId)) return;
+                    PanelPermissionProvider.Clear(current.UserId);
+                    PanelRainbowTag.Detach(current);
+                    current.UserGroup = ServerStatic.PermissionsHandler.GetUserGroup(current.UserId);
+                    Logger.Info($"SCP Control removed its runtime role from {current.UserId}; native permissions were restored.");
+                    RecordEvent("role-sync", current, "Removed panel role; restored native permissions");
+                });
                 return;
             }
             Dispatch(() =>
@@ -270,6 +300,7 @@ internal sealed class BridgeClient : IDisposable
                     return;
                 }
                 PanelRainbowTag.Attach(current);
+                _assignedGameRoleUsers.Add(current.UserId);
                 Logger.Info($"SCP Control assigned RA group '{assignment.GroupName}' to {current.UserId} from Discord role {assignment.DiscordRoleId}.");
                 RecordModerationEvent("role-sync", current, current.UserId, current.DisplayName,
                     $"Assigned in-game group {assignment.GroupName}", null, "Discord role sync");
@@ -445,6 +476,12 @@ internal sealed class BridgeClient : IDisposable
                     result.Success = true;
                     result.Message = "Announcement sent.";
                     break;
+                case "role-sync":
+                    if (player == null) { result.Message = "Player is no longer connected."; break; }
+                    CheckDiscordGameRole(player);
+                    result.Success = true;
+                    result.Message = "Permission synchronization queued.";
+                    break;
                 default:
                     result.Message = $"Unsupported command: {command.Type}";
                     break;
@@ -557,6 +594,7 @@ internal sealed class BridgeClient : IDisposable
         _disposed = true;
         _timer.Dispose();
         _commandTimer.Dispose();
+        _roleSyncTimer.Dispose();
         _http.Dispose();
         _sendGate.Dispose();
         _pollGate.Dispose();

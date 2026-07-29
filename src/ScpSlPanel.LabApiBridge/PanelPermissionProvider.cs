@@ -16,6 +16,8 @@ public sealed class PanelPermissionProvider : IPermissionsProvider
 {
     private static readonly ConcurrentDictionary<string, string[]> PlayerPermissions =
         new(StringComparer.OrdinalIgnoreCase);
+    private static readonly ConcurrentDictionary<string, DateTime> LastDenied =
+        new(StringComparer.OrdinalIgnoreCase);
 
     internal static void Set(string userId, IEnumerable<string>? permissions)
     {
@@ -51,7 +53,20 @@ public sealed class PanelPermissionProvider : IPermissionsProvider
     {
         if (player == null) return false;
         if (player.IsHost) return true;
-        return IsGranted(GetPermissions(player), permission);
+        var granted = IsGranted(GetPermissions(player), permission);
+        if (!granted && !string.IsNullOrWhiteSpace(player.UserId)
+            && !string.IsNullOrWhiteSpace(permission))
+        {
+            var key = $"{player.UserId}|{permission}";
+            var now = DateTime.UtcNow;
+            if (!LastDenied.TryGetValue(key, out var previous)
+                || now - previous > TimeSpan.FromSeconds(30))
+            {
+                LastDenied[key] = now;
+                BridgePlugin.ActiveClient?.RecordEvent("permission-denied", player, permission);
+            }
+        }
+        return granted;
     }
 
     public bool HasAnyPermission(Player player, params string[] permissions)

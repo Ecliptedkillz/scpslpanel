@@ -275,7 +275,20 @@ function OverviewPage({ data, navigatePage, openServer }: { data: Overview | nul
       </article>
     </section>
     <StaffDashboard/>
+    <PermissionHealthDashboard/>
   </>
+}
+
+function PermissionHealthDashboard(){
+  type Health={issues:Array<{severity:string}>;roles:Array<{groupName:string;serverName:string;onlinePlayers:number;bridgeConnected:boolean}>}
+  const [health,setHealth]=useState<Health|null>(null)
+  useEffect(()=>{api<Health>('/permissions/health').then(setHealth).catch(()=>{})},[])
+  if(!health)return null
+  const errors=health.issues.filter(issue=>issue.severity==='error').length
+  const warnings=health.issues.filter(issue=>issue.severity==='warning').length
+  const assigned=health.roles.reduce((count,role)=>count+role.onlinePlayers,0)
+  const disconnected=new Set(health.roles.filter(role=>!role.bridgeConnected).map(role=>role.serverName))
+  return <section className="panel permission-dashboard"><div className="panel-head"><div><span className="eyebrow">ACCESS HEALTH</span><h2>Runtime permissions</h2></div></div><div className="staff-summary"><div><strong>{health.roles.length}</strong><span>CONFIGURED ROLES</span></div><div><strong>{assigned}</strong><span>ONLINE ASSIGNMENTS</span></div><div><strong>{errors}</strong><span>CONFIG ERRORS</span></div><div><strong>{warnings}</strong><span>WARNINGS</span></div></div>{disconnected.size>0&&<p className="error">Permission bridge unavailable: {[...disconnected].join(', ')}</p>}</section>
 }
 
 function StaffDashboard(){
@@ -888,23 +901,44 @@ const gameRaPermissions = [
   'ForceclassToSpectator','ForceclassWithoutRestrictions','GivingItems','WarheadEvents',
   'RespawnEvents','RoundEvents','SetGroup','GameplayData','Overwatch','FacilityManagement',
   'PlayersManagement','PermissionsManagement','ServerConsoleCommands','ViewHiddenBadges','ServerConfigs',
+  'Broadcasting','PlayerSensitiveDataAccess','Noclip','AFKImmunity','AdminChat',
+  'ViewHiddenGlobalBadges','Announcer','Effects','FriendlyFireDetectorImmunity',
+  'FriendlyFireDetectorTempDisable','ServerLogLiveFeed','ExecuteAs','Vanish',
 ] as const
 const gameBadgeColors=['none','pink','red','brown','silver','light_green','crimson','cyan',
   'aqua','deep_pink','tomato','yellow','magenta','blue_green','orange','lime','green',
   'emerald','carmine','nickel','mint','army_green','pumpkin'] as const
 
 function IngamePermissionsPage({servers,onError}:{servers:Server[];onError:(message:string)=>void}) {
+  type Health={issues:Array<{severity:string;code:string;message:string;serverId?:string;groupName?:string}>;roles:Array<{serverId:string;serverName:string;groupName:string;priority:number;onlinePlayers:number;bridgeConnected:boolean;nativePermissionCount:number;pluginPermissionCount:number}>;nativePermissionCatalog:string[];pluginPermissionCatalog:string[]}
+  type Diagnostic={serverName:string;userId:string;displayName?:string;online:boolean;currentGameRole?:string;assignment:{assigned:boolean;groupName?:string;discordRoleId?:string;permissions?:string[];pluginPermissions?:string[]};inheritedGroups:string[];issues:Health['issues']}
+  type NativeComparison={found:boolean;path?:string;nativeGroups:string[];panelGroups:string[];nativeMembers:string[];issues:Health['issues']}
   const [settings,setSettings]=useState<IntegrationSettings|null>(null)
+  const [persistedSettings,setPersistedSettings]=useState<IntegrationSettings|null>(null)
   const [guildRoles,setGuildRoles]=useState<Array<{id:string;name:string;position:number;color:number}>>([])
   const [roleModal,setRoleModal]=useState<{index:number;view:boolean}|null>(null)
+  const [health,setHealth]=useState<Health|null>(null)
+  const [diagnostic,setDiagnostic]=useState<Diagnostic|null>(null)
+  const [nativeComparison,setNativeComparison]=useState<NativeComparison|null>(null)
+  const [diagnosticServer,setDiagnosticServer]=useState('')
+  const [diagnosticUser,setDiagnosticUser]=useState('')
+  const [syncing,setSyncing]=useState(false)
   const confirmation=useConfirmDialog()
-  const load=useCallback(()=>api<IntegrationSettings>('/integrations').then(value=>setSettings({
-    ...defaultIntegration,...value,discordGameRoleGrants:value.discordGameRoleGrants??[],
-  })).catch(error=>onError(error.message)),[onError])
-  useEffect(()=>{void load();api<typeof guildRoles>('/integrations/discord/roles').then(setGuildRoles).catch(error=>onError(error.message))},[load,onError])
+  const load=useCallback(()=>api<IntegrationSettings>('/integrations').then(value=>{
+    const loaded={...defaultIntegration,...value,discordGameRoleGrants:value.discordGameRoleGrants??[]}
+    setSettings(loaded);setPersistedSettings(loaded)
+  }).catch(error=>onError(error.message)),[onError])
+  const loadHealth=useCallback(()=>api<Health>('/permissions/health').then(setHealth).catch(error=>onError(error.message)),[onError])
+  useEffect(()=>{void load();void loadHealth();api<typeof guildRoles>('/integrations/discord/roles').then(setGuildRoles).catch(error=>onError(error.message))},[load,loadHealth,onError])
   if(!settings)return <Skeleton/>
   const roles=settings.discordGameRoleGrants??[]
   const update=(index:number,patch:Partial<IntegrationSettings['discordGameRoleGrants'][number]>)=>setSettings({...settings,discordGameRoleGrants:roles.map((role,i)=>i===index?{...role,...patch}:role)})
+  const applyRoleTemplate=(index:number,template:'owner'|'admin'|'moderator')=>{
+    const permissions=template==='owner'?[...gameRaPermissions]:template==='admin'
+      ? gameRaPermissions.filter(permission=>!['PermissionsManagement','ServerConfigs','ExecuteAs'].includes(permission))
+      : gameRaPermissions.filter(permission=>['KickingAndShortTermBanning','BanningUpToDay','ForceclassSelf','ForceclassToSpectator','WarheadEvents','RoundEvents','Overwatch','FacilityManagement','ViewHiddenBadges','AdminChat'].includes(permission))
+    update(index,{permissions,kickPower:template==='owner'?255:template==='admin'?100:50,requiredKickPower:template==='owner'?255:template==='admin'?101:51,badgeText:template.toUpperCase(),badgeColor:template==='owner'?'red':template==='admin'?'blue':'silver'})
+  }
   const add=()=>{setSettings({...settings,discordGameRoleGrants:[...roles,{roleId:'',serverId:servers[0]?.id??'',groupName:'',priority:0,enabled:true,permissions:[],inheritedGroups:[],badgeText:'',badgeColor:'silver',hidden:false,cover:true,reservedSlot:false,kickPower:0,requiredKickPower:0,pluginPermissions:[]}]});setRoleModal({index:roles.length,view:false})}
   const duplicate=(index:number)=>{const role=roles[index];setSettings({...settings,discordGameRoleGrants:[...roles,{...role,groupName:`${role.groupName||'role'}-copy`,badgeText:`${role.badgeText||role.groupName||'Role'} Copy`,permissions:[...(role.permissions??[])],inheritedGroups:[...(role.inheritedGroups??[])],pluginPermissions:[...(role.pluginPermissions??[])]}]});setRoleModal({index:roles.length,view:false})}
   const remove=async(index:number)=>{
@@ -913,7 +947,9 @@ function IngamePermissionsPage({servers,onError}:{servers:Server[];onError:(mess
     try{
       await api('/integrations',{method:'PUT',body:JSON.stringify(next)})
       setSettings(next)
+      setPersistedSettings(next)
       setRoleModal(null)
+      void loadHealth()
       window.dispatchEvent(new CustomEvent('panel-success',{detail:'In-game role deleted'}))
     }catch(error){onError(error instanceof Error?error.message:'Unable to delete role')}
   }
@@ -926,21 +962,46 @@ function IngamePermissionsPage({servers,onError}:{servers:Server[];onError:(mess
     try{
       await api('/integrations',{method:'PUT',body:JSON.stringify(next)})
       setSettings(next)
+      setPersistedSettings(next)
+      void loadHealth()
       window.dispatchEvent(new CustomEvent('panel-success',{detail:'Role order updated'}))
     }catch(error){onError(error instanceof Error?error.message:'Unable to reorder roles')}
   }
+  const syncAll=async()=>{
+    setSyncing(true)
+    try{
+      const connectedIds=[...new Set((health?.roles??[]).filter(role=>role.bridgeConnected).map(role=>role.serverId))]
+      for(const serverId of connectedIds)await api(`/permissions/sync/${serverId}`,{method:'POST'})
+      await loadHealth()
+      window.dispatchEvent(new CustomEvent('panel-success',{detail:'Online player permissions synchronized'}))
+    }catch(error){onError(error instanceof Error?error.message:'Unable to synchronize permissions')}
+    finally{setSyncing(false)}
+  }
+  const diagnose=async()=>{
+    if(!diagnosticServer||!diagnosticUser.trim())return
+    try{setDiagnostic(await api<Diagnostic>(`/permissions/diagnose/${diagnosticServer}?userId=${encodeURIComponent(diagnosticUser.trim())}`))}
+    catch(error){onError(error instanceof Error?error.message:'Unable to diagnose player permissions')}
+  }
+  const closeEditor=()=>{if(persistedSettings)setSettings(persistedSettings);setRoleModal(null)}
+  const compareNative=async()=>{
+    if(!diagnosticServer)return
+    try{setNativeComparison(await api<NativeComparison>(`/permissions/native/${diagnosticServer}`))}
+    catch(error){onError(error instanceof Error?error.message:'Unable to compare native RA configuration')}
+  }
   return <><PageTitle eyebrow="ACCESS CONTROL" title="In-game Permissions"><button className="primary" onClick={add}><Plus size={15}/> ADD ROLE</button></PageTitle>
     <section className="panel ingame-permissions-intro"><Shield size={24}/><div><h2>Discord-synchronized Remote Admin</h2><p>Define complete runtime SCP:SL roles. The highest-priority matching Discord role is applied when a linked player joins.</p></div><span className="tag">{roles.length} ROLE{roles.length===1?'':'S'}</span></section>
-    <form className="ingame-permissions-page" onSubmit={async event=>{event.preventDefault();try{await api('/integrations',{method:'PUT',body:JSON.stringify(settings)});window.dispatchEvent(new CustomEvent('panel-success',{detail:'In-game permissions saved'}));setRoleModal(null)}catch(error){onError(error instanceof Error?error.message:'Unable to save roles')}}}>
+    <section className="permission-operations-grid"><article className="panel permission-health-panel"><div className="panel-head"><div><span className="eyebrow">CONFIGURATION HEALTH</span><h2>{health?.issues.length??0} issue{health?.issues.length===1?'':'s'} detected</h2></div><button onClick={()=>void loadHealth()}><RefreshCw size={14}/> REFRESH</button></div>{health?.issues.length?<div className="permission-issue-list">{health.issues.map((issue,index)=><div className={`permission-issue ${issue.severity}`} key={`${issue.code}-${index}`}><span>{issue.severity.toUpperCase()}</span><div><strong>{issue.code}</strong><p>{issue.message}</p></div></div>)}</div>:<p className="permission-ok">No role conflicts or validation problems detected.</p>}</article><article className="panel permission-diagnostic-panel"><div className="panel-head"><div><span className="eyebrow">PLAYER DIAGNOSTICS</span><h2>Resolve effective access</h2></div><button disabled={syncing} onClick={()=>void syncAll()}><RefreshCw size={14}/> {syncing?'SYNCING…':'SYNC ONLINE'}</button></div><div className="diagnostic-controls"><select value={diagnosticServer} onChange={e=>{setDiagnosticServer(e.target.value);setNativeComparison(null)}}><option value="">Select server…</option>{servers.map(server=><option value={server.id} key={server.id}>{server.name}</option>)}</select><input value={diagnosticUser} onChange={e=>setDiagnosticUser(e.target.value)} placeholder="Steam ID, user ID, or online player ID"/><button className="primary" onClick={()=>void diagnose()}>DIAGNOSE</button><button onClick={()=>void compareNative()}>COMPARE NATIVE RA</button></div>{diagnostic&&<div className="diagnostic-result"><div><span>MATCH</span><strong>{diagnostic.assignment.assigned?diagnostic.assignment.groupName:'No matching role'}</strong></div><div><span>PLAYER</span><strong>{diagnostic.displayName||diagnostic.userId}</strong></div><div><span>NATIVE PERMS</span><strong>{diagnostic.assignment.permissions?.length??0}</strong></div><div><span>PLUGIN PERMS</span><strong>{diagnostic.assignment.pluginPermissions?.length??0}</strong></div></div>}{nativeComparison&&<div className="native-comparison"><strong>{nativeComparison.found?'Native RA configuration found':'Native RA configuration not found'}</strong><p>{nativeComparison.path||'Check the server query-port configuration directory.'}</p><span>Native groups: {nativeComparison.nativeGroups.join(', ')||'none'}</span><span>Panel groups: {nativeComparison.panelGroups.join(', ')||'none'}</span><span>Static members: {nativeComparison.nativeMembers.length}</span></div>}</article></section>
+    <form className="ingame-permissions-page" onSubmit={async event=>{event.preventDefault();try{await api('/integrations',{method:'PUT',body:JSON.stringify(settings)});setPersistedSettings(settings);window.dispatchEvent(new CustomEvent('panel-success',{detail:'In-game permissions saved'}));setRoleModal(null);void loadHealth()}catch(error){onError(error instanceof Error?error.message:'Unable to save roles')}}}>
       {!!roles.length&&<div className="ingame-role-grid">{roles.map((role,index)=><article className={`panel ingame-role-card ${role.enabled?'':'disabled'}`} key={`card-${index}`}><header><div className="role-badge-preview">{(role.badgeText||role.groupName||'?').slice(0,2).toUpperCase()}</div><div><span className="eyebrow">ROLE {index+1}</span><h2>{role.groupName||'Unnamed role'}</h2><p>{guildRoles.find(item=>item.id===role.roleId)?.name||role.roleId||'No Discord role selected'}</p></div><span className={`tag ${role.enabled?'success':''}`}>{role.enabled?'ENABLED':'DISABLED'}</span></header><div className="role-card-stats"><div><small>SERVER</small><strong>{servers.find(server=>server.id===role.serverId)?.name||'Unknown'}</strong></div><div><small>PERMISSIONS</small><strong>{(role.permissions??[]).length}</strong></div><div><small>PRIORITY</small><strong>{role.priority}</strong></div></div><footer><div className="role-order-actions"><button type="button" disabled={index===0} title="Move role earlier" onClick={()=>void move(index,-1)}><ArrowLeft size={14}/></button><button type="button" disabled={index===roles.length-1} title="Move role later" onClick={()=>void move(index,1)}><ChevronRight size={14}/></button></div><button type="button" onClick={()=>setRoleModal({index,view:true})}><Eye size={14}/> VIEW</button><button type="button" className="edit" onClick={()=>setRoleModal({index,view:false})}><Pencil size={14}/> EDIT</button><button type="button" onClick={()=>duplicate(index)}><Copy size={14}/> DUPLICATE</button><button type="button" className="danger" onClick={()=>void remove(index)}><Trash2 size={14}/> DELETE</button></footer></article>)}</div>}
-      {roles.map((role,index)=><article className={`panel ingame-role-editor ${roleModal?.index===index?'open':''} ${roleModal?.view?'readonly':''}`} key={index}><header><div><span className="eyebrow">{roleModal?.view?'ROLE DETAILS':`EDIT ROLE ${index+1}`}</span><h2>{role.groupName||'New in-game role'}</h2><p>Discord role {role.roleId||'not selected'} · Priority {role.priority}</p></div><div><label className="check-row"><input type="checkbox" checked={role.enabled} onChange={e=>update(index,{enabled:e.target.checked})}/> Enabled</label>{roleModal?.view&&<button type="button" className="edit" onClick={()=>setRoleModal({index,view:false})}><Pencil size={14}/> EDIT</button>}<button type="button" className="icon-button" onClick={()=>setRoleModal(null)}><X size={18}/></button></div></header>
+      <datalist id="plugin-permission-catalog">{health?.pluginPermissionCatalog.map(permission=><option value={permission} key={permission}/>)}</datalist>
+      {roles.map((role,index)=><article className={`panel ingame-role-editor ${roleModal?.index===index?'open':''} ${roleModal?.view?'readonly':''}`} key={index}><header><div><span className="eyebrow">{roleModal?.view?'ROLE DETAILS':`EDIT ROLE ${index+1}`}</span><h2>{role.groupName||'New in-game role'}</h2><p>Discord role {role.roleId||'not selected'} · Priority {role.priority}</p></div><div><label className="check-row"><input type="checkbox" checked={role.enabled} onChange={e=>update(index,{enabled:e.target.checked})}/> Enabled</label>{roleModal?.view&&<button type="button" className="edit" onClick={()=>setRoleModal({index,view:false})}><Pencil size={14}/> EDIT</button>}<button type="button" className="icon-button" onClick={closeEditor}><X size={18}/></button></div></header>
         <div className="form-row"><label>DISCORD ROLE<select value={role.roleId} onChange={e=>{const selected=guildRoles.find(item=>item.id===e.target.value);update(index,{roleId:e.target.value,...(!role.groupName&&selected?{groupName:selected.name.toLowerCase().replace(/[^a-z0-9]+/g,'-')}:{ }),...(!role.badgeText&&selected?{badgeText:selected.name}:{})})}}><option value="">Select a Discord role…</option>{role.roleId&&!guildRoles.some(item=>item.id===role.roleId)&&<option value={role.roleId}>Unknown role ({role.roleId})</option>}{guildRoles.map(item=><option value={item.id} key={item.id}>{item.name} · {item.id}</option>)}</select></label><label>SERVER<select value={role.serverId} onChange={e=>update(index,{serverId:e.target.value})}>{servers.map(server=><option value={server.id} key={server.id}>{server.name}</option>)}</select></label><label>RANK NAME<input value={role.groupName} onChange={e=>update(index,{groupName:e.target.value.trim()})}/></label><label>PRIORITY<input type="number" value={role.priority} onChange={e=>update(index,{priority:Number(e.target.value)})}/></label></div>
         <div className="form-row"><label>BADGE TEXT<input value={role.badgeText??''} onChange={e=>update(index,{badgeText:e.target.value})}/></label><label>BADGE COLOR<select value={role.badgeColor??'silver'} onChange={e=>update(index,{badgeColor:e.target.value})}>{gameBadgeColors.map(color=><option value={color} key={color}>{color.replaceAll('_',' ')}</option>)}</select></label><label>KICK POWER<input type="number" min={0} max={255} value={role.kickPower??0} onChange={e=>update(index,{kickPower:Number(e.target.value)})}/></label><label>REQUIRED KICK POWER<input type="number" min={0} max={255} value={role.requiredKickPower??0} onChange={e=>update(index,{requiredKickPower:Number(e.target.value)})}/></label></div>
         <div className="permission-chip-grid game-role-flags"><label className="check-row"><input type="checkbox" checked={role.hidden??false} onChange={e=>update(index,{hidden:e.target.checked})}/> Hidden badge</label><label className="check-row"><input type="checkbox" checked={role.cover??true} onChange={e=>update(index,{cover:e.target.checked})}/> Cover global badge</label><label className="check-row"><input type="checkbox" checked={role.reservedSlot??false} onChange={e=>update(index,{reservedSlot:e.target.checked})}/> Reserved slot</label></div>
         <details className="inheritance-dropdown permission-dropdown"><summary><div><span className="eyebrow">INHERITED RANKS</span><strong>{(role.inheritedGroups??[]).length?`${(role.inheritedGroups??[]).length} selected`:'No inherited ranks'}</strong></div><span>SELECT RANKS</span></summary><div className="inheritance-options">{roles.map((candidate,candidateIndex)=>candidateIndex===index||!candidate.groupName?null:<label className="check-row" key={`${candidate.groupName}-${candidateIndex}`}><input type="checkbox" checked={(role.inheritedGroups??[]).includes(candidate.groupName)} onChange={()=>{const selected=role.inheritedGroups??[];update(index,{inheritedGroups:selected.includes(candidate.groupName)?selected.filter(name=>name!==candidate.groupName):[...selected,candidate.groupName]})}}/><span><strong>{candidate.groupName}</strong><small>{candidate.badgeText||'No badge text'}</small></span></label>)}</div></details>
-        <details className="game-permission-selector permission-dropdown"><summary><div><span className="eyebrow">REMOTE ADMIN PERMISSIONS</span><strong>{(role.permissions??[]).length} of {gameRaPermissions.length} selected</strong></div><span>SELECT PERMISSIONS</span></summary><div className="permission-dropdown-actions"><button type="button" onClick={()=>update(index,{permissions:[...gameRaPermissions]})}>SELECT ALL</button><button type="button" onClick={()=>update(index,{permissions:[]})}>CLEAR ALL</button></div><div className="permission-chip-grid">{gameRaPermissions.map(permission=>{const selected=role.permissions??[];return <label className="check-row" key={permission}><input type="checkbox" checked={selected.includes(permission)} onChange={()=>update(index,{permissions:selected.includes(permission)?selected.filter(x=>x!==permission):[...selected,permission]})}/>{permission}</label>})}</div></details>
-        <div className="multi-value-editor"><div className="multi-value-head"><div><span className="eyebrow">LABAPI PLUGIN PERMISSIONS</span><small>Exact permissions and wildcards such as at.* are supplied through the bridge's shared LabAPI permission provider.</small></div><button type="button" onClick={()=>update(index,{pluginPermissions:[...(role.pluginPermissions??[]),'']})}><Plus size={13}/> ADD PERMISSION</button></div>{!(role.pluginPermissions??[]).length&&<div className="multi-value-empty">No custom plugin permissions configured.</div>}{(role.pluginPermissions??[]).map((permission,permissionIndex)=><div className="multi-value-row" key={permissionIndex}><input value={permission} onChange={e=>update(index,{pluginPermissions:(role.pluginPermissions??[]).map((value,i)=>i===permissionIndex?e.target.value:value)})} placeholder="at.customclass"/><button type="button" className="danger" aria-label="Remove permission" onClick={()=>update(index,{pluginPermissions:(role.pluginPermissions??[]).filter((_,i)=>i!==permissionIndex)})}><Trash2 size={14}/></button></div>)}</div>
-        <footer className="ingame-role-modal-actions"><span>{roleModal?.view?'Viewing saved role configuration':'Save changes to all configured roles'}</span><div><button type="button" onClick={()=>setRoleModal(null)}>{roleModal?.view?'CLOSE':'CANCEL'}</button>{!roleModal?.view&&<button className="primary"><Save size={15}/> SAVE ROLE</button>}</div></footer>
+        <details className="game-permission-selector permission-dropdown"><summary><div><span className="eyebrow">REMOTE ADMIN PERMISSIONS</span><strong>{(role.permissions??[]).length} of {gameRaPermissions.length} selected</strong></div><span>SELECT PERMISSIONS</span></summary><div className="permission-dropdown-actions"><button type="button" onClick={()=>applyRoleTemplate(index,'owner')}>OWNER TEMPLATE</button><button type="button" onClick={()=>applyRoleTemplate(index,'admin')}>ADMIN TEMPLATE</button><button type="button" onClick={()=>applyRoleTemplate(index,'moderator')}>MOD TEMPLATE</button><button type="button" onClick={()=>update(index,{permissions:[...gameRaPermissions]})}>SELECT ALL</button><button type="button" onClick={()=>update(index,{permissions:[]})}>CLEAR ALL</button></div><div className="permission-chip-grid">{gameRaPermissions.map(permission=>{const selected=role.permissions??[];return <label className="check-row" key={permission}><input type="checkbox" checked={selected.includes(permission)} onChange={()=>update(index,{permissions:selected.includes(permission)?selected.filter(x=>x!==permission):[...selected,permission]})}/>{permission}</label>})}</div></details>
+        <div className="multi-value-editor"><div className="multi-value-head"><div><span className="eyebrow">LABAPI PLUGIN PERMISSIONS</span><small>Exact permissions and wildcards such as at.* are supplied through the bridge's shared LabAPI permission provider.</small></div><button type="button" onClick={()=>update(index,{pluginPermissions:[...(role.pluginPermissions??[]),'']})}><Plus size={13}/> ADD PERMISSION</button></div>{!(role.pluginPermissions??[]).length&&<div className="multi-value-empty">No custom plugin permissions configured.</div>}{(role.pluginPermissions??[]).map((permission,permissionIndex)=><div className="multi-value-row" key={permissionIndex}><input list="plugin-permission-catalog" value={permission} onChange={e=>update(index,{pluginPermissions:(role.pluginPermissions??[]).map((value,i)=>i===permissionIndex?e.target.value:value)})} placeholder="at.customclass"/><button type="button" className="danger" aria-label="Remove permission" onClick={()=>update(index,{pluginPermissions:(role.pluginPermissions??[]).filter((_,i)=>i!==permissionIndex)})}><Trash2 size={14}/></button></div>)}</div>
+        <footer className="ingame-role-modal-actions"><span>{roleModal?.view?'Viewing saved role configuration':'Cancel discards every unsaved role change'}</span><div><button type="button" onClick={closeEditor}>{roleModal?.view?'CLOSE':'CANCEL'}</button>{!roleModal?.view&&<button className="primary"><Save size={15}/> SAVE ROLE</button>}</div></footer>
       </article>)}
       {!roles.length&&<div className="empty-page"><Shield/><h2>No in-game roles</h2><p>Add a role to synchronize Discord staff access with SCP:SL Remote Admin.</p><button type="button" className="primary" onClick={add}>ADD FIRST ROLE</button></div>}
     </form>
