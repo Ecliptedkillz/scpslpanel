@@ -94,6 +94,32 @@ public sealed class DiscordLinkService(NotificationService settingsService, ILog
         }
     }
 
+    public async Task<IReadOnlyList<DiscordGuildRole>> ListGuildRolesAsync()
+    {
+        var settings = await settingsService.GetAsync();
+        if (string.IsNullOrWhiteSpace(settings.DiscordBotToken)
+            || string.IsNullOrWhiteSpace(settings.DiscordGuildId)) return [];
+        using var request = new HttpRequestMessage(HttpMethod.Get,
+            $"https://discord.com/api/v10/guilds/{settings.DiscordGuildId}/roles");
+        request.Headers.Authorization = new AuthenticationHeaderValue("Bot", settings.DiscordBotToken);
+        using var response = await _http.SendAsync(request);
+        if (!response.IsSuccessStatusCode)
+        {
+            var body = await response.Content.ReadAsStringAsync();
+            throw new InvalidOperationException(
+                $"Discord roles returned {(int)response.StatusCode}: {body}");
+        }
+        using var document = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+        return document.RootElement.EnumerateArray()
+            .Select(role => new DiscordGuildRole(
+                role.GetProperty("id").GetString() ?? "",
+                role.GetProperty("name").GetString() ?? "Unnamed role",
+                role.GetProperty("position").GetInt32(),
+                role.TryGetProperty("color", out var color) ? color.GetUInt32() : 0))
+            .Where(role => role.Name != "@everyone")
+            .OrderByDescending(role => role.Position).ToArray();
+    }
+
     public IReadOnlyList<IdentityLinkHealth> Health(ServerDefinition server)
     {
         var path = LinkPath(server);

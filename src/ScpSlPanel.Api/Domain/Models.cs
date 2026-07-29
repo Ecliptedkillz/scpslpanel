@@ -134,6 +134,7 @@ public sealed record PanelIntegrationSettings(
 public sealed record DiscordBotStatus(bool Enabled, bool Connected, string? BotName, string? Error);
 public sealed record DiscordChannelDiagnostic(
     string Purpose, string ChannelId, bool Found, string? Name, bool CanView, bool CanSend);
+public sealed record DiscordGuildRole(string Id, string Name, int Position, uint Color);
 public sealed record DiscordDiagnostic(
     DiscordBotStatus Bot, string GuildId, bool GuildFound, string? GuildName,
     IReadOnlyList<DiscordChannelDiagnostic> Channels, IReadOnlyList<string> Issues);

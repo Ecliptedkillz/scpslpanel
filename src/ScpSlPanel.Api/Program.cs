@@ -1103,6 +1103,8 @@ api.MapPost("/integrations/discord/test", async (NotificationService notificatio
 }).RequireAuthorization("Owner");
 api.MapGet("/integrations/discord/diagnostics", (DiscordBotService bot) => bot.DiagnoseAsync())
     .RequireAuthorization("Owner");
+api.MapGet("/integrations/discord/roles", (DiscordLinkService discordLinks) =>
+    discordLinks.ListGuildRolesAsync()).RequireAuthorization("Owner");
 api.MapGet("/system/versions", (BridgeStateService bridge) => Results.Ok(new
 {
     panel = typeof(Program).Assembly.GetName().Version?.ToString() ?? "development",
