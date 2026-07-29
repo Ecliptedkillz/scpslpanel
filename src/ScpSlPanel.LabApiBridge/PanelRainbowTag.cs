@@ -44,7 +44,8 @@ internal sealed class PanelRainbowTagBehaviour : MonoBehaviour
         _roles = GetComponent<ServerRoles>();
         if (_roles == null)
         {
-            Logger.Warn("SCP Control could not attach its rainbow tag: ServerRoles was unavailable.");
+            LabApi.Features.Console.Logger.Warn(
+                "SCP Control could not attach its rainbow tag: ServerRoles was unavailable.");
             Destroy(this);
             return;
         }

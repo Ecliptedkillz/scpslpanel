@@ -29,13 +29,13 @@ public sealed class PanelPermissionProvider : IPermissionsProvider
 
     internal static void Clear(string? userId)
     {
-        if (!string.IsNullOrWhiteSpace(userId))
-            PlayerPermissions.TryRemove(userId, out _);
+        if (string.IsNullOrWhiteSpace(userId)) return;
+        PlayerPermissions.TryRemove(userId!, out _);
     }
 
     public string[] GetPermissions(Player player) =>
         player != null && !string.IsNullOrWhiteSpace(player.UserId)
-            && PlayerPermissions.TryGetValue(player.UserId, out var permissions)
+            && PlayerPermissions.TryGetValue(player.UserId!, out var permissions)
             ? permissions.ToArray()
             : Array.Empty<string>();
 
