@@ -14,6 +14,7 @@
     <Reference Include="LabApi" HintPath="$(ScpSlManagedPath)\LabApi.dll" Private="false" />
     <Reference Include="Assembly-CSharp" HintPath="$(ScpSlManagedPath)\Assembly-CSharp.dll" Private="false" />
     <Reference Include="Mirror" HintPath="$(ScpSlManagedPath)\Mirror.dll" Private="false" />
+    <Reference Include="CommandSystem.Core" HintPath="$(ScpSlManagedPath)\CommandSystem.Core.dll" Private="false" />
     <Reference Include="System.Net.Http" />
     <Reference Include="System.Runtime.Serialization" />
   </ItemGroup>
@@ -23,5 +24,6 @@
     <Error Condition="!Exists('$(ScpSlManagedPath)\LabApi.dll')" Text="LabApi.dll was not found in $(ScpSlManagedPath)." />
     <Error Condition="!Exists('$(ScpSlManagedPath)\Assembly-CSharp.dll')" Text="Assembly-CSharp.dll was not found in $(ScpSlManagedPath)." />
     <Error Condition="!Exists('$(ScpSlManagedPath)\Mirror.dll')" Text="Mirror.dll was not found in $(ScpSlManagedPath)." />
+    <Error Condition="!Exists('$(ScpSlManagedPath)\CommandSystem.Core.dll')" Text="CommandSystem.Core.dll was not found in $(ScpSlManagedPath)." />
   </Target>
 </Project>
