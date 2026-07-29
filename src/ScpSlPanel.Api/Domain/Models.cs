@@ -142,10 +142,17 @@ public sealed record DiscordRoleGrant(
     Guid ServerId, IReadOnlyList<string> Permissions);
 public sealed record DiscordGameRoleGrant(
     [property: JsonConverter(typeof(SnowflakeStringConverter))] string RoleId,
-    Guid ServerId, string GroupName, int Priority = 0, bool Enabled = true);
+    Guid ServerId, string GroupName, int Priority = 0, bool Enabled = true,
+    IReadOnlyList<string>? Permissions = null, IReadOnlyList<string>? InheritedGroups = null,
+    string BadgeText = "", string BadgeColor = "silver", bool Hidden = false,
+    bool Cover = true, bool ReservedSlot = false, byte KickPower = 0,
+    byte RequiredKickPower = 0, IReadOnlyList<string>? PluginPermissions = null);
 public sealed record BridgeGameRoleAssignment(
     bool Assigned, string? GroupName = null, string? DiscordId = null,
-    string? DiscordRoleId = null);
+    string? DiscordRoleId = null, IReadOnlyList<string>? Permissions = null,
+    string BadgeText = "", string BadgeColor = "silver", bool Hidden = false,
+    bool Cover = true, bool ReservedSlot = false, byte KickPower = 0,
+    byte RequiredKickPower = 0, IReadOnlyList<string>? PluginPermissions = null);
 public sealed record IdentityLinkHealth(
     Guid ServerId, string ServerName, int Line, string SteamId, string DiscordId,
     bool Valid, string? Issue);

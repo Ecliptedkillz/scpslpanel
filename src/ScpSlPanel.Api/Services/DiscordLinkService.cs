@@ -65,7 +65,27 @@ public sealed class DiscordLinkService(NotificationService settingsService, ILog
             var roleIds = document.RootElement.GetProperty("roles").EnumerateArray()
                 .Select(role => role.GetString()).Where(role => role is not null).ToHashSet();
             var match = grants.FirstOrDefault(grant => roleIds.Contains(grant.RoleId));
-            return match is null ? new(false) : new(true, match.GroupName.Trim(), discordId, match.RoleId);
+            if (match is null) return new(false);
+            var allServerGrants = settings.DiscordGameRoleGrants?
+                .Where(grant => grant.Enabled && grant.ServerId == server.Id).ToArray() ?? [];
+            var permissions = new HashSet<string>(match.Permissions ?? [], StringComparer.OrdinalIgnoreCase);
+            var pluginPermissions = new HashSet<string>(
+                match.PluginPermissions ?? [], StringComparer.OrdinalIgnoreCase);
+            var pending = new Queue<string>(match.InheritedGroups ?? []);
+            var visited = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            while (pending.TryDequeue(out var inheritedName) && visited.Add(inheritedName))
+            {
+                var inherited = allServerGrants.FirstOrDefault(grant =>
+                    grant.GroupName.Equals(inheritedName, StringComparison.OrdinalIgnoreCase));
+                if (inherited is null) continue;
+                permissions.UnionWith(inherited.Permissions ?? []);
+                pluginPermissions.UnionWith(inherited.PluginPermissions ?? []);
+                foreach (var parent in inherited.InheritedGroups ?? []) pending.Enqueue(parent);
+            }
+            return new(true, match.GroupName.Trim(), discordId, match.RoleId,
+                permissions.ToArray(), match.BadgeText, match.BadgeColor, match.Hidden,
+                match.Cover, match.ReservedSlot, match.KickPower, match.RequiredKickPower,
+                pluginPermissions.ToArray());
         }
         catch (Exception exception)
         {

@@ -84,6 +84,15 @@ internal sealed class GameRolePayload
     [DataMember(Name = "groupName")] public string? GroupName { get; set; }
     [DataMember(Name = "discordId")] public string? DiscordId { get; set; }
     [DataMember(Name = "discordRoleId")] public string? DiscordRoleId { get; set; }
+    [DataMember(Name = "permissions")] public List<string> Permissions { get; set; } = new();
+    [DataMember(Name = "badgeText")] public string BadgeText { get; set; } = "";
+    [DataMember(Name = "badgeColor")] public string BadgeColor { get; set; } = "silver";
+    [DataMember(Name = "hidden")] public bool Hidden { get; set; }
+    [DataMember(Name = "cover")] public bool Cover { get; set; }
+    [DataMember(Name = "reservedSlot")] public bool ReservedSlot { get; set; }
+    [DataMember(Name = "kickPower")] public byte KickPower { get; set; }
+    [DataMember(Name = "requiredKickPower")] public byte RequiredKickPower { get; set; }
+    [DataMember(Name = "pluginPermissions")] public List<string> PluginPermissions { get; set; } = new();
 }
 
 [DataContract]

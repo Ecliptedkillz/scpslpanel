@@ -225,7 +225,7 @@ internal sealed class BridgeClient : IDisposable
             {
                 var current = Player.ReadyList?.FirstOrDefault(candidate => candidate.PlayerId == playerId);
                 if (current == null) return;
-                if (!TryApplyRemoteAdminGroup(current, assignment.GroupName!, out var error))
+                if (!TryApplyRemoteAdminGroup(current, assignment, out var error))
                 {
                     Logger.Warn($"SCP Control could not assign RA group '{assignment.GroupName}': {error}");
                     return;
@@ -241,7 +241,7 @@ internal sealed class BridgeClient : IDisposable
         }
     }
 
-    private static bool TryApplyRemoteAdminGroup(Player player, string groupName, out string error)
+    private static bool TryApplyRemoteAdminGroup(Player player, GameRolePayload assignment, out string error)
     {
         try
         {
@@ -259,8 +259,34 @@ internal sealed class BridgeClient : IDisposable
             var getGroup = handler.GetType().GetMethods(flags).FirstOrDefault(method =>
                 method.Name == "GetGroup" && method.GetParameters().Length == 1
                 && method.GetParameters()[0].ParameterType == typeof(string));
-            var group = getGroup?.Invoke(handler, new object[] { groupName });
-            if (group == null) { error = $"The group '{groupName}' does not exist in SCP:SL."; return false; }
+            if (getGroup == null) { error = "PermissionsHandler.GetGroup is unavailable."; return false; }
+            var groupType = getGroup.ReturnType;
+            var group = System.Runtime.Serialization.FormatterServices.GetUninitializedObject(groupType);
+            var gameAssembly = serverStatic!.Assembly;
+            Type[] gameTypes;
+            try { gameTypes = gameAssembly.GetTypes(); }
+            catch (ReflectionTypeLoadException exception)
+            {
+                gameTypes = exception.Types.Where(type => type != null).Cast<Type>().ToArray();
+            }
+            var permissionEnum = gameTypes.FirstOrDefault(type => type.IsEnum
+                && Enum.GetNames(type).Contains("KickingAndShortTermBanning"));
+            if (permissionEnum == null) { error = "SCP:SL permission enum is unavailable."; return false; }
+            ulong permissionMask = 0;
+            foreach (var permission in assignment.Permissions)
+            {
+                try { permissionMask |= Convert.ToUInt64(Enum.Parse(permissionEnum, permission, true)); }
+                catch { Logger.Warn($"SCP Control ignored unknown RA permission '{permission}'."); }
+            }
+            SetGroupMember(group, "Permissions", permissionMask);
+            SetGroupMember(group, "KickPower", assignment.KickPower);
+            SetGroupMember(group, "RequiredKickPower", assignment.RequiredKickPower);
+            SetGroupMember(group, "BadgeText", assignment.BadgeText);
+            SetGroupMember(group, "BadgeColor", assignment.BadgeColor);
+            SetGroupMember(group, "Cover", assignment.Cover);
+            SetGroupMember(group, "HiddenByDefault", assignment.Hidden);
+            SetGroupMember(group, "Hidden", assignment.Hidden);
+            SetGroupMember(group, "ReservedSlot", assignment.ReservedSlot);
             var setGroup = roles.GetType().GetMethods(flags).FirstOrDefault(method =>
             {
                 var parameters = method.GetParameters();
@@ -286,6 +312,27 @@ internal sealed class BridgeClient : IDisposable
             return false;
         }
     }
+
+    private static void SetGroupMember(object group, string name, object value)
+    {
+        const BindingFlags flags = BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance;
+        var type = group.GetType();
+        var property = type.GetProperties(flags).FirstOrDefault(item =>
+            item.Name.Equals(name, StringComparison.OrdinalIgnoreCase) && item.CanWrite);
+        if (property != null)
+        {
+            property.SetValue(group, ConvertValue(value, property.PropertyType));
+            return;
+        }
+        var field = type.GetFields(flags).FirstOrDefault(item =>
+            item.Name.Equals(name, StringComparison.OrdinalIgnoreCase)
+            || item.Name.Equals($"<{name}>k__BackingField", StringComparison.OrdinalIgnoreCase));
+        if (field != null) field.SetValue(group, ConvertValue(value, field.FieldType));
+    }
+
+    private static object ConvertValue(object value, Type targetType) =>
+        targetType.IsEnum ? Enum.ToObject(targetType, Convert.ToUInt64(value))
+        : Convert.ChangeType(value, Nullable.GetUnderlyingType(targetType) ?? targetType);
 
     private async Task PollCommandsAsync()
     {

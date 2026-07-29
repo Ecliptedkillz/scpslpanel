@@ -12,7 +12,7 @@ import { PlayerHistoryView, type StoredPlayer } from './components/PlayerHistory
 import { GlobalPlayerDatabase } from './components/GlobalPlayerDatabase'
 import type { AuditEntry, Ban, BridgeSetup, BridgeStatus, Overview, Player, Schedule, Server } from './types'
 
-type Page = 'overview' | 'servers' | 'server' | 'players' | 'bans' | 'schedules' | 'audit' | 'admins' | 'settings'
+type Page = 'overview' | 'servers' | 'server' | 'players' | 'permissions' | 'bans' | 'schedules' | 'audit' | 'admins' | 'settings'
 type ServerTab = 'overview' | 'monitoring' | 'console' | 'players' | 'player-history' | 'activity' | 'restarts' | 'plugins' | 'files' | 'maintenance'
 type ServerAccessGrant = { serverId: string; permissions: string[] }
 type User = { username: string; role: string; serverIds: string[]; permissions: string[]; serverAccess?: ServerAccessGrant[]; twoFactorEnabled?: boolean }
@@ -27,6 +27,7 @@ const nav: { page: Page; label: string; icon: typeof LayoutDashboard }[] = [
   { page: 'overview', label: 'Overview', icon: LayoutDashboard },
   { page: 'servers', label: 'Servers', icon: ServerIcon },
   { page: 'players', label: 'Player Database', icon: Users },
+  { page: 'permissions', label: 'In-game Permissions', icon: Shield },
   { page: 'bans', label: 'Ban Manager', icon: BanIcon },
   { page: 'schedules', label: 'Scheduler', icon: CalendarClock },
   { page: 'audit', label: 'Audit Log', icon: History },
@@ -36,7 +37,7 @@ const nav: { page: Page; label: string; icon: typeof LayoutDashboard }[] = [
 
 const fmtBytes = (bytes: number) => bytes ? `${(bytes / 1024 / 1024).toFixed(0)} MB` : '0 MB'
 const fmtState = (state: unknown) => typeof state === 'string' ? state.toUpperCase() : 'UNKNOWN'
-const topLevelPages = new Set<Page>(['overview', 'servers', 'players', 'bans', 'schedules', 'audit', 'admins', 'settings'])
+const topLevelPages = new Set<Page>(['overview', 'servers', 'players', 'permissions', 'bans', 'schedules', 'audit', 'admins', 'settings'])
 const serverTabs = new Set<ServerTab>(['overview', 'monitoring', 'console', 'players', 'player-history', 'activity', 'restarts', 'plugins', 'files', 'maintenance'])
 const readRoute = () => {
   const parts = window.location.pathname.split('/').filter(Boolean).map(decodeURIComponent)
@@ -198,7 +199,7 @@ function Panel({ user, onLogout, theme, setTheme }: { user: User; onLogout: () =
   }, [])
   const servers = overview?.servers ?? []
   const visibleNav = user.role === 'Owner' ? nav : nav.filter(item =>
-    !['bans', 'schedules', 'audit', 'admins'].includes(item.page)
+    !['permissions', 'bans', 'schedules', 'audit', 'admins'].includes(item.page)
     && (item.page !== 'players' || user.serverAccess?.some(grant => grant.permissions.includes('players.history'))
       || user.permissions.includes('players.history')))
   const selectedServer = servers.find(server => server.id === selected)
@@ -232,6 +233,7 @@ function Panel({ user, onLogout, theme, setTheme }: { user: User; onLogout: () =
         {page === 'overview' && <OverviewPage data={overview} navigatePage={navigatePage} openServer={openServer}/>}
         {page === 'servers' && <ServersPage user={user} servers={servers} refresh={load} openServer={openServer} onError={setError}/>}
         {page === 'players' && <GlobalPlayerDatabase onError={setError}/>}
+        {page === 'permissions' && user.role === 'Owner' && <IngamePermissionsPage servers={servers} onError={setError}/>}
         {page === 'server' && <ServerWorkspace user={user} server={selectedServer} tab={serverTab} setTab={navigateServerTab} refresh={load} back={() => navigatePage('servers')} onError={setError}/>}
         {page === 'bans' && <BansPage onError={setError}/>}
         {page === 'schedules' && <SchedulesPage servers={servers} onError={setError}/>}
@@ -786,7 +788,9 @@ type IntegrationSettings = {
   discordNotificationChannelId: string; steamWebApiKey: string
   discordModerationChannelId: string; discordAuditChannelId: string
   discordRoleGrants: {roleId:string;serverId:string;permissions:string[]}[]
-  discordGameRoleGrants: {roleId:string;serverId:string;groupName:string;priority:number;enabled:boolean}[]
+  discordGameRoleGrants: {roleId:string;serverId:string;groupName:string;priority:number;enabled:boolean;
+    permissions:string[];inheritedGroups:string[];badgeText:string;badgeColor:string;hidden:boolean;
+    cover:boolean;reservedSlot:boolean;kickPower:number;requiredKickPower:number;pluginPermissions:string[]}[]
   discordDailyReportEnabled: boolean; discordDailyReportHourUtc: number
 }
 const defaultIntegration: IntegrationSettings = {
@@ -879,6 +883,39 @@ const discordPermissions = [
   ['players.history','Player profiles'],['players.notes','Player notes'],['players.actions','Player flags'],
   ['players.mute','Mute players'],['players.kick','Kick players'],['players.ban','Ban players'],
 ] as const
+const gameRaPermissions = [
+  'KickingAndShortTermBanning','BanningUpToDay','LongTermBanning','ForceclassSelf',
+  'ForceclassToSpectator','ForceclassWithoutRestrictions','GivingItems','WarheadEvents',
+  'RespawnEvents','RoundEvents','SetGroup','GameplayData','Overwatch','FacilityManagement',
+  'PlayersManagement','PermissionsManagement','ServerConsoleCommands','ViewHiddenBadges','ServerConfigs',
+] as const
+
+function IngamePermissionsPage({servers,onError}:{servers:Server[];onError:(message:string)=>void}) {
+  const [settings,setSettings]=useState<IntegrationSettings|null>(null)
+  const load=useCallback(()=>api<IntegrationSettings>('/integrations').then(value=>setSettings({
+    ...defaultIntegration,...value,discordGameRoleGrants:value.discordGameRoleGrants??[],
+  })).catch(error=>onError(error.message)),[onError])
+  useEffect(()=>{void load()},[load])
+  if(!settings)return <Skeleton/>
+  const roles=settings.discordGameRoleGrants??[]
+  const update=(index:number,patch:Partial<IntegrationSettings['discordGameRoleGrants'][number]>)=>setSettings({...settings,discordGameRoleGrants:roles.map((role,i)=>i===index?{...role,...patch}:role)})
+  const add=()=>setSettings({...settings,discordGameRoleGrants:[...roles,{roleId:'',serverId:servers[0]?.id??'',groupName:'',priority:0,enabled:true,permissions:[],inheritedGroups:[],badgeText:'',badgeColor:'silver',hidden:false,cover:true,reservedSlot:false,kickPower:0,requiredKickPower:0,pluginPermissions:[]}]})
+  return <><PageTitle eyebrow="ACCESS CONTROL" title="In-game Permissions"><button className="primary" onClick={add}><Plus size={15}/> ADD ROLE</button></PageTitle>
+    <section className="panel ingame-permissions-intro"><Shield size={24}/><div><h2>Discord-synchronized Remote Admin</h2><p>Define complete runtime SCP:SL roles. The highest-priority matching Discord role is applied when a linked player joins.</p></div><span className="tag">{roles.length} ROLE{roles.length===1?'':'S'}</span></section>
+    <form className="ingame-permissions-page" onSubmit={async event=>{event.preventDefault();try{await api('/integrations',{method:'PUT',body:JSON.stringify(settings)});window.dispatchEvent(new CustomEvent('panel-success',{detail:'In-game permissions saved'}))}catch(error){onError(error instanceof Error?error.message:'Unable to save roles')}}}>
+      {roles.map((role,index)=><article className="panel ingame-role-editor" key={index}><header><div><span className="eyebrow">ROLE {index+1}</span><h2>{role.groupName||'New in-game role'}</h2><p>Discord role {role.roleId||'not selected'} · Priority {role.priority}</p></div><div><label className="check-row"><input type="checkbox" checked={role.enabled} onChange={e=>update(index,{enabled:e.target.checked})}/> Enabled</label><button type="button" className="danger" onClick={()=>setSettings({...settings,discordGameRoleGrants:roles.filter((_,i)=>i!==index)})}>DELETE</button></div></header>
+        <div className="form-row"><label>DISCORD ROLE ID<input value={role.roleId} onChange={e=>update(index,{roleId:e.target.value.trim()})}/></label><label>SERVER<select value={role.serverId} onChange={e=>update(index,{serverId:e.target.value})}>{servers.map(server=><option value={server.id} key={server.id}>{server.name}</option>)}</select></label><label>RANK NAME<input value={role.groupName} onChange={e=>update(index,{groupName:e.target.value.trim()})}/></label><label>PRIORITY<input type="number" value={role.priority} onChange={e=>update(index,{priority:Number(e.target.value)})}/></label></div>
+        <div className="form-row"><label>BADGE TEXT<input value={role.badgeText??''} onChange={e=>update(index,{badgeText:e.target.value})}/></label><label>BADGE COLOR<input value={role.badgeColor??'silver'} onChange={e=>update(index,{badgeColor:e.target.value.trim()})}/></label><label>KICK POWER<input type="number" min={0} max={255} value={role.kickPower??0} onChange={e=>update(index,{kickPower:Number(e.target.value)})}/></label><label>REQUIRED KICK POWER<input type="number" min={0} max={255} value={role.requiredKickPower??0} onChange={e=>update(index,{requiredKickPower:Number(e.target.value)})}/></label></div>
+        <div className="permission-chip-grid game-role-flags"><label className="check-row"><input type="checkbox" checked={role.hidden??false} onChange={e=>update(index,{hidden:e.target.checked})}/> Hidden badge</label><label className="check-row"><input type="checkbox" checked={role.cover??true} onChange={e=>update(index,{cover:e.target.checked})}/> Cover global badge</label><label className="check-row"><input type="checkbox" checked={role.reservedSlot??false} onChange={e=>update(index,{reservedSlot:e.target.checked})}/> Reserved slot</label></div>
+        <label>INHERITED RANK NAMES<input value={(role.inheritedGroups??[]).join(', ')} onChange={e=>update(index,{inheritedGroups:e.target.value.split(',').map(x=>x.trim()).filter(Boolean)})}/></label>
+        <section className="game-permission-selector"><div><span className="eyebrow">REMOTE ADMIN PERMISSIONS</span><strong>{(role.permissions??[]).length} selected</strong></div><div className="permission-chip-grid">{gameRaPermissions.map(permission=>{const selected=role.permissions??[];return <label className="check-row" key={permission}><input type="checkbox" checked={selected.includes(permission)} onChange={()=>update(index,{permissions:selected.includes(permission)?selected.filter(x=>x!==permission):[...selected,permission]})}/>{permission}</label>})}</div></section>
+        <label>PLUGIN PERMISSIONS<input value={(role.pluginPermissions??[]).join(', ')} onChange={e=>update(index,{pluginPermissions:e.target.value.split(',').map(x=>x.trim()).filter(Boolean)})} placeholder="plugin.permission, another.permission"/></label>
+      </article>)}
+      {!roles.length&&<div className="empty-page"><Shield/><h2>No in-game roles</h2><p>Add a role to synchronize Discord staff access with SCP:SL Remote Admin.</p><button type="button" className="primary" onClick={add}>ADD FIRST ROLE</button></div>}
+      {!!roles.length&&<div className="sticky-save-bar"><span>{roles.length} runtime role{roles.length===1?'':'s'} configured</span><button className="primary"><Save size={15}/> SAVE IN-GAME PERMISSIONS</button></div>}
+    </form>
+  </>
+}
 
 function DiscordBotPanel({ servers, onError }: { servers: Server[]; onError: (e: string) => void }) {
   const [settings,setSettings] = useState<IntegrationSettings | null>(null)
@@ -901,7 +938,7 @@ function DiscordBotPanel({ servers, onError }: { servers: Server[]; onError: (e:
   if (!settings) return null
   const addGrant=()=>setSettings({...settings,discordRoleGrants:[...(settings.discordRoleGrants ?? []),{roleId:'',serverId:servers[0]?.id ?? '',permissions:['view']}]})
   const updateGrant=(index:number,patch:Partial<IntegrationSettings['discordRoleGrants'][number]>)=>setSettings({...settings,discordRoleGrants:(settings.discordRoleGrants ?? []).map((grant,i)=>i===index?{...grant,...patch}:grant)})
-  const addGameRole=()=>setSettings({...settings,discordGameRoleGrants:[...(settings.discordGameRoleGrants ?? []),{roleId:'',serverId:servers[0]?.id ?? '',groupName:'',priority:0,enabled:true}]})
+  const addGameRole=()=>setSettings({...settings,discordGameRoleGrants:[...(settings.discordGameRoleGrants ?? []),{roleId:'',serverId:servers[0]?.id ?? '',groupName:'',priority:0,enabled:true,permissions:[],inheritedGroups:[],badgeText:'',badgeColor:'silver',hidden:false,cover:true,reservedSlot:false,kickPower:0,requiredKickPower:0,pluginPermissions:[]}]})
   const updateGameRole=(index:number,patch:Partial<IntegrationSettings['discordGameRoleGrants'][number]>)=>setSettings({...settings,discordGameRoleGrants:(settings.discordGameRoleGrants ?? []).map((grant,i)=>i===index?{...grant,...patch}:grant)})
   return <form className="panel settings-alerts discord-settings" onSubmit={async e => {
     e.preventDefault()
@@ -923,7 +960,12 @@ function DiscordBotPanel({ servers, onError }: { servers: Server[]; onError: (e:
     <div className="role-grant-editor game-role-editor"><div className="panel-head"><div><span className="eyebrow">IN-GAME PERMISSIONS</span><h3>Discord → SCP:SL RA groups</h3><p>Linked players receive an existing Remote Admin group when they join. Higher priority wins when multiple Discord roles match.</p></div><button type="button" onClick={addGameRole}>ADD MAPPING</button></div>
       {(settings.discordGameRoleGrants ?? []).map((grant,index)=><section className="role-grant-card game-role-card" key={index}>
         <label className="check-row"><input type="checkbox" checked={grant.enabled} onChange={e=>updateGameRole(index,{enabled:e.target.checked})}/> Mapping enabled</label>
-        <div className="form-row"><label>DISCORD ROLE ID<input value={grant.roleId} onChange={e=>updateGameRole(index,{roleId:e.target.value.trim()})} placeholder="Discord role snowflake"/></label><label>SERVER<select value={grant.serverId} onChange={e=>updateGameRole(index,{serverId:e.target.value})}>{servers.map(server=><option value={server.id} key={server.id}>{server.name}</option>)}</select></label><label>IN-GAME RA GROUP<input value={grant.groupName} onChange={e=>updateGameRole(index,{groupName:e.target.value.trim()})} placeholder="moderator"/></label><label>PRIORITY<input type="number" value={grant.priority} onChange={e=>updateGameRole(index,{priority:Number(e.target.value)})}/></label><button type="button" className="danger" onClick={()=>setSettings({...settings,discordGameRoleGrants:(settings.discordGameRoleGrants ?? []).filter((_,i)=>i!==index)})}>REMOVE</button></div>
+        <div className="form-row"><label>DISCORD ROLE ID<input value={grant.roleId} onChange={e=>updateGameRole(index,{roleId:e.target.value.trim()})} placeholder="Discord role snowflake"/></label><label>SERVER<select value={grant.serverId} onChange={e=>updateGameRole(index,{serverId:e.target.value})}>{servers.map(server=><option value={server.id} key={server.id}>{server.name}</option>)}</select></label><label>RANK NAME<input value={grant.groupName} onChange={e=>updateGameRole(index,{groupName:e.target.value.trim()})} placeholder="moderator"/></label><label>PRIORITY<input type="number" value={grant.priority} onChange={e=>updateGameRole(index,{priority:Number(e.target.value)})}/></label><button type="button" className="danger" onClick={()=>setSettings({...settings,discordGameRoleGrants:(settings.discordGameRoleGrants ?? []).filter((_,i)=>i!==index)})}>REMOVE</button></div>
+        <div className="form-row"><label>BADGE TEXT<input value={grant.badgeText??''} onChange={e=>updateGameRole(index,{badgeText:e.target.value})} placeholder="MODERATOR"/></label><label>BADGE COLOR<input value={grant.badgeColor??'silver'} onChange={e=>updateGameRole(index,{badgeColor:e.target.value.trim()})} placeholder="silver"/></label><label>KICK POWER<input type="number" min={0} max={255} value={grant.kickPower??0} onChange={e=>updateGameRole(index,{kickPower:Number(e.target.value)})}/></label><label>REQUIRED KICK POWER<input type="number" min={0} max={255} value={grant.requiredKickPower??0} onChange={e=>updateGameRole(index,{requiredKickPower:Number(e.target.value)})}/></label></div>
+        <div className="permission-chip-grid game-role-flags"><label className="check-row"><input type="checkbox" checked={grant.hidden??false} onChange={e=>updateGameRole(index,{hidden:e.target.checked})}/> Hidden badge</label><label className="check-row"><input type="checkbox" checked={grant.cover??true} onChange={e=>updateGameRole(index,{cover:e.target.checked})}/> Cover global badge</label><label className="check-row"><input type="checkbox" checked={grant.reservedSlot??false} onChange={e=>updateGameRole(index,{reservedSlot:e.target.checked})}/> Reserved slot</label></div>
+        <label>INHERITED RANK NAMES<input value={(grant.inheritedGroups??[]).join(', ')} onChange={e=>updateGameRole(index,{inheritedGroups:e.target.value.split(',').map(x=>x.trim()).filter(Boolean)})} placeholder="helper, junior-moderator"/></label>
+        <div className="game-permission-selector"><span className="eyebrow">REMOTE ADMIN PERMISSIONS</span><div className="permission-chip-grid">{gameRaPermissions.map(permission=>{const selected=grant.permissions??[];return <label className="check-row" key={permission}><input type="checkbox" checked={selected.includes(permission)} onChange={()=>updateGameRole(index,{permissions:selected.includes(permission)?selected.filter(x=>x!==permission):[...selected,permission]})}/>{permission}</label>})}</div></div>
+        <label>PLUGIN PERMISSIONS<input value={(grant.pluginPermissions??[]).join(', ')} onChange={e=>updateGameRole(index,{pluginPermissions:e.target.value.split(',').map(x=>x.trim()).filter(Boolean)})} placeholder="plugin.permission, another.permission"/></label>
       </section>)}
       {!(settings.discordGameRoleGrants?.length)&&<p className="muted">No in-game role mappings configured.</p>}
     </div>
