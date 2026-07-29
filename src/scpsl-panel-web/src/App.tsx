@@ -235,7 +235,7 @@ function Panel({ user, onLogout, theme, setTheme }: { user: User; onLogout: () =
         {page === 'servers' && <ServersPage user={user} servers={servers} refresh={load} openServer={openServer} onError={setError}/>}
         {page === 'players' && <GlobalPlayerDatabase onError={setError}/>}
         {page === 'permissions' && user.role === 'Owner' && <IngamePermissionsPage servers={servers} onError={setError}/>}
-        {page === 'donors' && user.role === 'Owner' && <DonorManagementPage servers={servers} onError={setError}/>}
+        {page === 'donors' && user.role === 'Owner' && <DonorManagementPageV2 servers={servers} onError={setError}/>}
         {page === 'server' && <ServerWorkspace user={user} server={selectedServer} tab={serverTab} setTab={navigateServerTab} refresh={load} back={() => navigatePage('servers')} onError={setError}/>}
         {page === 'bans' && <BansPage onError={setError}/>}
         {page === 'schedules' && <SchedulesPage servers={servers} onError={setError}/>}
@@ -1009,6 +1009,55 @@ function IngamePermissionsPage({servers,onError}:{servers:Server[];onError:(mess
       </article>)}
       {!roles.length&&<div className="empty-page"><Shield/><h2>No in-game roles</h2><p>Add a role to synchronize Discord staff access with SCP:SL Remote Admin.</p><button type="button" className="primary" onClick={add}>ADD FIRST ROLE</button></div>}
     </form>
+    {confirmation.dialog}
+  </>
+}
+
+function DonorManagementPageV2({servers,onError}:{servers:Server[];onError:(e:string)=>void}){
+  type Editor={kind:'donor'|'badge';index:number;creating:boolean}
+  const [settings,setSettings]=useState<IntegrationSettings|null>(null)
+  const [persisted,setPersisted]=useState<IntegrationSettings|null>(null)
+  const [roles,setRoles]=useState<{id:string;name:string;position:number;color:number}[]>([])
+  const [players,setPlayers]=useState<{serverId:string;serverName:string;player:StoredPlayer}[]>([])
+  const [editor,setEditor]=useState<Editor|null>(null)
+  const [busy,setBusy]=useState(false)
+  const confirmation=useConfirmDialog()
+  useEffect(()=>{
+    api<IntegrationSettings>('/integrations').then(value=>{const loaded={...defaultIntegration,...value,discordDonorRoleGrants:value.discordDonorRoleGrants??[],customUserBadges:value.customUserBadges??[]};setSettings(loaded);setPersisted(loaded)}).catch(error=>onError(error.message))
+    api<typeof roles>('/integrations/discord/roles').then(setRoles).catch(error=>onError(error.message))
+    api<typeof players>('/players/global').then(setPlayers).catch(error=>onError(error.message))
+  },[onError])
+  if(!settings)return <Skeleton/>
+  const grants=settings.discordDonorRoleGrants??[]
+  const badges=settings.customUserBadges??[]
+  const updateGrant=(index:number,patch:Partial<IntegrationSettings['discordDonorRoleGrants'][number]>)=>setSettings({...settings,discordDonorRoleGrants:grants.map((item,i)=>i===index?{...item,...patch}:item)})
+  const updateBadge=(index:number,patch:Partial<IntegrationSettings['customUserBadges'][number]>)=>setSettings({...settings,customUserBadges:badges.map((item,i)=>i===index?{...item,...patch}:item)})
+  const createDonor=()=>{setSettings({...settings,discordDonorRoleGrants:[...grants,{roleId:'',serverId:servers[0]?.id??'',tier:1,priority:0,enabled:true}]});setEditor({kind:'donor',index:grants.length,creating:true})}
+  const createBadge=()=>{setSettings({...settings,customUserBadges:[...badges,{serverId:servers[0]?.id??'',steamId:'',badgeText:'',badgeColor:'silver'}]});setEditor({kind:'badge',index:badges.length,creating:true})}
+  const close=()=>{if(persisted)setSettings(persisted);setEditor(null)}
+  const save=async(sync=false)=>{
+    setBusy(true)
+    try{await api('/integrations',{method:'PUT',body:JSON.stringify(settings)});setPersisted(settings);setEditor(null);let message='Donor settings saved';if(sync){const result=await api<{donors:number}[]>('/integrations/discord/donors/sync',{method:'POST'});message=`Synchronized ${result.reduce((sum,item)=>sum+item.donors,0)} donor rows`}window.dispatchEvent(new CustomEvent('panel-success',{detail:message}))}
+    catch(error){onError(error instanceof Error?error.message:'Unable to save donor settings')}finally{setBusy(false)}
+  }
+  const remove=async(kind:'donor'|'badge',index:number)=>{
+    if(!await confirmation.ask(kind==='donor'?'Delete donor mapping?':'Delete custom badge?','This item will be removed immediately.','DELETE',true))return
+    const next=kind==='donor'?{...settings,discordDonorRoleGrants:grants.filter((_,i)=>i!==index)}:{...settings,customUserBadges:badges.filter((_,i)=>i!==index)}
+    try{await api('/integrations',{method:'PUT',body:JSON.stringify(next)});setSettings(next);setPersisted(next);window.dispatchEvent(new CustomEvent('panel-success',{detail:'Item deleted'}))}catch(error){onError(error instanceof Error?error.message:'Unable to delete item')}
+  }
+  const grant=editor?.kind==='donor'?grants[editor.index]:null
+  const badge=editor?.kind==='badge'?badges[editor.index]:null
+  const availablePlayers=badge?players.filter(record=>record.serverId===badge.serverId&&record.player.discordId):[]
+  return <><PageTitle eyebrow="DISCORD INTEGRATION" title="Donors & Custom Badges"><button disabled={busy} onClick={()=>void save(true)}><RefreshCw size={15}/> SYNC NOW</button></PageTitle>
+    <article className="panel ingame-permissions-intro"><Users size={28}/><div><h2>Discord-synchronized donors</h2><p>Map Discord roles to donor tiers and assign live bridge-managed badges to linked players.</p></div><span className="tag">{grants.length} MAPPINGS</span></article>
+    <section className="donor-section-head"><div><span className="eyebrow">DONOR ACCESS</span><h2>Discord donor roles</h2></div><button className="primary" onClick={createDonor}><Plus size={15}/> CREATE MAPPING</button></section>
+    <section className="ingame-permissions-page">{!!grants.length&&<div className="ingame-role-grid">{grants.map((item,index)=>{const role=roles.find(value=>value.id===item.roleId);return <article className={`panel ingame-role-card ${item.enabled?'':'disabled'}`} key={index}><header><div className="role-badge-preview">T{item.tier}</div><div><span className="eyebrow">DONOR MAPPING {index+1}</span><h2>{role?.name??'Unassigned Discord role'}</h2><p>{servers.find(server=>server.id===item.serverId)?.name??'Unknown server'}</p></div><span className={`tag ${item.enabled?'success':''}`}>{item.enabled?'ENABLED':'DISABLED'}</span></header><div className="role-card-stats"><div><small>TIER</small><strong>{item.tier}</strong></div><div><small>PRIORITY</small><strong>{item.priority}</strong></div><div><small>ROLE</small><strong>{item.roleId||'—'}</strong></div></div><footer><button className="edit" onClick={()=>setEditor({kind:'donor',index,creating:false})}><Pencil size={14}/> EDIT</button><button className="danger" onClick={()=>void remove('donor',index)}><Trash2 size={14}/> DELETE</button></footer></article>})}</div>}{!grants.length&&<div className="empty-page"><Users/><h2>No donor mappings</h2><p>Create a mapping to begin synchronizing donor roles.</p><button className="primary" onClick={createDonor}>CREATE FIRST MAPPING</button></div>}</section>
+    <section className="donor-section-head"><div><span className="eyebrow">PLAYER COSMETICS</span><h2>Custom user badges</h2></div><button className="primary" onClick={createBadge}><Plus size={15}/> CREATE BADGE</button></section>
+    <section className="ingame-permissions-page">{!!badges.length&&<div className="ingame-role-grid">{badges.map((item,index)=>{const linked=players.find(record=>record.serverId===item.serverId&&record.player.userId.split('@')[0]===item.steamId);return <article className="panel ingame-role-card" key={index}><header><div className="role-badge-preview">{(item.badgeText||'?').slice(0,2).toUpperCase()}</div><div><span className="eyebrow">USER BADGE {index+1}</span><h2>{item.badgeText||'Unnamed badge'}</h2><p>{linked?.player.discordDisplayName??linked?.player.currentName??item.steamId}</p></div><span className="tag">{item.badgeColor.replaceAll('_',' ').toUpperCase()}</span></header><div className="role-card-stats"><div><small>SERVER</small><strong>{servers.find(server=>server.id===item.serverId)?.name??'Unknown'}</strong></div><div><small>STEAM ID</small><strong>{item.steamId||'—'}</strong></div><div><small>COLOR</small><strong>{item.badgeColor}</strong></div></div><footer><button className="edit" onClick={()=>setEditor({kind:'badge',index,creating:false})}><Pencil size={14}/> EDIT</button><button className="danger" onClick={()=>void remove('badge',index)}><Trash2 size={14}/> DELETE</button></footer></article>})}</div>}{!badges.length&&<div className="empty-page"><Shield/><h2>No custom badges</h2><p>Create a bridge-managed badge for a linked player.</p><button className="primary" onClick={createBadge}>CREATE FIRST BADGE</button></div>}</section>
+    {editor&&<div className="modal-backdrop donor-modal-backdrop" onMouseDown={event=>event.target===event.currentTarget&&close()}><form className="modal donor-editor-modal" onSubmit={event=>{event.preventDefault();void save(false)}}><div className="modal-head"><div><span className="eyebrow">{editor.creating?'CREATE':'EDIT'} {editor.kind==='donor'?'DONOR MAPPING':'USER BADGE'}</span><h2>{editor.kind==='donor'?'Configure donor role':'Configure custom badge'}</h2><p>{editor.kind==='donor'?'Choose a Discord role, server, donor tier, and priority.':'Choose a linked user, badge text, and badge color.'}</p></div><button type="button" className="icon-button" onClick={close}><X size={18}/></button></div><div className="donor-modal-body">
+      {grant&&<><label className="check-row"><input type="checkbox" checked={grant.enabled} onChange={event=>updateGrant(editor.index,{enabled:event.target.checked})}/> Mapping enabled</label><div className="form-row"><label>DISCORD ROLE<select required value={grant.roleId} onChange={event=>updateGrant(editor.index,{roleId:event.target.value})}><option value="">Select a Discord role…</option>{grant.roleId&&!roles.some(role=>role.id===grant.roleId)&&<option value={grant.roleId}>Unknown role ({grant.roleId})</option>}{roles.map(role=><option value={role.id} key={role.id}>{role.name} · {role.id}</option>)}</select></label><label>SERVER<select required value={grant.serverId} onChange={event=>updateGrant(editor.index,{serverId:event.target.value})}>{servers.map(server=><option value={server.id} key={server.id}>{server.name}</option>)}</select></label><label>DONOR TIER<input required type="number" min={1} value={grant.tier} onChange={event=>updateGrant(editor.index,{tier:Number(event.target.value)})}/></label><label>PRIORITY<input required type="number" value={grant.priority} onChange={event=>updateGrant(editor.index,{priority:Number(event.target.value)})}/></label></div></>}
+      {badge&&<div className="form-row"><label>SERVER<select required value={badge.serverId} onChange={event=>updateBadge(editor.index,{serverId:event.target.value,steamId:''})}>{servers.map(server=><option value={server.id} key={server.id}>{server.name}</option>)}</select></label><label>LINKED USER<select required value={badge.steamId} onChange={event=>updateBadge(editor.index,{steamId:event.target.value})}><option value="">Select a linked user…</option>{badge.steamId&&!availablePlayers.some(record=>record.player.userId.split('@')[0]===badge.steamId)&&<option value={badge.steamId}>{badge.steamId}</option>}{availablePlayers.map(record=>{const steam=record.player.userId.split('@')[0];return <option value={steam} key={record.player.id}>{record.player.discordDisplayName??record.player.currentName} · {steam}</option>})}</select></label><label>BADGE TEXT<input required maxLength={64} value={badge.badgeText} onChange={event=>updateBadge(editor.index,{badgeText:event.target.value})} placeholder="SUPPORTER"/></label><label>BADGE COLOR<select required value={badge.badgeColor} onChange={event=>updateBadge(editor.index,{badgeColor:event.target.value})}>{gameBadgeColors.map(color=><option value={color} key={color}>{color.replaceAll('_',' ')}</option>)}</select></label></div>}
+    </div><div className="modal-actions"><button type="button" onClick={close}>CANCEL</button><button className="primary" disabled={busy}><Save size={15}/> {busy?'SAVING…':editor.creating?'CREATE':'SAVE CHANGES'}</button></div></form></div>}
     {confirmation.dialog}
   </>
 }
