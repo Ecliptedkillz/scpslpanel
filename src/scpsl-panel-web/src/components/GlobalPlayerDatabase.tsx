@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import { AlertTriangle, Ban, Clock3, ExternalLink, FileText, History, IdCard,
-  Search, Shield, StickyNote, Tags, UserRound, Users, X } from 'lucide-react'
+  Link2, Search, Shield, StickyNote, Tags, UserCheck, UserRound, Users, X } from 'lucide-react'
 import { api } from '../api'
 import type { StoredPlayer } from './PlayerHistoryView'
 
@@ -131,7 +131,17 @@ function GlobalProfileModal({record,close,onError,onUpdated}:{record:GlobalPlaye
       <section><span className="eyebrow">DISCORD IDENTITY</span><strong>{player.discordDisplayName ?? (player.discordId ? 'Linked · profile unavailable' : 'Not linked')}</strong><code>{player.discordId ?? 'No Discord ID'}</code><div>{player.discordRoles?.map(role=><span className="tag" key={role}>{role}</span>)}</div>{player.discordId && !player.discordRoles?.length && <small className="identity-hint">Enable Guild Members intent to load server nickname and roles.</small>}</section>
     </div>
     <div className="profile-stats"><div><span>FIRST SEEN</span><strong>{new Date(player.firstConnectedAt).toLocaleDateString()}</strong></div><div><span>LAST SEEN</span><strong>{new Date(player.lastConnectedAt).toLocaleString()}</strong></div><div><span>PLAYTIME</span><strong>{playtime(player.playtimeSeconds)}</strong></div><div><span>RISK SCORE</span><strong className={risk>=40?'risk-high':''}>{risk}/100</strong></div></div>
-    <div className="global-profile-actions"><button onClick={()=>openAction('warning')}>ADD WARNING</button><button onClick={()=>openAction('watchlist')}>WATCHLIST</button><button onClick={()=>openAction('allowlist')}>ALLOWLIST</button><input value={discordId} onChange={e=>setDiscordId(e.target.value.trim())} placeholder="Discord user ID"/><button onClick={saveLink}>SAVE DISCORD LINK</button><input value={note} onChange={e=>setNote(e.target.value)} placeholder="Private staff note"/><button className="primary" onClick={addNote}>ADD NOTE</button></div>
+    <div className="global-profile-actions">
+      <div className="profile-moderation-buttons">
+        <button className="warning-action" onClick={()=>openAction('warning')}><AlertTriangle/>Add warning</button>
+        <button onClick={()=>openAction('watchlist')}><Shield/>Watchlist</button>
+        <button onClick={()=>openAction('allowlist')}><UserCheck/>Allowlist</button>
+      </div>
+      <div className="profile-utility-actions">
+        <label><span>DISCORD ID</span><div><input value={discordId} onChange={e=>setDiscordId(e.target.value.trim())} placeholder="Discord user ID"/><button title="Save Discord link" onClick={saveLink}><Link2/>Save</button></div></label>
+        <label className="profile-note-control"><span>STAFF NOTE</span><div><input value={note} onChange={e=>setNote(e.target.value)} placeholder="Write a private staff note…"/><button className="primary" onClick={addNote}><StickyNote/>Add note</button></div></label>
+      </div>
+    </div>
     <div className="global-profile-columns">
       <section><h3>KNOWN NAMES</h3>{player.nameHistory.slice().reverse().map(name=><div className="history-entry" key={name.name}><strong>{name.name}</strong><small>{new Date(name.lastSeenAt).toLocaleString()}</small></div>)}</section>
       <section><h3>MODERATION HISTORY</h3>{player.moderationHistory.slice().reverse().map(item=><div className="history-entry" key={item.id}><strong><span className="tag red">{item.type.toUpperCase()}</span> {item.reason}</strong><small>{item.actor} · {new Date(item.at).toLocaleString()}</small></div>)}{!player.moderationHistory.length && <div className="empty-mini">No moderation history.</div>}</section>
