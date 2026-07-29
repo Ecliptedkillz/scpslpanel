@@ -13,6 +13,7 @@
     <PackageReference Include="Microsoft.NETFramework.ReferenceAssemblies" Version="1.0.3" PrivateAssets="all" />
     <Reference Include="LabApi" HintPath="$(ScpSlManagedPath)\LabApi.dll" Private="false" />
     <Reference Include="Assembly-CSharp" HintPath="$(ScpSlManagedPath)\Assembly-CSharp.dll" Private="false" />
+    <Reference Include="UnityEngine.CoreModule" HintPath="$(ScpSlManagedPath)\UnityEngine.CoreModule.dll" Private="false" />
     <Reference Include="Mirror" HintPath="$(ScpSlManagedPath)\Mirror.dll" Private="false" />
     <Reference Include="CommandSystem.Core" HintPath="$(ScpSlManagedPath)\CommandSystem.Core.dll" Private="false" />
     <Reference Include="System.Net.Http" />
@@ -23,6 +24,7 @@
     <Error Condition="'$(ScpSlManagedPath)' == ''" Text="Set SCPSL_MANAGED to the SCP Secret Laboratory\SCPSL_Data\Managed directory." />
     <Error Condition="!Exists('$(ScpSlManagedPath)\LabApi.dll')" Text="LabApi.dll was not found in $(ScpSlManagedPath)." />
     <Error Condition="!Exists('$(ScpSlManagedPath)\Assembly-CSharp.dll')" Text="Assembly-CSharp.dll was not found in $(ScpSlManagedPath)." />
+    <Error Condition="!Exists('$(ScpSlManagedPath)\UnityEngine.CoreModule.dll')" Text="UnityEngine.CoreModule.dll was not found in $(ScpSlManagedPath)." />
     <Error Condition="!Exists('$(ScpSlManagedPath)\Mirror.dll')" Text="Mirror.dll was not found in $(ScpSlManagedPath)." />
     <Error Condition="!Exists('$(ScpSlManagedPath)\CommandSystem.Core.dll')" Text="CommandSystem.Core.dll was not found in $(ScpSlManagedPath)." />
   </Target>
