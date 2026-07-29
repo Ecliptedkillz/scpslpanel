@@ -94,6 +94,50 @@ public sealed class DiscordLinkService(NotificationService settingsService, ILog
         }
     }
 
+    public async Task<BridgeCustomBadge> ResolveCustomBadgeAsync(
+        ServerDefinition server, string userId)
+    {
+        var steamId = userId.Split('@', 2)[0].Trim();
+        if (string.IsNullOrWhiteSpace(steamId)) return new(false);
+        var settings = await settingsService.GetAsync();
+        var userBadge = settings.CustomUserBadges?.LastOrDefault(badge =>
+            badge.ServerId == server.Id
+            && badge.SteamId.Equals(steamId, StringComparison.OrdinalIgnoreCase)
+            && !string.IsNullOrWhiteSpace(badge.BadgeText));
+        if (userBadge is not null)
+            return new(true, userBadge.BadgeText.Trim(),
+                string.IsNullOrWhiteSpace(userBadge.BadgeColor) ? "silver" : userBadge.BadgeColor.Trim());
+
+        var badges = settings.CustomRoleBadges?
+            .Where(badge => badge.Enabled && badge.ServerId == server.Id
+                && !string.IsNullOrWhiteSpace(badge.RoleId)
+                && !string.IsNullOrWhiteSpace(badge.BadgeText))
+            .OrderByDescending(badge => badge.Priority).ToArray() ?? [];
+        var links = ReadLinks(server);
+        if (badges.Length == 0 || !links.TryGetValue(steamId, out var discordId)
+            || string.IsNullOrWhiteSpace(settings.DiscordBotToken)
+            || string.IsNullOrWhiteSpace(settings.DiscordGuildId)) return new(false);
+        try
+        {
+            using var request = new HttpRequestMessage(HttpMethod.Get,
+                $"https://discord.com/api/v10/guilds/{settings.DiscordGuildId}/members/{discordId}");
+            request.Headers.Authorization = new AuthenticationHeaderValue("Bot", settings.DiscordBotToken);
+            using var response = await _http.SendAsync(request);
+            if (!response.IsSuccessStatusCode) return new(false);
+            using var document = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+            var roleIds = document.RootElement.GetProperty("roles").EnumerateArray()
+                .Select(role => role.GetString()).Where(role => role is not null).ToHashSet();
+            var match = badges.FirstOrDefault(badge => roleIds.Contains(badge.RoleId));
+            return match is null ? new(false) : new(true, match.BadgeText.Trim(),
+                string.IsNullOrWhiteSpace(match.BadgeColor) ? "silver" : match.BadgeColor.Trim());
+        }
+        catch (Exception exception)
+        {
+            logger.LogWarning(exception, "Discord custom role badge lookup failed for {UserId}", userId);
+            return new(false);
+        }
+    }
+
     public async Task<IReadOnlyList<DiscordGuildRole>> ListGuildRolesAsync()
     {
         var settings = await settingsService.GetAsync();
