@@ -32,6 +32,10 @@ internal sealed class BridgeClient : IDisposable
         new(StringComparer.OrdinalIgnoreCase);
     private readonly HashSet<string> _assignedCustomBadgeUsers =
         new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, List<TagOptionPayload>> _tagOptions =
+        new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, string> _selectedTags =
+        new(StringComparer.OrdinalIgnoreCase);
     private string _roundState = "waiting";
     private HeartbeatPayload _snapshot = new();
     private bool _disposed;
@@ -260,6 +264,13 @@ internal sealed class BridgeClient : IDisposable
         _ = CheckDiscordGameRoleWhenReadyAsync(player.PlayerId);
     }
 
+    public void ClearTagSession(string? userId)
+    {
+        if (string.IsNullOrWhiteSpace(userId)) return;
+        _tagOptions.Remove(userId);
+        _selectedTags.Remove(userId);
+    }
+
     private async Task CheckDiscordGameRoleWhenReadyAsync(int playerId)
     {
         // PlayerJoined can fire before Steam authentication and the native RA Members
@@ -336,6 +347,14 @@ internal sealed class BridgeClient : IDisposable
                 }
                 PanelRainbowTag.Attach(current);
                 _assignedGameRoleUsers.Add(current.UserId);
+                var options = GetOrCreateTagOptions(current.UserId);
+                options.RemoveAll(option => option.Id == "staff");
+                if (!string.IsNullOrWhiteSpace(assignment.BadgeText))
+                    options.Insert(0, new TagOptionPayload
+                    {
+                        Id = "staff", Type = "staff role", BadgeText = assignment.BadgeText,
+                        BadgeColor = assignment.BadgeColor
+                    });
                 Logger.Info($"SCP Control assigned RA group '{assignment.GroupName}' to {current.UserId} from Discord role {assignment.DiscordRoleId}.");
                 RecordModerationEvent("role-sync", current, current.UserId, current.DisplayName,
                     $"Assigned in-game group {assignment.GroupName}", null, "Discord role sync");
@@ -356,29 +375,122 @@ internal sealed class BridgeClient : IDisposable
         try
         {
             using var request = Authorized(HttpMethod.Get,
-                Endpoint($"custom-badge?userId={Uri.EscapeDataString(userId)}"));
+                Endpoint($"tag-options?userId={Uri.EscapeDataString(userId)}"));
             using var response = await _http.SendAsync(request).ConfigureAwait(false);
             if (!response.IsSuccessStatusCode) return;
-            var serializer = new DataContractJsonSerializer(typeof(CustomBadgePayload));
+            var serializer = new DataContractJsonSerializer(typeof(TagOptionsPayload));
             using var stream = await response.Content.ReadAsStreamAsync().ConfigureAwait(false);
-            var badge = serializer.ReadObject(stream) as CustomBadgePayload;
+            var payload = serializer.ReadObject(stream) as TagOptionsPayload;
             Dispatch(() =>
             {
                 var current = Player.ReadyList?.FirstOrDefault(candidate => candidate.PlayerId == playerId);
                 if (current == null) return;
-                if (badge?.Assigned == true && !string.IsNullOrWhiteSpace(badge.BadgeText))
+                var options = GetOrCreateTagOptions(current.UserId);
+                if (!options.Any(option => option.Id == "staff")
+                    && ReadGroupTag(current) is { } groupTag)
+                    options.Insert(0, groupTag);
+                options.RemoveAll(option => option.Id != "staff");
+                options.AddRange(payload?.Options ?? new List<TagOptionPayload>());
+                if (!string.IsNullOrWhiteSpace(payload?.SelectedId)
+                    && options.Any(option => option.Id == payload.SelectedId))
+                    _selectedTags[current.UserId] = payload.SelectedId;
+                else if (!string.IsNullOrWhiteSpace(payload?.SelectedId))
+                    _selectedTags.Remove(current.UserId);
+                if (_selectedTags.TryGetValue(current.UserId, out var selectedId)
+                    && options.FirstOrDefault(option => option.Id == selectedId) is { } selected)
                 {
-                    if (TrySetCustomBadge(current, badge.BadgeText, badge.BadgeColor))
-                        _assignedCustomBadgeUsers.Add(current.UserId);
+                    TrySetCustomBadge(current, selected.BadgeText, selected.BadgeColor);
+                    _assignedCustomBadgeUsers.Add(current.UserId);
                 }
-                else if (_assignedCustomBadgeUsers.Remove(current.UserId))
-                    RefreshBadge(current);
+                else if (options.FirstOrDefault(option => option.Id != "staff") is { } automatic)
+                {
+                    TrySetCustomBadge(current, automatic.BadgeText, automatic.BadgeColor);
+                    _assignedCustomBadgeUsers.Add(current.UserId);
+                }
             });
         }
         catch (Exception exception)
         {
             Logger.Warn($"SCP Control custom-badge check failed: {exception.Message}");
         }
+    }
+
+    internal string TagCommand(Player player, string? selection)
+    {
+        var options = GetOrCreateTagOptions(player.UserId);
+        if (string.IsNullOrWhiteSpace(selection) || selection.Equals("list", StringComparison.OrdinalIgnoreCase))
+            return options.Count == 0
+                ? "You do not have any selectable tags."
+                : "Available tags:\n" + string.Join("\n", options.Select((option, index) =>
+                    $"{index + 1}. {option.BadgeText} ({option.Type}, {option.BadgeColor})"))
+                  + "\nUse .tag <number> or .tag default.";
+        if (selection.Equals("default", StringComparison.OrdinalIgnoreCase))
+        {
+            _selectedTags.Remove(player.UserId);
+            _ = SaveTagPreferenceAsync(player.UserId, null);
+            RefreshBadge(player);
+            CheckDiscordGameRole(player);
+            return "Your tag was reset to the automatic default.";
+        }
+        if (!int.TryParse(selection, out var number) || number < 1 || number > options.Count)
+            return "Unknown tag. Use .tag list to see your available tags.";
+        var selected = options[number - 1];
+        _selectedTags[player.UserId] = selected.Id;
+        _ = SaveTagPreferenceAsync(player.UserId, selected.Id);
+        TrySetCustomBadge(player, selected.BadgeText, selected.BadgeColor);
+        return $"Your active tag is now {selected.BadgeText}.";
+    }
+
+    private async Task SaveTagPreferenceAsync(string userId, string? selectedId)
+    {
+        try
+        {
+            using var request = Authorized(HttpMethod.Put,
+                Endpoint($"tag-preference?userId={Uri.EscapeDataString(userId)}"));
+            var serializer = new DataContractJsonSerializer(typeof(TagPreferencePayload));
+            byte[] body;
+            using (var stream = new MemoryStream())
+            {
+                serializer.WriteObject(stream, new TagPreferencePayload { SelectedId = selectedId });
+                body = stream.ToArray();
+            }
+            request.Content = new ByteArrayContent(body);
+            request.Content.Headers.ContentType =
+                new System.Net.Http.Headers.MediaTypeHeaderValue("application/json");
+            using var response = await _http.SendAsync(request).ConfigureAwait(false);
+            if (!response.IsSuccessStatusCode)
+                Logger.Warn($"SCP Control tag preference save rejected: "
+                    + $"{(int)response.StatusCode} {response.ReasonPhrase}");
+        }
+        catch (Exception exception)
+        {
+            Logger.Warn($"SCP Control tag preference save failed: {exception.Message}");
+        }
+    }
+
+    private List<TagOptionPayload> GetOrCreateTagOptions(string userId)
+    {
+        if (!_tagOptions.TryGetValue(userId, out var options))
+            _tagOptions[userId] = options = new List<TagOptionPayload>();
+        return options;
+    }
+
+    private static TagOptionPayload? ReadGroupTag(Player player)
+    {
+        var group = player.UserGroup;
+        if (group == null) return null;
+        const BindingFlags flags = BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic;
+        object? Read(string name) => group.GetType().GetProperty(name, flags)?.GetValue(group)
+            ?? group.GetType().GetField(name, flags)?.GetValue(group);
+        var text = Convert.ToString(Read("BadgeText"));
+        if (string.IsNullOrWhiteSpace(text)) return null;
+        return new TagOptionPayload
+        {
+            Id = "staff",
+            Type = "staff role",
+            BadgeText = text,
+            BadgeColor = Convert.ToString(Read("BadgeColor")) ?? "silver"
+        };
     }
 
     private static bool TrySetCustomBadge(Player player, string text, string color)

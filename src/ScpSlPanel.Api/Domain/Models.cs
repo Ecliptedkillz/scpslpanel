@@ -162,6 +162,11 @@ public sealed record CustomRoleBadge(
     Guid ServerId, string BadgeText, string BadgeColor = "silver",
     int Priority = 0, bool Enabled = true);
 public sealed record BridgeCustomBadge(bool Assigned, string BadgeText = "", string BadgeColor = "silver");
+public sealed record BridgeTagOption(string Id, string Type, string BadgeText, string BadgeColor = "silver");
+public sealed record BridgeTagOptions(IReadOnlyList<BridgeTagOption> Options, string? SelectedId = null);
+public sealed record BridgeTagPreference(string? SelectedId);
+public sealed record PlayerTagPreference(
+    Guid ServerId, string SteamId, string SelectedId, DateTimeOffset UpdatedAt);
 public sealed record DonorSyncResult(
     Guid ServerId, string ServerName, int Donors, int Added, int Updated, int Removed,
     string Path);

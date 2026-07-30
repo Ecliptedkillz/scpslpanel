@@ -20,7 +20,7 @@ public sealed class BridgePlugin : Plugin<BridgeConfig>
     public override string Name => "SCP Control Bridge";
     public override string Description => "Secure live player telemetry bridge for the SCP Control panel.";
     public override string Author => "Ecliptedkillz";
-    public override Version Version => new(0, 9, 0);
+    public override Version Version => new(0, 11, 0);
     public override Version RequiredApiVersion { get; } = new(LabApiProperties.CompiledVersion);
     public override bool IsTransparent => true;
     public override string ConfigFileName { get; set; } = "scp-control-bridge.yml";

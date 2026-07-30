@@ -81,3 +81,36 @@ public sealed class PanelRoleSyncCommand : ICommand
         return true;
     }
 }
+
+[CommandHandler(typeof(ClientCommandHandler))]
+public sealed class PlayerTagCommand : ICommand
+{
+    public string Command => "tag";
+    public string[] Aliases => Array.Empty<string>();
+    public string Description => "Lists or selects one of your available SCP Control tags.";
+
+    public bool Execute(ArraySegment<string> arguments, ICommandSender sender, out string response)
+    {
+        var client = BridgePlugin.ActiveClient;
+        if (client == null)
+        {
+            response = "SCP Control Bridge is unavailable.";
+            return false;
+        }
+        var player = Player.ReadyList.FirstOrDefault(value =>
+            value.UserId.Equals(sender.SenderId, StringComparison.OrdinalIgnoreCase));
+        if (player == null)
+        {
+            response = "Your authenticated player could not be found.";
+            return false;
+        }
+        if (arguments.Count > 1)
+        {
+            response = "Usage: .tag [list | number | default]";
+            return false;
+        }
+        var selection = arguments.Count == 0 ? null : arguments.Array![arguments.Offset];
+        response = client.TagCommand(player, selection);
+        return true;
+    }
+}

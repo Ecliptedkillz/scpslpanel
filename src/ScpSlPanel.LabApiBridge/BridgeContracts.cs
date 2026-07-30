@@ -104,6 +104,28 @@ internal sealed class CustomBadgePayload
 }
 
 [DataContract]
+internal sealed class TagOptionsPayload
+{
+    [DataMember(Name = "options")] public List<TagOptionPayload> Options { get; set; } = new();
+    [DataMember(Name = "selectedId")] public string? SelectedId { get; set; }
+}
+
+[DataContract]
+internal sealed class TagOptionPayload
+{
+    [DataMember(Name = "id")] public string Id { get; set; } = "";
+    [DataMember(Name = "type")] public string Type { get; set; } = "";
+    [DataMember(Name = "badgeText")] public string BadgeText { get; set; } = "";
+    [DataMember(Name = "badgeColor")] public string BadgeColor { get; set; } = "silver";
+}
+
+[DataContract]
+internal sealed class TagPreferencePayload
+{
+    [DataMember(Name = "selectedId")] public string? SelectedId { get; set; }
+}
+
+[DataContract]
 internal sealed class EventPayload
 {
     [DataMember(Name = "type")] public string Type { get; set; } = "";

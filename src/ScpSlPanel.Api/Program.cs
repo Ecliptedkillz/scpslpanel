@@ -341,6 +341,38 @@ app.MapGet("/api/bridge/{serverId:guid}/custom-badge", async (
     return server is null ? Results.NotFound()
         : Results.Ok(await discordLinks.ResolveCustomBadgeAsync(server, userId));
 });
+app.MapGet("/api/bridge/{serverId:guid}/tag-options", async (
+    Guid serverId, string? userId, HttpContext context, ServerManager servers,
+    DiscordLinkService discordLinks, JsonStore store) =>
+{
+    if (!await servers.ValidateBridgeTokenAsync(serverId, context.Request.Headers["X-Bridge-Token"].FirstOrDefault()))
+        return Results.Unauthorized();
+    if (string.IsNullOrWhiteSpace(userId)) return Results.Ok(new BridgeTagOptions([]));
+    var server = await servers.FindAsync(serverId);
+    if (server is null) return Results.NotFound();
+    var steamId = userId.Split('@', 2)[0].Trim();
+    var options = await discordLinks.ResolveTagOptionsAsync(server, userId);
+    var selected = (await store.ReadAsync<PlayerTagPreference>("tag-preferences"))
+        .LastOrDefault(value => value.ServerId == serverId
+            && value.SteamId.Equals(steamId, StringComparison.OrdinalIgnoreCase))?.SelectedId;
+    return Results.Ok(options with { SelectedId = selected });
+});
+app.MapPut("/api/bridge/{serverId:guid}/tag-preference", async (
+    Guid serverId, string? userId, BridgeTagPreference value, HttpContext context,
+    ServerManager servers, JsonStore store) =>
+{
+    if (!await servers.ValidateBridgeTokenAsync(serverId, context.Request.Headers["X-Bridge-Token"].FirstOrDefault()))
+        return Results.Unauthorized();
+    var steamId = userId?.Split('@', 2)[0].Trim() ?? "";
+    if (string.IsNullOrWhiteSpace(steamId)) return Results.BadRequest();
+    var preferences = await store.ReadAsync<PlayerTagPreference>("tag-preferences");
+    preferences.RemoveAll(item => item.ServerId == serverId
+        && item.SteamId.Equals(steamId, StringComparison.OrdinalIgnoreCase));
+    if (!string.IsNullOrWhiteSpace(value.SelectedId))
+        preferences.Add(new(serverId, steamId, value.SelectedId.Trim(), DateTimeOffset.UtcNow));
+    await store.WriteAsync("tag-preferences", preferences);
+    return Results.NoContent();
+});
 app.MapGet("/api/bridge/{serverId:guid}/commands", async (
     Guid serverId, HttpContext context, ServerManager servers, BridgeCommandService commands) =>
 {
