@@ -166,7 +166,7 @@ hour. Technical, moderation, and audit messages may be routed to separate channe
 
 ### Discord donor synchronization
 
-Open the owner-only **Donors & Badges** page to map each Discord donor role to a server and
+Open **Donors & Badges** to map each Discord donor role to a server and
 numeric donor tier. Discord roles are selected by name from a dropdown. Linked identities are read from that server's
 `LabAPI\configs\<query-port>\PlayhousePlugin\DiscordLinks.csv`, and the bot updates
 `PlayhousePlugin\Donators.csv` when it connects, every five minutes, or when **Sync now** is used.
@@ -174,6 +174,8 @@ When multiple donor roles match, the mapping with the highest priority wins. The
 booster state is written to the third column, existing pet indices are preserved, and new donors
 start with pet index `0`. Individual linked users can also receive custom badge text and an
 SCP:SL badge color. Badges are resolved from panel settings and applied live by the LabAPI bridge;
+the owner can delegate these features per server with the `donors.manage` and `badges.manage`
+administrator permissions.
 they do not add fields to or create companion files beside `Donators.csv`.
 
 ## Account security

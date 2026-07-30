@@ -716,7 +716,8 @@ api.MapGet("/players/global", async (
     var results = new List<object>();
     foreach (var server in await servers.DefinitionsAsync())
     {
-        if (!await Can(user, store, server.Id, "players.history")) continue;
+        if (!await Can(user, store, server.Id, "players.history")
+            && !await Can(user, store, server.Id, "badges.manage")) continue;
         var records = await discordLinks.EnrichAsync(server, await players.ListAsync(server.Id));
         results.AddRange(records.Select(player => (object)new { serverId = server.Id, serverName = server.Name, player }));
     }
@@ -1193,6 +1194,63 @@ api.MapPost("/servers/{id:guid}/update", async (Guid id, MaintenanceService main
     return Results.Ok(new { output = await maintenance.UpdateAsync(id, Actor(user)) });
 });
 api.MapGet("/integrations", (NotificationService notifications) => notifications.ForClientAsync()).RequireAuthorization("Owner");
+api.MapGet("/integrations/donors-badges", async (
+    NotificationService notifications, ServerManager servers, ClaimsPrincipal user, JsonStore store) =>
+{
+    var settings = await notifications.GetAsync();
+    var donorServers = new HashSet<Guid>();
+    var badgeServers = new HashSet<Guid>();
+    foreach (var server in await servers.DefinitionsAsync())
+    {
+        if (await Can(user, store, server.Id, "donors.manage")) donorServers.Add(server.Id);
+        if (await Can(user, store, server.Id, "badges.manage")) badgeServers.Add(server.Id);
+    }
+    if (donorServers.Count == 0 && badgeServers.Count == 0) return Results.Forbid();
+    return Results.Ok(new DonorBadgeSettings(
+        (settings.DiscordDonorRoleGrants ?? []).Where(x => donorServers.Contains(x.ServerId)).ToArray(),
+        (settings.CustomUserBadges ?? []).Where(x => badgeServers.Contains(x.ServerId)).ToArray(),
+        (settings.CustomRoleBadges ?? []).Where(x => badgeServers.Contains(x.ServerId)).ToArray()));
+});
+api.MapPut("/integrations/donors-badges", async (
+    DonorBadgeSettings request, NotificationService notifications, ServerManager servers,
+    BridgeStateService bridge, BridgeCommandService commands, AuditService audit,
+    ClaimsPrincipal user, JsonStore store) =>
+{
+    var donorServers = new HashSet<Guid>();
+    var badgeServers = new HashSet<Guid>();
+    foreach (var server in await servers.DefinitionsAsync())
+    {
+        if (await Can(user, store, server.Id, "donors.manage")) donorServers.Add(server.Id);
+        if (await Can(user, store, server.Id, "badges.manage")) badgeServers.Add(server.Id);
+    }
+    if (request.DiscordDonorRoleGrants.Any(x => !donorServers.Contains(x.ServerId))
+        || request.CustomUserBadges.Any(x => !badgeServers.Contains(x.ServerId))
+        || request.CustomRoleBadges.Any(x => !badgeServers.Contains(x.ServerId)))
+        return Results.Forbid();
+
+    var existing = await notifications.GetAsync();
+    var donors = (existing.DiscordDonorRoleGrants ?? []).Where(x => !donorServers.Contains(x.ServerId))
+        .Concat(request.DiscordDonorRoleGrants).ToArray();
+    var userBadges = (existing.CustomUserBadges ?? []).Where(x => !badgeServers.Contains(x.ServerId))
+        .Concat(request.CustomUserBadges).ToArray();
+    var roleBadges = (existing.CustomRoleBadges ?? []).Where(x => !badgeServers.Contains(x.ServerId))
+        .Concat(request.CustomRoleBadges).ToArray();
+    await notifications.SaveAsync(existing with
+    {
+        DiscordDonorRoleGrants = donors,
+        CustomUserBadges = userBadges,
+        CustomRoleBadges = roleBadges
+    });
+    await audit.AddAsync(Actor(user), "donors-badges.update", "Discord donor integration",
+        $"Saved {request.DiscordDonorRoleGrants.Count} donor mapping(s), "
+        + $"{request.CustomRoleBadges.Count} role badge(s), and {request.CustomUserBadges.Count} user badge(s).");
+    foreach (var serverId in request.CustomUserBadges.Select(x => x.ServerId)
+        .Concat(request.CustomRoleBadges.Select(x => x.ServerId)).Distinct())
+        if (bridge.Get(serverId).Connected)
+            foreach (var player in bridge.Get(serverId).Players)
+                _ = Task.Run(() => commands.ExecuteAsync(serverId, "role-sync", player.Id));
+    return Results.NoContent();
+});
 api.MapPut("/integrations", async (PanelIntegrationSettings request, NotificationService notifications,
     PermissionManagementService permissionManagement, BridgeStateService bridge,
     BridgeCommandService commands, AuditService audit, ClaimsPrincipal user) =>
@@ -1234,17 +1292,29 @@ api.MapPost("/integrations/discord/test", async (NotificationService notificatio
     return Results.NoContent();
 }).RequireAuthorization("Owner");
 api.MapPost("/integrations/discord/donors/sync", async (
-    DiscordBotService bot, AuditService audit, ClaimsPrincipal user) =>
+    DiscordBotService bot, AuditService audit, NotificationService notifications,
+    ClaimsPrincipal user, JsonStore store) =>
 {
+    var settings = await notifications.GetAsync();
+    foreach (var serverId in (settings.DiscordDonorRoleGrants ?? [])
+        .Where(x => x.Enabled).Select(x => x.ServerId).Distinct())
+        if (!await Can(user, store, serverId, "donors.manage")) return Results.Forbid();
     var results = await bot.SyncDonorsAsync();
     await audit.AddAsync(Actor(user), "discord.donor-sync", "Donators.csv",
         $"Synchronized {results.Sum(x => x.Donors)} donor rows across {results.Count} server(s).");
     return Results.Ok(results);
-}).RequireAuthorization("Owner");
+});
 api.MapGet("/integrations/discord/diagnostics", (DiscordBotService bot) => bot.DiagnoseAsync())
     .RequireAuthorization("Owner");
-api.MapGet("/integrations/discord/roles", (DiscordLinkService discordLinks) =>
-    discordLinks.ListGuildRolesAsync()).RequireAuthorization("Owner");
+api.MapGet("/integrations/discord/roles", async (
+    DiscordLinkService discordLinks, ServerManager servers, ClaimsPrincipal user, JsonStore store) =>
+{
+    foreach (var server in await servers.DefinitionsAsync())
+        if (await Can(user, store, server.Id, "donors.manage")
+            || await Can(user, store, server.Id, "badges.manage"))
+            return Results.Ok(await discordLinks.ListGuildRolesAsync());
+    return Results.Forbid();
+});
 api.MapGet("/permissions/health", (PermissionManagementService permissions) =>
     permissions.HealthAsync()).RequireAuthorization("Owner");
 api.MapGet("/permissions/diagnose/{serverId:guid}", async (

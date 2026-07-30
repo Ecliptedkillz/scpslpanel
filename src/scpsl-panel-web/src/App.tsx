@@ -202,6 +202,9 @@ function Panel({ user, onLogout, theme, setTheme }: { user: User; onLogout: () =
   const servers = overview?.servers ?? []
   const visibleNav = user.role === 'Owner' ? nav : nav.filter(item =>
     !['permissions', 'bans', 'schedules', 'audit', 'admins'].includes(item.page)
+    && (item.page !== 'donors' || user.serverAccess?.some(grant =>
+      grant.permissions.includes('donors.manage') || grant.permissions.includes('badges.manage'))
+      || user.permissions.includes('donors.manage') || user.permissions.includes('badges.manage'))
     && (item.page !== 'players' || user.serverAccess?.some(grant => grant.permissions.includes('players.history'))
       || user.permissions.includes('players.history')))
   const selectedServer = servers.find(server => server.id === selected)
@@ -237,7 +240,9 @@ function Panel({ user, onLogout, theme, setTheme }: { user: User; onLogout: () =
         {page === 'players' && <GlobalPlayerDatabase onError={setError}/>}
         {page === 'reports' && <ReportTicketsPage servers={servers} onError={setError}/>}
         {page === 'permissions' && user.role === 'Owner' && <IngamePermissionsPage servers={servers} onError={setError}/>}
-        {page === 'donors' && user.role === 'Owner' && <DonorManagementPageV2 servers={servers} onError={setError}/>}
+        {page === 'donors' && (user.role === 'Owner' || servers.some(server =>
+          hasServerPermission(user,server.id,'donors.manage') || hasServerPermission(user,server.id,'badges.manage')))
+          && <DonorManagementPageV2 servers={servers} onError={setError}/>}
         {page === 'server' && <ServerWorkspace user={user} server={selectedServer} tab={serverTab} setTab={navigateServerTab} refresh={load} back={() => navigatePage('servers')} onError={setError}/>}
         {page === 'bans' && <BansPage onError={setError}/>}
         {page === 'schedules' && <SchedulesPage servers={servers} onError={setError}/>}
@@ -703,6 +708,7 @@ function AdminManagerPage({ user, servers, onError }: { user: User; servers: Ser
     {name:'Players',description:'Live players, profiles, and moderation',items:[['players','View live players'],['players.history','View player database'],['players.notes','Add player notes'],['players.actions','Warnings, watchlist and allowlist'],['players.mute','Mute and unmute players'],['players.kick','Kick players'],['players.ban','Ban players']]},
     {name:'Configuration',description:'Plugins and configuration files',items:[['plugins','View plugins'],['plugins.manage','Load, unload, and restart plugins'],['config.view','Read configuration'],['config.write','Edit configuration']]},
     {name:'Operations',description:'Monitoring, announcements, and maintenance',items:[['monitoring','View monitoring and incidents'],['announcements','Send remote announcements'],['maintenance','Backups and server updates']]},
+    {name:'Community',description:'Discord donor access and player cosmetics',items:[['donors.manage','Manage donor role mappings and synchronization'],['badges.manage','Manage custom role and user badges']]},
   ]
   const permissionOptions:ReadonlyArray<readonly [string,string]> = permissionGroups.flatMap(group=>group.items)
   const blank = { id: '', username: '', password: '', enabled: true, serverIds: [] as string[], permissions: [] as string[], serverAccess: [] as ServerAccessGrant[] }
@@ -1045,7 +1051,7 @@ function DonorManagementPageV2({servers,onError}:{servers:Server[];onError:(e:st
   const [busy,setBusy]=useState(false)
   const confirmation=useConfirmDialog()
   useEffect(()=>{
-    api<IntegrationSettings>('/integrations').then(value=>{const loaded={...defaultIntegration,...value,discordDonorRoleGrants:value.discordDonorRoleGrants??[],customUserBadges:value.customUserBadges??[],customRoleBadges:value.customRoleBadges??[]};setSettings(loaded);setPersisted(loaded)}).catch(error=>onError(error.message))
+    api<IntegrationSettings>('/integrations/donors-badges').then(value=>{const loaded={...defaultIntegration,...value,discordDonorRoleGrants:value.discordDonorRoleGrants??[],customUserBadges:value.customUserBadges??[],customRoleBadges:value.customRoleBadges??[]};setSettings(loaded);setPersisted(loaded)}).catch(error=>onError(error.message))
     api<typeof roles>('/integrations/discord/roles').then(setRoles).catch(error=>onError(error.message))
     api<typeof players>('/players/global').then(setPlayers).catch(error=>onError(error.message))
   },[onError])
@@ -1062,13 +1068,13 @@ function DonorManagementPageV2({servers,onError}:{servers:Server[];onError:(e:st
   const close=()=>{if(persisted)setSettings(persisted);setEditor(null)}
   const save=async(sync=false)=>{
     setBusy(true)
-    try{await api('/integrations',{method:'PUT',body:JSON.stringify(settings)});setPersisted(settings);setEditor(null);let message='Donor settings saved';if(sync){const result=await api<{donors:number}[]>('/integrations/discord/donors/sync',{method:'POST'});message=`Synchronized ${result.reduce((sum,item)=>sum+item.donors,0)} donor rows`}window.dispatchEvent(new CustomEvent('panel-success',{detail:message}))}
+    try{await api('/integrations/donors-badges',{method:'PUT',body:JSON.stringify(settings)});setPersisted(settings);setEditor(null);let message='Donor settings saved';if(sync){const result=await api<{donors:number}[]>('/integrations/discord/donors/sync',{method:'POST'});message=`Synchronized ${result.reduce((sum,item)=>sum+item.donors,0)} donor rows`}window.dispatchEvent(new CustomEvent('panel-success',{detail:message}))}
     catch(error){onError(error instanceof Error?error.message:'Unable to save donor settings')}finally{setBusy(false)}
   }
   const remove=async(kind:'donor'|'badge'|'roleBadge',index:number)=>{
     if(!await confirmation.ask(kind==='donor'?'Delete donor mapping?':kind==='roleBadge'?'Delete custom role badge?':'Delete custom user badge?','This item will be removed immediately.','DELETE',true))return
     const next=kind==='donor'?{...settings,discordDonorRoleGrants:grants.filter((_,i)=>i!==index)}:kind==='badge'?{...settings,customUserBadges:badges.filter((_,i)=>i!==index)}:{...settings,customRoleBadges:roleBadges.filter((_,i)=>i!==index)}
-    try{await api('/integrations',{method:'PUT',body:JSON.stringify(next)});setSettings(next);setPersisted(next);window.dispatchEvent(new CustomEvent('panel-success',{detail:'Item deleted'}))}catch(error){onError(error instanceof Error?error.message:'Unable to delete item')}
+    try{await api('/integrations/donors-badges',{method:'PUT',body:JSON.stringify(next)});setSettings(next);setPersisted(next);window.dispatchEvent(new CustomEvent('panel-success',{detail:'Item deleted'}))}catch(error){onError(error instanceof Error?error.message:'Unable to delete item')}
   }
   const grant=editor?.kind==='donor'?grants[editor.index]:null
   const badge=editor?.kind==='badge'?badges[editor.index]:null

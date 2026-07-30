@@ -78,6 +78,10 @@ public sealed record TotpRequest(string Code);
 public sealed record AccountRequest(
     string Username, string? Password, bool Enabled, IReadOnlyList<Guid> ServerIds,
     IReadOnlyList<string> Permissions, IReadOnlyList<ServerAccessGrant>? ServerAccess = null);
+public sealed record DonorBadgeSettings(
+    IReadOnlyList<DiscordDonorRoleGrant> DiscordDonorRoleGrants,
+    IReadOnlyList<CustomUserBadge> CustomUserBadges,
+    IReadOnlyList<CustomRoleBadge> CustomRoleBadges);
 public sealed record CommandRequest(string Command);
 public sealed record ModerationRequest(string PlayerId, string? Reason, int? DurationMinutes);
 public sealed record ConfigFileRequest(string Content);
