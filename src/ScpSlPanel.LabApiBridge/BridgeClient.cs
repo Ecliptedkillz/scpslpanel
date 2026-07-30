@@ -420,13 +420,19 @@ internal sealed class BridgeClient : IDisposable
     internal string TagCommand(Player player, string? selection)
     {
         var options = GetOrCreateTagOptions(player.UserId);
-        if (string.IsNullOrWhiteSpace(selection) || selection.Equals("list", StringComparison.OrdinalIgnoreCase))
+        if (string.IsNullOrWhiteSpace(selection))
             return options.Count == 0
                 ? "You do not have any selectable tags."
                 : "Available tags:\n" + string.Join("\n", options.Select((option, index) =>
                     $"{index + 1}. {option.BadgeText} ({option.Type}, {option.BadgeColor})"))
                   + "\nUse .tag <number> or .tag default.";
         var choice = selection!;
+        if (choice.Equals("list", StringComparison.OrdinalIgnoreCase))
+            return options.Count == 0
+                ? "You do not have any selectable tags."
+                : "Available tags:\n" + string.Join("\n", options.Select((option, index) =>
+                    $"{index + 1}. {option.BadgeText} ({option.Type}, {option.BadgeColor})"))
+                  + "\nUse .tag <number> or .tag default.";
         if (choice.Equals("default", StringComparison.OrdinalIgnoreCase))
         {
             _selectedTags.Remove(player.UserId);

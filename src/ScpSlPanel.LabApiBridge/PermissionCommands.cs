@@ -1,5 +1,6 @@
 using System;
 using System.Linq;
+using System.Reflection;
 using CommandSystem;
 using LabApi.Features.Permissions;
 using LabApi.Features.Wrappers;
@@ -97,13 +98,17 @@ public sealed class PlayerTagCommand : ICommand
             response = "SCP Control Bridge is unavailable.";
             return false;
         }
-        if (sender is not PlayerCommandSender playerSender)
+        const BindingFlags flags = BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic;
+        var senderHub = sender.GetType().GetProperty("ReferenceHub", flags)?.GetValue(sender)
+            ?? sender.GetType().GetField("ReferenceHub", flags)?.GetValue(sender)
+            ?? sender.GetType().GetField("_hub", flags)?.GetValue(sender);
+        if (senderHub == null)
         {
             response = "This command can only be used by an in-game player.";
             return false;
         }
         var player = Player.ReadyList.FirstOrDefault(value =>
-            ReferenceEquals(value.ReferenceHub, playerSender.ReferenceHub));
+            ReferenceEquals(value.ReferenceHub, senderHub));
         if (player == null)
         {
             response = "Your authenticated player could not be found.";
