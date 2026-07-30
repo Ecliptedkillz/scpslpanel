@@ -97,8 +97,13 @@ public sealed class PlayerTagCommand : ICommand
             response = "SCP Control Bridge is unavailable.";
             return false;
         }
+        if (sender is not PlayerCommandSender playerSender)
+        {
+            response = "This command can only be used by an in-game player.";
+            return false;
+        }
         var player = Player.ReadyList.FirstOrDefault(value =>
-            value.UserId.Equals(sender.SenderId, StringComparison.OrdinalIgnoreCase));
+            ReferenceEquals(value.ReferenceHub, playerSender.ReferenceHub));
         if (player == null)
         {
             response = "Your authenticated player could not be found.";

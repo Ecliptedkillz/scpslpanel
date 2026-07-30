@@ -267,8 +267,9 @@ internal sealed class BridgeClient : IDisposable
     public void ClearTagSession(string? userId)
     {
         if (string.IsNullOrWhiteSpace(userId)) return;
-        _tagOptions.Remove(userId);
-        _selectedTags.Remove(userId);
+        var key = userId!;
+        _tagOptions.Remove(key);
+        _selectedTags.Remove(key);
     }
 
     private async Task CheckDiscordGameRoleWhenReadyAsync(int playerId)
@@ -391,10 +392,11 @@ internal sealed class BridgeClient : IDisposable
                     options.Insert(0, groupTag);
                 options.RemoveAll(option => option.Id != "staff");
                 options.AddRange(payload?.Options ?? new List<TagOptionPayload>());
-                if (!string.IsNullOrWhiteSpace(payload?.SelectedId)
-                    && options.Any(option => option.Id == payload.SelectedId))
-                    _selectedTags[current.UserId] = payload.SelectedId;
-                else if (!string.IsNullOrWhiteSpace(payload?.SelectedId))
+                var savedSelection = payload?.SelectedId;
+                if (!string.IsNullOrWhiteSpace(savedSelection)
+                    && options.Any(option => option.Id == savedSelection))
+                    _selectedTags[current.UserId] = savedSelection!;
+                else if (!string.IsNullOrWhiteSpace(savedSelection))
                     _selectedTags.Remove(current.UserId);
                 if (_selectedTags.TryGetValue(current.UserId, out var selectedId)
                     && options.FirstOrDefault(option => option.Id == selectedId) is { } selected)
@@ -424,7 +426,8 @@ internal sealed class BridgeClient : IDisposable
                 : "Available tags:\n" + string.Join("\n", options.Select((option, index) =>
                     $"{index + 1}. {option.BadgeText} ({option.Type}, {option.BadgeColor})"))
                   + "\nUse .tag <number> or .tag default.";
-        if (selection.Equals("default", StringComparison.OrdinalIgnoreCase))
+        var choice = selection!;
+        if (choice.Equals("default", StringComparison.OrdinalIgnoreCase))
         {
             _selectedTags.Remove(player.UserId);
             _ = SaveTagPreferenceAsync(player.UserId, null);
@@ -432,7 +435,7 @@ internal sealed class BridgeClient : IDisposable
             CheckDiscordGameRole(player);
             return "Your tag was reset to the automatic default.";
         }
-        if (!int.TryParse(selection, out var number) || number < 1 || number > options.Count)
+        if (!int.TryParse(choice, out var number) || number < 1 || number > options.Count)
             return "Unknown tag. Use .tag list to see your available tags.";
         var selected = options[number - 1];
         _selectedTags[player.UserId] = selected.Id;
