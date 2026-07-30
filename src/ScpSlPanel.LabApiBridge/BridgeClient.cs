@@ -425,14 +425,14 @@ internal sealed class BridgeClient : IDisposable
                 ? "You do not have any selectable tags."
                 : "Available tags:\n" + string.Join("\n", options.Select((option, index) =>
                     $"{index + 1}. {option.BadgeText} ({option.Type}, {option.BadgeColor})"))
-                  + "\nUse .tag <number> or .tag default.";
+                  + "\nUsage: .changetag <number> or .changetag default.";
         var choice = selection!;
         if (choice.Equals("list", StringComparison.OrdinalIgnoreCase))
             return options.Count == 0
                 ? "You do not have any selectable tags."
                 : "Available tags:\n" + string.Join("\n", options.Select((option, index) =>
                     $"{index + 1}. {option.BadgeText} ({option.Type}, {option.BadgeColor})"))
-                  + "\nUse .tag <number> or .tag default.";
+                  + "\nUsage: .changetag <number> or .changetag default.";
         if (choice.Equals("default", StringComparison.OrdinalIgnoreCase))
         {
             _selectedTags.Remove(player.UserId);
@@ -442,7 +442,7 @@ internal sealed class BridgeClient : IDisposable
             return "Your tag was reset to the automatic default.";
         }
         if (!int.TryParse(choice, out var number) || number < 1 || number > options.Count)
-            return "Unknown tag. Use .tag list to see your available tags.";
+            return "Unknown tag. Use .changetag to see your available tags.";
         var selected = options[number - 1];
         _selectedTags[player.UserId] = selected.Id;
         _ = SaveTagPreferenceAsync(player.UserId, selected.Id);

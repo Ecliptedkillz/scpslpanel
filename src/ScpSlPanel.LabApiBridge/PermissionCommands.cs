@@ -84,11 +84,11 @@ public sealed class PanelRoleSyncCommand : ICommand
 }
 
 [CommandHandler(typeof(ClientCommandHandler))]
-public sealed class PlayerTagCommand : ICommand
+public sealed class PlayerChangeTagCommand : ICommand
 {
-    public string Command => "tag";
+    public string Command => "changetag";
     public string[] Aliases => Array.Empty<string>();
-    public string Description => "Lists or selects one of your available SCP Control tags.";
+    public string Description => "Lists or selects one of your available tags.";
 
     public bool Execute(ArraySegment<string> arguments, ICommandSender sender, out string response)
     {
@@ -116,7 +116,7 @@ public sealed class PlayerTagCommand : ICommand
         }
         if (arguments.Count > 1)
         {
-            response = "Usage: .tag [list | number | default]";
+            response = "Usage: .changetag [number | default]";
             return false;
         }
         var selection = arguments.Count == 0 ? null : arguments.Array![arguments.Offset];
