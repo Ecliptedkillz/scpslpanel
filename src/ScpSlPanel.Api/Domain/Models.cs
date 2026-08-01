@@ -114,6 +114,17 @@ public sealed record MetricSample(
     int Players, ServerState State, bool BridgeConnected);
 public sealed record ServerIncident(
     Guid Id, Guid ServerId, DateTimeOffset At, string Type, string Message, int? ExitCode);
+public sealed record IncidentNote(Guid Id, string Text, string Actor, DateTimeOffset At);
+public sealed record ManagedIncident(
+    Guid Id, Guid ServerId, string Title, string Category, string Severity, string Status,
+    string Description, string CreatedBy, DateTimeOffset CreatedAt, DateTimeOffset UpdatedAt,
+    string? AssignedTo = null, string? Resolution = null, DateTimeOffset? ResolvedAt = null,
+    IReadOnlyList<IncidentNote>? Notes = null);
+public sealed record IncidentCreateRequest(
+    Guid ServerId, string Title, string Category, string Severity, string Description);
+public sealed record IncidentUpdateRequest(
+    string Status, string Severity, string? AssignedTo, string? Resolution);
+public sealed record IncidentNoteRequest(string Text);
 public sealed record ConsoleLogEntry(DateTimeOffset At, string Stream, string Line);
 public sealed record PanelIntegrationSettings(
     string DiscordWebhookUrl = "", bool NotifyCrash = true, bool NotifyRestart = true,

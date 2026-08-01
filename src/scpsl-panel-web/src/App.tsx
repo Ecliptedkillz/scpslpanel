@@ -12,7 +12,7 @@ import { PlayerHistoryView, type StoredPlayer } from './components/PlayerHistory
 import { GlobalPlayerDatabase } from './components/GlobalPlayerDatabase'
 import type { AuditEntry, Ban, BridgeSetup, BridgeStatus, Overview, Player, Schedule, Server } from './types'
 
-type Page = 'overview' | 'servers' | 'server' | 'players' | 'reports' | 'permissions' | 'donors' | 'bans' | 'schedules' | 'audit' | 'admins' | 'settings'
+type Page = 'overview' | 'servers' | 'server' | 'players' | 'reports' | 'incidents' | 'permissions' | 'donors' | 'bans' | 'schedules' | 'audit' | 'admins' | 'settings'
 type ServerTab = 'overview' | 'operations' | 'monitoring' | 'console' | 'players' | 'player-history' | 'activity' | 'restarts' | 'plugins' | 'files' | 'maintenance'
 type ServerAccessGrant = { serverId: string; permissions: string[] }
 type User = { username: string; role: string; serverIds: string[]; permissions: string[]; serverAccess?: ServerAccessGrant[]; twoFactorEnabled?: boolean }
@@ -29,6 +29,7 @@ const nav: { page: Page; label: string; icon: typeof LayoutDashboard }[] = [
   { page: 'servers', label: 'Servers', icon: ServerIcon },
   { page: 'players', label: 'Player Database', icon: Users },
   { page: 'reports', label: 'Report Tickets', icon: Shield },
+  { page: 'incidents', label: 'Incidents', icon: Activity },
   { page: 'permissions', label: 'In-game Permissions', icon: Shield },
   { page: 'donors', label: 'Donors & Badges', icon: Users },
   { page: 'bans', label: 'Ban Manager', icon: BanIcon },
@@ -40,7 +41,7 @@ const nav: { page: Page; label: string; icon: typeof LayoutDashboard }[] = [
 
 const fmtBytes = (bytes: number) => bytes ? `${(bytes / 1024 / 1024).toFixed(0)} MB` : '0 MB'
 const fmtState = (state: unknown) => typeof state === 'string' ? state.toUpperCase() : 'UNKNOWN'
-const topLevelPages = new Set<Page>(['overview', 'servers', 'players', 'reports', 'permissions', 'donors', 'bans', 'schedules', 'audit', 'admins', 'settings'])
+const topLevelPages = new Set<Page>(['overview', 'servers', 'players', 'reports', 'incidents', 'permissions', 'donors', 'bans', 'schedules', 'audit', 'admins', 'settings'])
 const serverTabs = new Set<ServerTab>(['overview', 'operations', 'monitoring', 'console', 'players', 'player-history', 'activity', 'restarts', 'plugins', 'files', 'maintenance'])
 const readRoute = () => {
   const parts = window.location.pathname.split('/').filter(Boolean).map(decodeURIComponent)
@@ -85,10 +86,12 @@ function ServerGlyph({server,size=22}:{server:Pick<Server,'icon'|'accentColor'>;
   return server.icon==='shield'?<Shield {...props}/>:server.icon==='activity'?<Activity {...props}/>:server.icon==='server'?<ServerIcon {...props}/>:<Gamepad2 {...props}/>
 }
 function useConfirmDialog(){
-  const [request,setRequest]=useState<{title:string;message:string;confirm:string;danger:boolean;resolve:(value:boolean)=>void}|null>(null)
-  const ask=(title:string,message:string,confirm='CONFIRM',danger=true)=>new Promise<boolean>(resolve=>setRequest({title,message,confirm,danger,resolve}))
+  const [request,setRequest]=useState<{title:string;message:string;confirm:string;danger:boolean;requiredText?:string;resolve:(value:boolean)=>void}|null>(null)
+  const [typed,setTyped]=useState('')
+  const ask=(title:string,message:string,confirm='CONFIRM',danger=true,requiredText?:string)=>new Promise<boolean>(resolve=>{setTyped('');setRequest({title,message,confirm,danger,requiredText,resolve})})
   const close=(value:boolean)=>{request?.resolve(value);setRequest(null)}
-  const dialog=request?<div className="modal-backdrop confirm-backdrop"><article className="modal confirm-dialog"><div className={`confirm-symbol ${request.danger?'danger':''}`}><Shield size={24}/></div><span className="eyebrow">CONFIRM ACTION</span><h2>{request.title}</h2><p>{request.message}</p><footer><button onClick={()=>close(false)}>CANCEL</button><button className={request.danger?'danger solid':'primary'} onClick={()=>close(true)}>{request.confirm}</button></footer></article></div>:null
+  const valid=!request?.requiredText||typed===request.requiredText
+  const dialog=request?<div className="modal-backdrop confirm-backdrop"><article className="modal confirm-dialog"><div className={`confirm-symbol ${request.danger?'danger':''}`}><Shield size={24}/></div><span className="eyebrow">CONFIRM ACTION</span><h2>{request.title}</h2><p>{request.message}</p>{request.requiredText&&<label className="typed-confirm">TYPE <strong>{request.requiredText}</strong> TO CONTINUE<input autoFocus autoComplete="off" value={typed} onChange={event=>setTyped(event.target.value)} /></label>}<footer><button onClick={()=>close(false)}>CANCEL</button><button disabled={!valid} className={request.danger?'danger solid':'primary'} onClick={()=>close(true)}>{request.confirm}</button></footer></article></div>:null
   return {ask,dialog}
 }
 
@@ -217,7 +220,9 @@ function Panel({ user, onLogout, theme, setTheme }: { user: User; onLogout: () =
       grant.permissions.includes('donors.manage') || grant.permissions.includes('badges.manage'))
       || user.permissions.includes('donors.manage') || user.permissions.includes('badges.manage'))
     && (item.page !== 'players' || user.serverAccess?.some(grant => grant.permissions.includes('players.history'))
-      || user.permissions.includes('players.history')))
+      || user.permissions.includes('players.history'))
+    && (item.page !== 'incidents' || user.serverAccess?.some(grant => grant.permissions.includes('monitoring'))
+      || user.permissions.includes('monitoring')))
   const selectedServer = servers.find(server => server.id === selected)
   const navigatePage = (nextPage: Page) => {
     setPage(nextPage)
@@ -250,7 +255,8 @@ function Panel({ user, onLogout, theme, setTheme }: { user: User; onLogout: () =
         {page === 'overview' && <OverviewPage data={overview} navigatePage={navigatePage} openServer={openServer}/>}
         {page === 'servers' && <ServersPage user={user} servers={servers} refresh={load} openServer={openServer} onError={setError}/>}
         {page === 'players' && <GlobalPlayerDatabase onError={setError}/>}
-        {page === 'reports' && <ReportTicketsPage servers={servers} onError={setError}/>}
+        {page === 'reports' && <ReportTicketsPage user={user} servers={servers} onError={setError}/>}
+        {page === 'incidents' && <IncidentManagementPage user={user} servers={servers} onError={setError}/>}
         {page === 'permissions' && user.role === 'Owner' && <IngamePermissionsPage servers={servers} onError={setError}/>}
         {page === 'donors' && (user.role === 'Owner' || servers.some(server =>
           hasServerPermission(user,server.id,'donors.manage') || hasServerPermission(user,server.id,'badges.manage')))
@@ -264,6 +270,27 @@ function Panel({ user, onLogout, theme, setTheme }: { user: User; onLogout: () =
       </div>
     </main>
   </div>
+}
+
+type ManagedIncident={id:string;serverId:string;title:string;category:string;severity:string;status:string;description:string;createdBy:string;createdAt:string;updatedAt:string;assignedTo?:string;resolution?:string;resolvedAt?:string;notes:Array<{id:string;text:string;actor:string;at:string}>}
+function IncidentManagementPage({user,servers,onError}:{user:User;servers:Server[];onError:(message:string)=>void}){
+  const [items,setItems]=useState<ManagedIncident[]>([])
+  const [selected,setSelected]=useState<ManagedIncident|null>(null)
+  const [creating,setCreating]=useState(false)
+  const [filter,setFilter]=useState('active')
+  const [note,setNote]=useState('')
+  const [form,setForm]=useState({serverId:servers[0]?.id??'',title:'',category:'operations',severity:'medium',description:''})
+  const load=useCallback(()=>api<ManagedIncident[]>('/incidents').then(values=>{setItems(values);setSelected(current=>current?values.find(item=>item.id===current.id)??null:null)}).catch(error=>onError(error.message)),[onError])
+  useEffect(()=>{void load()},[load])
+  useEffect(()=>{if(!form.serverId&&servers[0])setForm(value=>({...value,serverId:servers[0].id}))},[servers,form.serverId])
+  const manageable=servers.filter(server=>hasServerPermission(user,server.id,'players.actions'))
+  const visible=items.filter(item=>filter==='all'||(filter==='active'?!['resolved','dismissed'].includes(item.status):item.status===filter))
+  const create=async(event:FormEvent)=>{event.preventDefault();try{await api('/incidents',{method:'POST',body:JSON.stringify(form)});setCreating(false);setForm({...form,title:'',description:''});await load()}catch(error){onError(error instanceof Error?error.message:'Unable to create incident')}}
+  const update=async(changes:Partial<ManagedIncident>)=>{if(!selected)return;try{const updated=await api<ManagedIncident>(`/incidents/${selected.id}`,{method:'PUT',body:JSON.stringify({status:changes.status??selected.status,severity:changes.severity??selected.severity,assignedTo:changes.assignedTo??selected.assignedTo??'',resolution:changes.resolution??selected.resolution??''})});setSelected(updated);await load()}catch(error){onError(error instanceof Error?error.message:'Unable to update incident')}}
+  const addNote=async(event:FormEvent)=>{event.preventDefault();if(!selected||!note.trim())return;try{const updated=await api<ManagedIncident>(`/incidents/${selected.id}/notes`,{method:'POST',body:JSON.stringify({text:note})});setSelected(updated);setNote('');await load()}catch(error){onError(error instanceof Error?error.message:'Unable to add incident note')}}
+  return <section className="incident-center"><PageTitle eyebrow="OPERATOR WORKSPACE" title="Incident management">{manageable.length>0&&<button className="primary" onClick={()=>setCreating(true)}><Plus size={15}/> NEW INCIDENT</button>}</PageTitle><div className="incident-kpis"><div><strong>{items.filter(item=>item.status==='open').length}</strong><span>OPEN</span></div><div><strong>{items.filter(item=>item.status==='investigating').length}</strong><span>INVESTIGATING</span></div><div><strong>{items.filter(item=>item.severity==='critical'&&!['resolved','dismissed'].includes(item.status)).length}</strong><span>CRITICAL</span></div><div><strong>{items.filter(item=>item.status==='resolved').length}</strong><span>RESOLVED</span></div></div><nav className="incident-filters">{['active','open','investigating','resolved','all'].map(value=><button key={value} className={filter===value?'active':''} onClick={()=>setFilter(value)}>{value.toUpperCase()}</button>)}</nav><div className="incident-list">{visible.map(item=><button key={item.id} onClick={()=>setSelected(item)}><i className={item.severity}/><div><span className="eyebrow">{servers.find(server=>server.id===item.serverId)?.name??'SERVER'} · {item.category}</span><h3>{item.title}</h3><p>{item.description}</p></div><div><span className={`tag ${item.severity==='critical'||item.severity==='high'?'red':''}`}>{item.severity}</span><strong>{item.status}</strong><small>{fmtAgo(item.updatedAt)}</small></div></button>)}{!visible.length&&<EmptyMini text="No incidents match this view."/>}</div>
+  {creating&&<div className="modal-backdrop"><form className="modal incident-create" onSubmit={create}><div className="modal-head"><div><span className="eyebrow">NEW INCIDENT</span><h2>Open an incident</h2></div><button type="button" className="icon-button" onClick={()=>setCreating(false)}><X/></button></div><label>SERVER<select required value={form.serverId} onChange={event=>setForm({...form,serverId:event.target.value})}>{manageable.map(server=><option key={server.id} value={server.id}>{server.name}</option>)}</select></label><label>TITLE<input required maxLength={120} value={form.title} onChange={event=>setForm({...form,title:event.target.value})}/></label><div className="form-row"><label>CATEGORY<select value={form.category} onChange={event=>setForm({...form,category:event.target.value})}><option value="operations">Operations</option><option value="moderation">Moderation</option><option value="security">Security</option><option value="outage">Outage</option><option value="maintenance">Maintenance</option></select></label><label>SEVERITY<select value={form.severity} onChange={event=>setForm({...form,severity:event.target.value})}><option value="low">Low</option><option value="medium">Medium</option><option value="high">High</option><option value="critical">Critical</option></select></label></div><label>DESCRIPTION<textarea required value={form.description} onChange={event=>setForm({...form,description:event.target.value})}/></label><div className="modal-actions"><button type="button" onClick={()=>setCreating(false)}>CANCEL</button><button className="primary">OPEN INCIDENT</button></div></form></div>}
+  {selected&&<div className="modal-backdrop"><article className="modal incident-detail"><header><div><span className={`tag ${selected.severity==='critical'||selected.severity==='high'?'red':''}`}>{selected.severity.toUpperCase()}</span><h2>{selected.title}</h2><p>{servers.find(server=>server.id===selected.serverId)?.name} · Opened by {selected.createdBy} · {new Date(selected.createdAt).toLocaleString()}</p></div><button className="icon-button" onClick={()=>setSelected(null)}><X/></button></header><div className="incident-detail-grid"><main><span className="eyebrow">DESCRIPTION</span><p>{selected.description}</p><span className="eyebrow">TIMELINE</span><div className="incident-timeline"><div><i/><strong>Incident opened</strong><small>{selected.createdBy} · {new Date(selected.createdAt).toLocaleString()}</small></div>{selected.notes?.map(item=><div key={item.id}><i/><strong>{item.text}</strong><small>{item.actor} · {new Date(item.at).toLocaleString()}</small></div>)}</div><form className="incident-note" onSubmit={addNote}><input value={note} onChange={event=>setNote(event.target.value)} placeholder="Add an investigation note…"/><button className="primary">ADD NOTE</button></form></main><aside><label>STATUS<select value={selected.status} onChange={event=>void update({status:event.target.value})}><option value="open">Open</option><option value="investigating">Investigating</option><option value="resolved">Resolved</option><option value="dismissed">Dismissed</option></select></label><label>SEVERITY<select value={selected.severity} onChange={event=>void update({severity:event.target.value})}><option value="low">Low</option><option value="medium">Medium</option><option value="high">High</option><option value="critical">Critical</option></select></label><label>ASSIGNED TO<input value={selected.assignedTo??''} onChange={event=>setSelected({...selected,assignedTo:event.target.value})} onBlur={()=>void update({assignedTo:selected.assignedTo})} placeholder="Operator name"/></label><label>RESOLUTION<textarea value={selected.resolution??''} onChange={event=>setSelected({...selected,resolution:event.target.value})} placeholder="Outcome and follow-up actions"/></label><button onClick={()=>void update({resolution:selected.resolution})}>SAVE RESOLUTION</button></aside></div></article></div>}</section>
 }
 
 function GlobalSearch({close,openServer,openAudit}:{close:()=>void;openServer:(id:string,tab?:ServerTab)=>void;openAudit:()=>void}){
@@ -281,22 +308,32 @@ function GlobalSearch({close,openServer,openAudit}:{close:()=>void;openServer:(i
   return <div className="modal-backdrop search-overlay" onMouseDown={event=>{if(event.target===event.currentTarget)close()}}><section className="global-search"><header><Search/><input autoFocus value={query} onChange={event=>setQuery(event.target.value)} placeholder="Search servers, players, Steam IDs, Discord IDs, audit events…"/><kbd>ESC</kbd></header><div className="global-search-results">{results.map((result,index)=><button key={`${result.type}:${result.serverId??''}:${result.playerId??index}:${index}`} onClick={()=>choose(result)}><span className={`search-result-icon ${result.type}`}>{result.type==='server'?<ServerIcon/>:result.type==='player'?<Users/>:<History/>}</span><span><strong>{result.title}</strong><small>{result.subtitle}</small></span><b>{result.type}</b><ChevronRight/></button>)}{loading&&<div className="empty-mini">Searching…</div>}{!loading&&query.trim().length<2&&<div className="search-hint"><Command/>Type at least two characters to search everything you can access.</div>}{!loading&&query.trim().length>=2&&!results.length&&<div className="empty-mini">No matching servers, players, or audit entries.</div>}</div><footer><span>CTRL K · OPEN SEARCH</span><span>ESC · CLOSE</span></footer></section></div>
 }
 
-type ReportTicket={id:string;serverId:string;createdAt:string;status:string;reporterUserId:string;reporterName:string;targetUserId:string;targetName:string;reason:string;assignedTo?:string;resolution?:string}
-function ReportTicketsPage({servers,onError}:{servers:Server[];onError:(value:string)=>void}){
+type ReportTicket={id:string;serverId:string;createdAt:string;updatedAt?:string;status:string;reporterUserId:string;reporterName:string;targetUserId:string;targetName:string;reason:string;assignedTo?:string;resolution?:string}
+function ReportTicketsPage({user,servers,onError}:{user:User;servers:Server[];onError:(value:string)=>void}){
   const [reports,setReports]=useState<ReportTicket[]|null>(null)
   const [filter,setFilter]=useState('open')
   const [selected,setSelected]=useState<ReportTicket|null>(null)
   const [resolution,setResolution]=useState('')
+  const [busy,setBusy]=useState('')
+  const [search,setSearch]=useState('')
   const load=useCallback(()=>api<ReportTicket[]>('/reports').then(setReports).catch(error=>onError(error.message)),[onError])
   useEffect(()=>{load();const timer=setInterval(load,5000);return()=>clearInterval(timer)},[load])
-  const update=async(status:string)=>{if(!selected)return;try{await api(`/reports/${selected.id}`,{method:'PUT',body:JSON.stringify({status,resolution})});setSelected(null);setResolution('');load()}catch(error){onError(error instanceof Error?error.message:'Unable to update report')}}
+  const update=async(status:string)=>{
+    if(!selected||busy)return
+    if((status==='resolved'||status==='dismissed')&&!resolution.trim()){onError('Add an investigation outcome before closing this report.');return}
+    setBusy(status)
+    try{const updated=await api<ReportTicket>(`/reports/${selected.id}`,{method:'PUT',body:JSON.stringify({status,resolution:resolution.trim()||null})});setSelected(updated);setResolution(updated.resolution??'');setReports(current=>current?.map(item=>item.id===updated.id?updated:item)??null);window.dispatchEvent(new CustomEvent('panel-success',{detail:`Report ${status}.`}))}catch(error){onError(error instanceof Error?error.message:'Unable to update report')}finally{setBusy('')}
+  }
   if(!reports)return <Skeleton/>
-  const visible=filter==='all'?reports:reports.filter(item=>item.status===filter)
+  const query=search.trim().toLowerCase()
+  const visible=reports.filter(item=>(filter==='all'||item.status===filter)&&(!query||[item.reporterName,item.reporterUserId,item.targetName,item.targetUserId,item.reason,item.assignedTo].some(value=>value?.toLowerCase().includes(query))))
+  const canManage=selected?hasServerPermission(user,selected.serverId,'players.actions'):false
+  const serverName=(id:string)=>servers.find(server=>server.id===id)?.name??'Unknown server'
   return <><PageTitle eyebrow="MODERATION" title="In-game report tickets"><button onClick={load}><RefreshCw size={15}/> REFRESH</button></PageTitle>
-    <section className="stat-grid report-stats"><article className="stat-card"><span>OPEN</span><strong>{reports.filter(x=>x.status==='open').length}</strong></article><article className="stat-card"><span>CLAIMED</span><strong>{reports.filter(x=>x.status==='claimed').length}</strong></article><article className="stat-card"><span>RESOLVED</span><strong>{reports.filter(x=>x.status==='resolved').length}</strong></article></section>
-    <div className="page-tabs">{['open','claimed','resolved','dismissed','all'].map(value=><button className={filter===value?'active':''} onClick={()=>setFilter(value)} key={value}>{value.toUpperCase()}</button>)}</div>
-    <section className="panel moderation-center">{visible.map(item=><button className="moderation-feed-row" key={item.id} onClick={()=>{setSelected(item);setResolution(item.resolution??'')}}><span className={`tag ${item.status==='open'?'red':''}`}>{item.status.toUpperCase()}</span><strong>{item.reporterName}<small>{item.reporterUserId}</small></strong><strong>reported {item.targetName}<small>{item.targetUserId}</small></strong><p>{item.reason}</p><small>{servers.find(x=>x.id===item.serverId)?.name??'Unknown server'} · {new Date(item.createdAt).toLocaleString()}</small></button>)}{!visible.length&&<EmptyMini text="No report tickets match this filter."/>}</section>
-    {selected&&<div className="modal-backdrop"><article className="modal moderation-detail-modal"><header><div><span className="eyebrow">REPORT TICKET</span><h2>{selected.targetName}</h2></div><button className="icon-button" onClick={()=>setSelected(null)}><X/></button></header><section className="action-dialog-body"><div><strong>{selected.reporterName}</strong> reported <strong>{selected.targetName}</strong></div><p>{selected.reason}</p><label>STAFF NOTES / RESOLUTION<textarea value={resolution} onChange={event=>setResolution(event.target.value)} placeholder="Investigation notes or outcome…"/></label></section><footer className="modal-actions"><button onClick={()=>void update('dismissed')}>DISMISS</button>{selected.status==='open'&&<button onClick={()=>void update('claimed')}>CLAIM</button>}<button className="primary" onClick={()=>void update('resolved')}>RESOLVE</button></footer></article></div>}
+    <section className="report-summary"><article><span>WAITING</span><strong>{reports.filter(x=>x.status==='open').length}</strong><small>Unclaimed reports</small></article><article><span>IN PROGRESS</span><strong>{reports.filter(x=>x.status==='claimed').length}</strong><small>Assigned to staff</small></article><article><span>RESOLVED</span><strong>{reports.filter(x=>x.status==='resolved').length}</strong><small>Completed investigations</small></article><article><span>DISMISSED</span><strong>{reports.filter(x=>x.status==='dismissed').length}</strong><small>Closed without action</small></article></section>
+    <div className="report-toolbar"><nav>{['open','claimed','resolved','dismissed','all'].map(value=><button className={filter===value?'active':''} onClick={()=>setFilter(value)} key={value}>{value.toUpperCase()} <span>{value==='all'?reports.length:reports.filter(item=>item.status===value).length}</span></button>)}</nav><label><Search size={16}/><input value={search} onChange={event=>setSearch(event.target.value)} placeholder="Search player, ID, reason, staff…"/></label></div>
+    <section className="panel report-list"><header><span>STATUS</span><span>REPORTER</span><span>TARGET</span><span>REASON</span><span>SERVER / AGE</span></header>{visible.map(item=><button className="report-row" key={item.id} onClick={()=>{setSelected(item);setResolution(item.resolution??'')}}><span className={`report-status ${item.status}`}><i/>{item.status.toUpperCase()}</span><strong>{item.reporterName}<small>{item.reporterUserId}</small></strong><strong>{item.targetName}<small>{item.targetUserId}</small></strong><p>{item.reason}</p><span>{serverName(item.serverId)}<small>{fmtAgo(item.createdAt)}{item.assignedTo?` · ${item.assignedTo}`:''}</small></span><ChevronRight size={15}/></button>)}{!visible.length&&<EmptyMini text="No report tickets match this view."/>}</section>
+    {selected&&<div className="modal-backdrop"><article className="modal report-detail-modal"><header><div><span className={`report-status ${selected.status}`}><i/>{selected.status.toUpperCase()}</span><h2>Report against {selected.targetName}</h2><p>{serverName(selected.serverId)} · Ticket {selected.id.slice(0,8).toUpperCase()}</p></div><button className="icon-button" onClick={()=>setSelected(null)}><X/></button></header><div className="report-parties"><section><span>REPORTER</span><strong>{selected.reporterName}</strong><code>{selected.reporterUserId}</code></section><ChevronRight/><section><span>REPORTED PLAYER</span><strong>{selected.targetName}</strong><code>{selected.targetUserId}</code></section></div><section className="report-detail-body"><div><span className="eyebrow">REPORTED REASON</span><p className="report-reason">{selected.reason}</p></div><dl><dt>Created</dt><dd>{new Date(selected.createdAt).toLocaleString()}</dd><dt>Assigned to</dt><dd>{selected.assignedTo??'Unassigned'}</dd><dt>Last updated</dt><dd>{selected.updatedAt?new Date(selected.updatedAt).toLocaleString():'Not updated'}</dd></dl><label>INVESTIGATION OUTCOME <small>Required to resolve or dismiss</small><textarea disabled={!canManage} value={resolution} onChange={event=>setResolution(event.target.value)} placeholder="What did staff verify, and what action was taken?"/></label></section>{canManage?<footer className="report-actions"><div>{selected.status==='open'&&<button className="claim" disabled={!!busy} onClick={()=>void update('claimed')}><Shield size={15}/>{busy==='claimed'?'CLAIMING…':'CLAIM REPORT'}</button>}{selected.status==='claimed'&&<button disabled={!!busy} onClick={()=>void update('open')}><RotateCcw size={15}/> RELEASE</button>}{['resolved','dismissed'].includes(selected.status)&&<button disabled={!!busy} onClick={()=>void update('open')}><RotateCcw size={15}/> REOPEN</button>}</div><div>{!['resolved','dismissed'].includes(selected.status)&&<><button className="dismiss" disabled={!!busy||!resolution.trim()} onClick={()=>void update('dismissed')}><X size={15}/> DISMISS</button><button className="primary" disabled={!!busy||!resolution.trim()} onClick={()=>void update('resolved')}><Save size={15}/>{busy==='resolved'?'RESOLVING…':'RESOLVE REPORT'}</button></>}</div></footer>:<footer className="report-readonly"><Shield size={15}/> You have read-only access to this report.</footer>}</article></div>}
   </>
 }
 
@@ -409,10 +446,17 @@ function ServerWorkspace({ user, server, tab, setTab, refresh, back, onError }: 
     if (busy) return
     if (name === 'restart' && !await confirmation.ask('Restart server?',`Restart ${server.name}? Connected players may be disconnected.`,'RESTART SERVER')) return
     if (name === 'stop' && !await confirmation.ask('Stop server?',`Stop ${server.name}? The panel will request a graceful shutdown.`,'STOP SERVER')) return
+    if (name === 'kill' && !await confirmation.ask('Force-kill server?',`Immediately terminate ${server.name} and its process tree. Unsaved game state may be lost.`,'FORCE KILL',true,server.name)) return
     setBusy(true)
     try { await api(`/servers/${server.id}/${name}`, { method: 'POST' }); await refresh() }
     catch (error) { onError(error instanceof Error ? error.message : 'Server action failed') }
     finally { setBusy(false) }
+  }
+  const removeServer=async()=>{
+    if(server.state!=='offline'){onError('Stop the server before removing it.');return}
+    if(!await confirmation.ask('Remove server?',`Permanently remove ${server.name} from the panel. Existing stored history is retained.`,'REMOVE SERVER',true,server.name))return
+    try{await api(`/servers/${server.id}`,{method:'DELETE'});await refresh();back()}
+    catch(error){onError(error instanceof Error?error.message:'Unable to remove server')}
   }
   const permissions = user.role === 'Owner' ? null : user.serverAccess?.find(x => x.serverId === server.id)?.permissions ?? user.permissions
   const allowed = (permission: string) => permissions === null || permissions.includes(permission)
@@ -438,6 +482,8 @@ function ServerWorkspace({ user, server, tab, setTab, refresh, back, onError }: 
         {allowed('server.start') && <button disabled={busy || server.state === 'online'} onClick={() => action('start')}><Play size={15}/> START</button>}
         {allowed('server.restart') && <button disabled={busy || server.state === 'offline'} onClick={() => action('restart')}><RotateCcw size={15}/> RESTART</button>}
         {allowed('server.stop') && <button disabled={busy || server.state === 'offline'} className="danger" onClick={() => action('stop')}><Square size={14}/> STOP</button>}
+        {user.role==='Owner'&&<button disabled={busy||server.state==='offline'} className="danger" onClick={()=>action('kill')}><X size={14}/> FORCE KILL</button>}
+        {user.role==='Owner'&&<button disabled={busy||server.state!=='offline'} className="danger" onClick={()=>void removeServer()}><Trash2 size={14}/> REMOVE</button>}
       </div>
     </section>
     <div className="server-tabs">{tabs.filter(item => allowed(item.permission)).map(item => <button key={item.id} className={tab === item.id ? 'active' : ''} onClick={() => setTab(item.id)}><item.icon size={16}/>{item.label}</button>)}</div>
@@ -578,13 +624,13 @@ function MaintenancePage({ server, onError }: { server: Server; onError: (value:
   const load = useCallback(() => api<Backup[]>(`/servers/${server.id}/backups`).then(setBackups).catch(e => onError(e.message)), [server.id, onError])
   useEffect(() => { void load() }, [load])
   const run = async (action: 'backups' | 'update') => {
-    if (action === 'update' && !await confirmation.ask('Run server update?',`Run the configured update command for ${server.name}? A backup will be created first.`,'BACK UP & UPDATE')) return
+    if (action === 'update' && !await confirmation.ask('Run server update?',`Run the configured update command for ${server.name}? A backup will be created first.`,'BACK UP & UPDATE',true,server.name)) return
     setBusy(action)
     try { await api(`/servers/${server.id}/${action}`, {method:'POST'}); await load(); window.dispatchEvent(new CustomEvent('panel-success',{detail:action==='update'?'Server update completed.':'Backup created.'})) }
     catch(e) { onError(e instanceof Error ? e.message : `Unable to run ${action}`) }
     finally { setBusy('') }
   }
-  const restore=async(item:Backup)=>{if(!await confirmation.ask('Restore this backup?',`This overwrites configuration files for ${server.name}. A safety backup is created first.`,'RESTORE BACKUP'))return;setBusy(item.id);try{await api(`/servers/${server.id}/backups/${encodeURIComponent(item.fileName)}/restore`,{method:'POST'});await load();window.dispatchEvent(new CustomEvent('panel-success',{detail:`Restored ${item.fileName}.`}))}catch(e){onError(e instanceof Error?e.message:'Restore failed')}finally{setBusy('')}}
+  const restore=async(item:Backup)=>{if(!await confirmation.ask('Restore this backup?',`This overwrites configuration files for ${server.name}. A safety backup is created first.`,'RESTORE BACKUP',true,server.name))return;setBusy(item.id);try{await api(`/servers/${server.id}/backups/${encodeURIComponent(item.fileName)}/restore`,{method:'POST'});await load();window.dispatchEvent(new CustomEvent('panel-success',{detail:`Restored ${item.fileName}.`}))}catch(e){onError(e instanceof Error?e.message:'Restore failed')}finally{setBusy('')}}
   return <section className="maintenance-layout">{confirmation.dialog}<article className="panel"><div className="panel-head"><div><span className="eyebrow">SAFE OPERATIONS</span><h2>Update and backup</h2></div></div><div className="maintenance-actions"><button onClick={() => run('backups')} disabled={!!busy}><Save/><div><strong>CREATE BACKUP</strong><span>Archive server configuration files</span></div></button><button onClick={() => run('update')} disabled={!!busy || server.state !== 'offline'}><RefreshCw/><div><strong>RUN UPDATE</strong><span>{server.state === 'offline' ? 'Backup, then execute update command' : 'Stop the server before updating'}</span></div></button></div></article><article className="panel"><div className="panel-head"><div><span className="eyebrow">RECOVERY</span><h2>Available backups</h2></div></div>{backups.map(item => <div className="backup-row" key={item.id}><FileCode2/><div><strong>{item.fileName}</strong><small>{new Date(item.createdAt).toLocaleString()} · {fmtBytes(item.sizeBytes)} · {item.actor}</small></div><div className="row-actions"><a className="manage-button" href={`/api/servers/${server.id}/backups/${encodeURIComponent(item.fileName)}`}>DOWNLOAD</a><button className="danger" disabled={!!busy||server.state!=='offline'} title={server.state!=='offline'?'Stop server before restoring':''} onClick={()=>restore(item)}>RESTORE</button></div></div>)}{!backups.length && <EmptyMini text="No backups created yet."/ >}</article></section>
 }
 
@@ -861,7 +907,7 @@ function AdminManagerPage({ user, servers, onError }: { user: User; servers: Ser
     finally { setBusy(false) }
   }
   const remove = async (account: Account) => {
-    if (!await confirmation.ask('Delete administrator?',`Delete ${account.username}? This cannot be undone.`,'DELETE ACCOUNT')) return
+    if (!await confirmation.ask('Delete administrator?',`Delete ${account.username}? This cannot be undone.`,'DELETE ACCOUNT',true,account.username)) return
     try { await api(`/users/${account.id}`, { method: 'DELETE' }); loadAccounts() }
     catch (e) { onError(e instanceof Error ? e.message : 'Unable to delete account') }
   }
@@ -985,7 +1031,7 @@ function TwoFactorPanel({user,onError}:{user:User;onError:(message:string)=>void
   return <article className="panel settings-password">{confirmation.dialog}<Shield size={26}/><h2>Two-factor authentication</h2><p>{user.twoFactorEnabled?'Two-factor authentication is enabled.':'Protect your account with a TOTP authenticator app.'}</p>
     {setup&&<div className="totp-setup"><div className="totp-qr"><QRCodeSVG value={setup.uri} size={210} level="M" marginSize={2}/><small>SCAN WITH GOOGLE AUTHENTICATOR</small></div><div><p>Open Google Authenticator, tap <strong>+</strong>, choose <strong>Scan a QR code</strong>, then enter the generated six-digit code below.</p><label>MANUAL SETUP SECRET<div className="input-action"><input readOnly value={setup.secret}/><button type="button" onClick={()=>void copyText(setup.secret)}>COPY</button></div></label><details><summary>Show setup URI</summary><small className="mono totp-uri">{setup.uri}</small></details></div></div>}
     <label>6-DIGIT CODE<input inputMode="numeric" maxLength={6} value={code} onChange={e=>setCode(e.target.value.replace(/\D/g,''))}/></label>
-    <div className="button-row">{!user.twoFactorEnabled&&!setup&&<button onClick={async()=>{try{setSetup(await api('/auth/2fa/setup',{method:'POST'}))}catch(e){onError(e instanceof Error?e.message:'Unable to begin setup')}}}>BEGIN SETUP</button>}{setup&&<button className="primary" onClick={async()=>{try{await api('/auth/2fa/confirm',{method:'POST',body:JSON.stringify({code})});location.reload()}catch(e){onError(e instanceof Error?e.message:'Invalid code')}}}>ENABLE 2FA</button>}{user.twoFactorEnabled&&<button className="danger" onClick={async()=>{try{await api('/auth/2fa/disable',{method:'POST',body:JSON.stringify({code})});location.reload()}catch(e){onError(e instanceof Error?e.message:'Invalid code')}}}>DISABLE 2FA</button>}<button className="danger" onClick={async()=>{if(!await confirmation.ask('Revoke all sessions?','Every device, including this one, will be signed out.','REVOKE ALL'))return;await api('/auth/sessions/revoke',{method:'POST'});location.reload()}}>REVOKE ALL SESSIONS</button></div>
+    <div className="button-row">{!user.twoFactorEnabled&&!setup&&<button onClick={async()=>{try{setSetup(await api('/auth/2fa/setup',{method:'POST'}))}catch(e){onError(e instanceof Error?e.message:'Unable to begin setup')}}}>BEGIN SETUP</button>}{setup&&<button className="primary" onClick={async()=>{try{await api('/auth/2fa/confirm',{method:'POST',body:JSON.stringify({code})});location.reload()}catch(e){onError(e instanceof Error?e.message:'Invalid code')}}}>ENABLE 2FA</button>}{user.twoFactorEnabled&&<button className="danger" onClick={async()=>{try{await api('/auth/2fa/disable',{method:'POST',body:JSON.stringify({code})});location.reload()}catch(e){onError(e instanceof Error?e.message:'Invalid code')}}}>DISABLE 2FA</button>}<button className="danger" onClick={async()=>{if(!await confirmation.ask('Revoke all sessions?','Every device, including this one, will be signed out.','REVOKE ALL',true,'REVOKE ALL'))return;await api('/auth/sessions/revoke',{method:'POST'});location.reload()}}>REVOKE ALL SESSIONS</button></div>
     <div className="active-sessions"><span className="eyebrow">ACTIVE SESSIONS</span>{sessions.map(item=><div className="session-row" key={item.id}><div><strong>{item.current?'This device':'Signed-in device'}</strong><small>{item.ipAddress} · {new Date(item.lastSeenAt).toLocaleString()}</small><p>{item.userAgent}</p></div><button disabled={item.current} onClick={async()=>{if(await confirmation.ask('Revoke session?','This device will be signed out on its next request.','REVOKE')){await api(`/auth/sessions/${item.id}`,{method:'DELETE'});loadSessions()}}}>REVOKE</button></div>)}</div>
   </article>
 }

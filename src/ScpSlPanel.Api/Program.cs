@@ -612,6 +612,67 @@ api.MapGet("/staff-dashboard", async (JsonStore store, ServerManager servers, Br
 });
 api.MapGet("/operations", (int? take, OperationTracker operations) =>
     operations.ListAsync(take ?? 100));
+api.MapGet("/incidents", async (JsonStore store, ClaimsPrincipal user) =>
+{
+    var incidents = await store.ReadAsync<ManagedIncident>("managed-incidents");
+    if (user.IsInRole("Owner")) return Results.Ok(incidents.OrderByDescending(x => x.UpdatedAt));
+    var visible = new List<ManagedIncident>();
+    foreach (var incident in incidents)
+        if (await Can(user, store, incident.ServerId, "monitoring")) visible.Add(incident);
+    return Results.Ok(visible.OrderByDescending(x => x.UpdatedAt));
+});
+api.MapPost("/incidents", async (IncidentCreateRequest request, JsonStore store, AuditService audit, ClaimsPrincipal user) =>
+{
+    if (!await Can(user, store, request.ServerId, "players.actions")) return Results.Forbid();
+    if (string.IsNullOrWhiteSpace(request.Title) || string.IsNullOrWhiteSpace(request.Description))
+        return Results.BadRequest(new { error = "An incident title and description are required." });
+    var severity = request.Severity.Trim().ToLowerInvariant();
+    if (severity is not ("low" or "medium" or "high" or "critical"))
+        return Results.BadRequest(new { error = "Invalid incident severity." });
+    var now = DateTimeOffset.UtcNow;
+    var incident = new ManagedIncident(Guid.NewGuid(), request.ServerId, request.Title.Trim(),
+        string.IsNullOrWhiteSpace(request.Category) ? "operations" : request.Category.Trim().ToLowerInvariant(),
+        severity, "open", request.Description.Trim(), Actor(user), now, now, Notes: []);
+    var incidents = await store.ReadAsync<ManagedIncident>("managed-incidents");
+    incidents.Insert(0, incident);
+    await store.WriteAsync("managed-incidents", incidents.Take(5000));
+    await audit.AddAsync(Actor(user), "incident.create", incident.Id.ToString(), incident.Title);
+    return Results.Created($"/api/incidents/{incident.Id}", incident);
+});
+api.MapPut("/incidents/{id:guid}", async (Guid id, IncidentUpdateRequest request, JsonStore store, AuditService audit, ClaimsPrincipal user) =>
+{
+    var incidents = await store.ReadAsync<ManagedIncident>("managed-incidents");
+    var index = incidents.FindIndex(x => x.Id == id);
+    if (index < 0) return Results.NotFound();
+    if (!await Can(user, store, incidents[index].ServerId, "players.actions")) return Results.Forbid();
+    var status = request.Status.Trim().ToLowerInvariant();
+    var severity = request.Severity.Trim().ToLowerInvariant();
+    if (status is not ("open" or "investigating" or "resolved" or "dismissed")
+        || severity is not ("low" or "medium" or "high" or "critical"))
+        return Results.BadRequest(new { error = "Invalid incident status or severity." });
+    var current = incidents[index];
+    incidents[index] = current with { Status = status, Severity = severity,
+        AssignedTo = string.IsNullOrWhiteSpace(request.AssignedTo) ? null : request.AssignedTo.Trim(),
+        Resolution = request.Resolution?.Trim(), UpdatedAt = DateTimeOffset.UtcNow,
+        ResolvedAt = status is "resolved" or "dismissed" ? DateTimeOffset.UtcNow : null };
+    await store.WriteAsync("managed-incidents", incidents);
+    await audit.AddAsync(Actor(user), $"incident.{status}", id.ToString(), request.Resolution ?? current.Title);
+    return Results.Ok(incidents[index]);
+});
+api.MapPost("/incidents/{id:guid}/notes", async (Guid id, IncidentNoteRequest request, JsonStore store, AuditService audit, ClaimsPrincipal user) =>
+{
+    if (string.IsNullOrWhiteSpace(request.Text)) return Results.BadRequest(new { error = "A note is required." });
+    var incidents = await store.ReadAsync<ManagedIncident>("managed-incidents");
+    var index = incidents.FindIndex(x => x.Id == id);
+    if (index < 0) return Results.NotFound();
+    if (!await Can(user, store, incidents[index].ServerId, "players.actions")) return Results.Forbid();
+    var notes = incidents[index].Notes?.ToList() ?? [];
+    notes.Add(new IncidentNote(Guid.NewGuid(), request.Text.Trim(), Actor(user), DateTimeOffset.UtcNow));
+    incidents[index] = incidents[index] with { Notes = notes, UpdatedAt = DateTimeOffset.UtcNow };
+    await store.WriteAsync("managed-incidents", incidents);
+    await audit.AddAsync(Actor(user), "incident.note", id.ToString(), request.Text.Trim());
+    return Results.Ok(incidents[index]);
+});
 api.MapGet("/reports", async (JsonStore store, ServerManager servers, ClaimsPrincipal user) =>
 {
     var reports = await store.ReadAsync<ReportTicket>("report-tickets");
@@ -631,11 +692,13 @@ api.MapPut("/reports/{id:guid}", async (
     var status = request.Status.Trim().ToLowerInvariant();
     if (status is not ("open" or "claimed" or "resolved" or "dismissed"))
         return Results.BadRequest(new { error = "Invalid report status." });
+    if (status is "resolved" or "dismissed" && string.IsNullOrWhiteSpace(request.Resolution))
+        return Results.BadRequest(new { error = "An investigation outcome is required to close a report." });
     reports[index] = reports[index] with
     {
         Status = status,
         AssignedTo = status == "open" ? null : Actor(user),
-        Resolution = request.Resolution?.Trim(),
+        Resolution = status == "open" ? null : request.Resolution?.Trim(),
         UpdatedAt = DateTimeOffset.UtcNow
     };
     await store.WriteAsync("report-tickets", reports);
@@ -680,7 +743,12 @@ api.MapDelete("/servers/{id:guid}/restart/countdown", async (Guid id, RestartCoo
     if (!await Can(user, store, id, "server.restart")) return Results.Forbid();
     return await restarts.CancelAsync(id, Actor(user)) ? Results.NoContent() : Results.NotFound();
 });
-api.MapPost("/servers/{id:guid}/kill", async (Guid id, ServerManager servers, ClaimsPrincipal user) => { await servers.StopAsync(id, Actor(user), true); return Results.Accepted(); }).RequireAuthorization("Owner");
+api.MapPost("/servers/{id:guid}/kill", async (Guid id, ServerManager servers, AuditService audit, ClaimsPrincipal user) =>
+{
+    await servers.StopAsync(id, Actor(user), true);
+    await audit.AddAsync(Actor(user), "server.kill", id.ToString(), "Force-terminated server process tree");
+    return Results.Accepted();
+}).RequireAuthorization("Owner");
 api.MapPost("/servers/{id:guid}/command", async (Guid id, CommandRequest request, ServerManager servers, ClaimsPrincipal user, JsonStore store) => { if (!await Can(user, store, id, "console.write")) return Results.Forbid(); await servers.CommandAsync(id, request.Command, Actor(user)); return Results.Accepted(); });
 api.MapGet("/servers/{id:guid}/console/history", async (Guid id, int? take, string? search, OperationsDataService operations, ClaimsPrincipal user, JsonStore store) =>
     !await Can(user, store, id, "console.view") ? Results.Forbid()
