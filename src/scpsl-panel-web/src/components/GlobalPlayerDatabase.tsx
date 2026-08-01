@@ -97,10 +97,21 @@ function GlobalProfileModal({record,close,onError,onUpdated}:{record:GlobalPlaye
   const [discordId,setDiscordId]=useState(player.discordId ?? '')
   const [pendingAction,setPendingAction]=useState<string|null>(null)
   const [actionReason,setActionReason]=useState('')
+  const [templates,setTemplates]=useState<string[]>(()=>{
+    try{return JSON.parse(localStorage.getItem('scpcontrol-moderation-templates')??'[]') as string[]}catch{return []}
+  })
   const [profileTab,setProfileTab]=useState<'info'|'history'|'notes'|'names'|'ids'>('info')
   const [selectedProfileAction,setSelectedProfileAction]=useState<StoredPlayer['moderationHistory'][number]|null>(null)
   const risk=Math.min(100,player.moderationHistory.reduce((score,item)=>score+(item.type==='ban'?35:item.type==='kick'?20:item.type==='warning'?10:item.type==='watchlist'?25:5),0)+Math.max(0,player.nameHistory.length-2)*3)
   const openAction=(type:string)=>{setPendingAction(type);setActionReason(`${type} added from global profile`)}
+  const saveTemplate=()=>{
+    const value=actionReason.trim()
+    if(!value||templates.includes(value))return
+    const next=[...templates,value].slice(-12);setTemplates(next);localStorage.setItem('scpcontrol-moderation-templates',JSON.stringify(next))
+  }
+  const removeTemplate=(value:string)=>{
+    const next=templates.filter(item=>item!==value);setTemplates(next);localStorage.setItem('scpcontrol-moderation-templates',JSON.stringify(next))
+  }
   const recordAction=async()=>{
     if(!pendingAction||!actionReason.trim())return
     try{onUpdated(await api<StoredPlayer>(`/servers/${record.serverId}/player-history/${player.id}/actions`,{method:'POST',body:JSON.stringify({type:pendingAction,reason:actionReason,durationMinutes:null})}));setPendingAction(null)}catch(error){onError(error instanceof Error?error.message:'Unable to record action')}
@@ -157,7 +168,7 @@ function GlobalProfileModal({record,close,onError,onUpdated}:{record:GlobalPlaye
     </div>
       </main>
     </div>
-    {pendingAction&&<div className="modal-backdrop nested-modal"><form className="modal action-dialog" onSubmit={e=>{e.preventDefault();void recordAction()}}><header><div><span className="eyebrow">PLAYER ACTION</span><h2>{pendingAction.toUpperCase()}</h2><p>Record this action for <strong>{player.currentName}</strong>.</p></div><button type="button" className="icon-button" onClick={()=>setPendingAction(null)}><X/></button></header><label>REASON<textarea autoFocus required value={actionReason} onChange={e=>setActionReason(e.target.value)} /></label><footer><button type="button" onClick={()=>setPendingAction(null)}>CANCEL</button><button className="primary">CONFIRM {pendingAction.toUpperCase()}</button></footer></form></div>}
+    {pendingAction&&<div className="modal-backdrop nested-modal"><form className="modal action-dialog" onSubmit={e=>{e.preventDefault();void recordAction()}}><header><div><span className="eyebrow">PLAYER ACTION</span><h2>{pendingAction.toUpperCase()}</h2><p>Record this action for <strong>{player.currentName}</strong>.</p></div><button type="button" className="icon-button" onClick={()=>setPendingAction(null)}><X/></button></header>{templates.length>0&&<div className="moderation-templates"><span>SAVED RESPONSES</span>{templates.map(template=><button type="button" key={template} title="Right-click to remove" onClick={()=>setActionReason(template)} onContextMenu={event=>{event.preventDefault();removeTemplate(template)}}>{template}</button>)}</div>}<label>REASON<textarea autoFocus required value={actionReason} onChange={e=>setActionReason(e.target.value)} /></label><div className="template-save-row"><button type="button" onClick={saveTemplate}><StickyNote size={14}/> SAVE AS RESPONSE</button><small>Right-click a saved response to remove it.</small></div><footer><button type="button" onClick={()=>setPendingAction(null)}>CANCEL</button><button className="primary">CONFIRM {pendingAction.toUpperCase()}</button></footer></form></div>}
     {selectedProfileAction&&<div className="modal-backdrop nested-modal"><article className="modal player-action-detail"><header><div><span className="action-id">[{selectedProfileAction.id.slice(0,8).toUpperCase()}]</span><h2>{selectedProfileAction.type.toUpperCase()} · {player.currentName}</h2></div><button className="icon-button" onClick={()=>setSelectedProfileAction(null)}><X/></button></header><div className="player-action-detail-body"><dl><dt>Date/time</dt><dd>{new Date(selectedProfileAction.at).toLocaleString()}</dd><dt>Administrator</dt><dd>{selectedProfileAction.actor}</dd><dt>Duration</dt><dd>{selectedProfileAction.durationMinutes?`${selectedProfileAction.durationMinutes} minutes`:'Not specified'}</dd><dt>Status</dt><dd>{selectedProfileAction.revoked?'Revoked':'Active'}</dd></dl><h4>Reason</h4><p>{selectedProfileAction.reason}</p></div><footer><button onClick={()=>setSelectedProfileAction(null)}>CLOSE</button>{['ban','oban'].includes(selectedProfileAction.type)&&!selectedProfileAction.revoked&&<button className="danger solid" onClick={()=>void revokeBan()}><RotateCcw/>REVOKE BAN</button>}</footer></article></div>}
   </article></div>
 }

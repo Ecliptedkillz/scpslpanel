@@ -13,10 +13,11 @@ import { GlobalPlayerDatabase } from './components/GlobalPlayerDatabase'
 import type { AuditEntry, Ban, BridgeSetup, BridgeStatus, Overview, Player, Schedule, Server } from './types'
 
 type Page = 'overview' | 'servers' | 'server' | 'players' | 'reports' | 'permissions' | 'donors' | 'bans' | 'schedules' | 'audit' | 'admins' | 'settings'
-type ServerTab = 'overview' | 'monitoring' | 'console' | 'players' | 'player-history' | 'activity' | 'restarts' | 'plugins' | 'files' | 'maintenance'
+type ServerTab = 'overview' | 'operations' | 'monitoring' | 'console' | 'players' | 'player-history' | 'activity' | 'restarts' | 'plugins' | 'files' | 'maintenance'
 type ServerAccessGrant = { serverId: string; permissions: string[] }
 type User = { username: string; role: string; serverIds: string[]; permissions: string[]; serverAccess?: ServerAccessGrant[]; twoFactorEnabled?: boolean }
 type ThemeMode = 'dark' | 'light' | 'system'
+type SearchResult = { type: 'server' | 'player' | 'audit'; title: string; subtitle: string; serverId?: string; playerId?: string }
 const hasServerPermission = (user: User, serverId: string, permission: string) => {
   if (user.role === 'Owner') return true
   const permissions = user.serverAccess?.find(grant => grant.serverId === serverId)?.permissions ?? user.permissions
@@ -40,7 +41,7 @@ const nav: { page: Page; label: string; icon: typeof LayoutDashboard }[] = [
 const fmtBytes = (bytes: number) => bytes ? `${(bytes / 1024 / 1024).toFixed(0)} MB` : '0 MB'
 const fmtState = (state: unknown) => typeof state === 'string' ? state.toUpperCase() : 'UNKNOWN'
 const topLevelPages = new Set<Page>(['overview', 'servers', 'players', 'reports', 'permissions', 'donors', 'bans', 'schedules', 'audit', 'admins', 'settings'])
-const serverTabs = new Set<ServerTab>(['overview', 'monitoring', 'console', 'players', 'player-history', 'activity', 'restarts', 'plugins', 'files', 'maintenance'])
+const serverTabs = new Set<ServerTab>(['overview', 'operations', 'monitoring', 'console', 'players', 'player-history', 'activity', 'restarts', 'plugins', 'files', 'maintenance'])
 const readRoute = () => {
   const parts = window.location.pathname.split('/').filter(Boolean).map(decodeURIComponent)
   if (parts.length >= 2 && serverTabs.has(parts[1] as ServerTab))
@@ -169,6 +170,7 @@ function Panel({ user, onLogout, theme, setTheme }: { user: User; onLogout: () =
   const [error, setError] = useState('')
   const [success, setSuccess] = useState('')
   const [activityOpen, setActivityOpen] = useState(false)
+  const [searchOpen, setSearchOpen] = useState(false)
   const [operations, setOperations] = useState<Array<{id:string;type:string;target:string;status:string;message:string;createdAt:string}>>([])
 
   const load = useCallback(async () => {
@@ -198,6 +200,15 @@ function Panel({ user, onLogout, theme, setTheme }: { user: User; onLogout: () =
     }
     window.addEventListener('popstate', onPopState)
     return () => window.removeEventListener('popstate', onPopState)
+  }, [])
+  useEffect(() => {
+    const shortcut = (event: KeyboardEvent) => {
+      if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'k') {
+        event.preventDefault(); setSearchOpen(value => !value)
+      }
+    }
+    window.addEventListener('keydown', shortcut)
+    return () => window.removeEventListener('keydown', shortcut)
   }, [])
   const servers = overview?.servers ?? []
   const visibleNav = user.role === 'Owner' ? nav : nav.filter(item =>
@@ -230,10 +241,11 @@ function Panel({ user, onLogout, theme, setTheme }: { user: User; onLogout: () =
       <div className="aside-bottom"><div className="system-line"><span className="status-dot"/>System operational</div><div className="profile"><div className="avatar">{user.username.slice(0, 2).toUpperCase()}</div><div><strong>{user.username}</strong><span>{user.role}</span></div><button onClick={logout} title="Log out"><LogOut size={17}/></button></div></div>
     </aside>
     <main className="workspace">
-      <header><button className="mobile-menu" onClick={() => setDrawer(!drawer)}>{drawer ? <X/> : <Menu/>}</button><div><span className="crumb">SCP CONTROL / </span>{page === 'server' ? selectedServer?.name.toUpperCase() ?? 'SERVER' : nav.find(x => x.page === page)?.label.toUpperCase()}</div><div className="header-right"><span className="live-pill"><span className="status-dot"/> LIVE</span><button className="icon-button operation-trigger" title="Recent operations" onClick={() => setActivityOpen(!activityOpen)}><Activity size={17}/>{operations.some(x=>x.status==='queued'||x.status==='running')&&<span/>}</button><ThemeButton theme={theme} setTheme={setTheme}/><button className="icon-button" onClick={load}><RefreshCw size={17}/></button></div></header>
+      <header><button className="mobile-menu" onClick={() => setDrawer(!drawer)}>{drawer ? <X/> : <Menu/>}</button><div><span className="crumb">SCP CONTROL / </span>{page === 'server' ? selectedServer?.name.toUpperCase() ?? 'SERVER' : nav.find(x => x.page === page)?.label.toUpperCase()}</div><div className="header-right"><button className="global-search-trigger" onClick={()=>setSearchOpen(true)} title="Global search (Ctrl+K)"><Search size={15}/><span>SEARCH</span><kbd>CTRL K</kbd></button><span className="live-pill"><span className="status-dot"/> LIVE</span><button className="icon-button operation-trigger" title="Recent operations" onClick={() => setActivityOpen(!activityOpen)}><Activity size={17}/>{operations.some(x=>x.status==='queued'||x.status==='running')&&<span/>}</button><ThemeButton theme={theme} setTheme={setTheme}/><button className="icon-button" onClick={load}><RefreshCw size={17}/></button></div></header>
       {error && <div className="toast error">{error}<button onClick={() => setError('')}><X size={15}/></button></div>}
       {success && <div className="toast success">{success}<button onClick={() => setSuccess('')}><X size={15}/></button></div>}
       {activityOpen && <aside className="operation-drawer"><div className="operation-head"><div><span className="eyebrow">ACTIVITY</span><h2>Recent operations</h2></div><button className="icon-button" onClick={()=>setActivityOpen(false)}><X/></button></div>{operations.map(item=><div className={`operation-row ${item.status}`} key={item.id}><span className="operation-state"/><div><strong>{item.type} · {item.target}</strong><p>{item.message}</p><small>{new Date(item.createdAt).toLocaleString()}</small></div><b>{item.status}</b></div>)}{!operations.length&&<EmptyMini text="No recent operations."/>}</aside>}
+      {searchOpen && <GlobalSearch close={()=>setSearchOpen(false)} openServer={openServer} openAudit={()=>navigatePage('audit')}/>}
       <div className="content">
         {page === 'overview' && <OverviewPage data={overview} navigatePage={navigatePage} openServer={openServer}/>}
         {page === 'servers' && <ServersPage user={user} servers={servers} refresh={load} openServer={openServer} onError={setError}/>}
@@ -252,6 +264,21 @@ function Panel({ user, onLogout, theme, setTheme }: { user: User; onLogout: () =
       </div>
     </main>
   </div>
+}
+
+function GlobalSearch({close,openServer,openAudit}:{close:()=>void;openServer:(id:string,tab?:ServerTab)=>void;openAudit:()=>void}){
+  const [query,setQuery]=useState('')
+  const [results,setResults]=useState<SearchResult[]>([])
+  const [loading,setLoading]=useState(false)
+  useEffect(()=>{
+    if(query.trim().length<2){setResults([]);setLoading(false);return}
+    setLoading(true)
+    const timer=setTimeout(()=>api<SearchResult[]>(`/search?q=${encodeURIComponent(query.trim())}`).then(setResults).catch(()=>setResults([])).finally(()=>setLoading(false)),220)
+    return()=>clearTimeout(timer)
+  },[query])
+  useEffect(()=>{const escape=(event:KeyboardEvent)=>{if(event.key==='Escape')close()};window.addEventListener('keydown',escape);return()=>window.removeEventListener('keydown',escape)},[close])
+  const choose=(result:SearchResult)=>{close();if(result.type==='audit')openAudit();else if(result.serverId)openServer(result.serverId,result.type==='player'?'player-history':'overview')}
+  return <div className="modal-backdrop search-overlay" onMouseDown={event=>{if(event.target===event.currentTarget)close()}}><section className="global-search"><header><Search/><input autoFocus value={query} onChange={event=>setQuery(event.target.value)} placeholder="Search servers, players, Steam IDs, Discord IDs, audit events…"/><kbd>ESC</kbd></header><div className="global-search-results">{results.map((result,index)=><button key={`${result.type}:${result.serverId??''}:${result.playerId??index}:${index}`} onClick={()=>choose(result)}><span className={`search-result-icon ${result.type}`}>{result.type==='server'?<ServerIcon/>:result.type==='player'?<Users/>:<History/>}</span><span><strong>{result.title}</strong><small>{result.subtitle}</small></span><b>{result.type}</b><ChevronRight/></button>)}{loading&&<div className="empty-mini">Searching…</div>}{!loading&&query.trim().length<2&&<div className="search-hint"><Command/>Type at least two characters to search everything you can access.</div>}{!loading&&query.trim().length>=2&&!results.length&&<div className="empty-mini">No matching servers, players, or audit entries.</div>}</div><footer><span>CTRL K · OPEN SEARCH</span><span>ESC · CLOSE</span></footer></section></div>
 }
 
 type ReportTicket={id:string;serverId:string;createdAt:string;status:string;reporterUserId:string;reporterName:string;targetUserId:string;targetName:string;reason:string;assignedTo?:string;resolution?:string}
@@ -391,6 +418,7 @@ function ServerWorkspace({ user, server, tab, setTab, refresh, back, onError }: 
   const allowed = (permission: string) => permissions === null || permissions.includes(permission)
   const tabs: { id: ServerTab; label: string; icon: typeof LayoutDashboard; permission: string }[] = [
     { id: 'overview', label: 'Overview', icon: LayoutDashboard, permission: 'view' },
+    { id: 'operations', label: 'Round Control', icon: CircleGauge, permission: 'monitoring' },
     { id: 'monitoring', label: 'Monitoring', icon: Activity, permission: 'monitoring' },
     { id: 'console', label: 'Console', icon: Terminal, permission: 'console.view' },
     { id: 'players', label: 'Live Players', icon: Users, permission: 'players' },
@@ -415,6 +443,7 @@ function ServerWorkspace({ user, server, tab, setTab, refresh, back, onError }: 
     <div className="server-tabs">{tabs.filter(item => allowed(item.permission)).map(item => <button key={item.id} className={tab === item.id ? 'active' : ''} onClick={() => setTab(item.id)}><item.icon size={16}/>{item.label}</button>)}</div>
     <div className="server-tab-content">
       {tab === 'overview' && <ServerOverview server={server} setTab={setTab}/>}
+      {tab === 'operations' && <RoundControlCenter server={server} onError={onError} canAnnounce={allowed('announcements')} canRestart={allowed('server.restart')}/>}
       {tab === 'monitoring' && <MonitoringPage server={server} onError={onError}/>}
       {tab === 'console' && <ConsolePage servers={[server]} selected={server.id} setSelected={() => {}} onError={onError} canWrite={allowed('console.write')} embedded/>}
       {tab === 'players' && <ServerPlayers server={server} onError={onError} initialMode="live" moderation={{kick:allowed('players.kick'),mute:allowed('players.mute'),ban:allowed('players.ban')}} canAnnounce={allowed('announcements')}/>}
@@ -468,6 +497,67 @@ function MetricChart({ title, values, suffix }: { title: string; values: number[
   const points = values.map((value, index) => `${values.length === 1 ? width : index / (values.length - 1) * width},${height - value / max * (height - 15)}`).join(' ')
   const latest = values.at(-1) ?? 0
   return <article className="metric-chart"><div><span>{title}</span><strong>{latest.toFixed(title === 'PLAYERS' ? 0 : 1)}{suffix}</strong></div><svg viewBox={`0 0 ${width} ${height}`} preserveAspectRatio="none"><polyline points={points}/></svg><small>{values.length} samples · peak {max.toFixed(1)}{suffix}</small></article>
+}
+
+function RoundControlCenter({server,onError,canAnnounce,canRestart}:{server:Server;onError:(value:string)=>void;canAnnounce:boolean;canRestart:boolean}) {
+  type Event = { id:string; at:string; type:string; displayName:string|null; detail:string }
+  type Round = { id:string; startedAt:string; endedAt:string|null }
+  const [status,setStatus]=useState<BridgeStatus|null>(null)
+  const [events,setEvents]=useState<Event[]>([])
+  const [rounds,setRounds]=useState<Round[]>([])
+  const [announcement,setAnnouncement]=useState('')
+  const [duration,setDuration]=useState(10)
+  const [busy,setBusy]=useState('')
+  const [,setClock]=useState(0)
+  const confirmation=useConfirmDialog()
+  const load=useCallback(async()=>{
+    try {
+      const [bridge,activity,history]=await Promise.all([
+        api<BridgeStatus>(`/servers/${server.id}/players`),
+        api<Event[]>(`/servers/${server.id}/activity?take=12`),
+        api<Round[]>(`/servers/${server.id}/rounds?take=5`)
+      ])
+      setStatus(bridge);setEvents(activity);setRounds(history)
+    } catch(error) { onError(error instanceof Error?error.message:'Unable to load round control') }
+  },[server.id,onError])
+  useEffect(()=>{void load();const poll=setInterval(load,3000);const clock=setInterval(()=>setClock(value=>value+1),1000);return()=>{clearInterval(poll);clearInterval(clock)}},[load])
+  const activeRound=rounds.find(round=>!round.endedAt)
+  const roundSeconds=activeRound?Math.max(0,Math.floor((Date.now()-new Date(activeRound.startedAt).getTime())/1000)):null
+  const teamFor=(role:string)=>{
+    const value=role.toLowerCase()
+    if(value.includes('scp'))return'SCP'
+    if(value.includes('classd')||value.includes('class-d')||value.includes('chaos'))return'CHAOS'
+    if(value.includes('scientist')||value.includes('facility')||value.includes('ntf')||value.includes('guard'))return'FOUNDATION'
+    if(value.includes('spectator')||value.includes('overwatch')||value.includes('tutorial'))return'SPECTATORS'
+    return'OTHER'
+  }
+  const groups=['SCP','FOUNDATION','CHAOS','SPECTATORS','OTHER'].map(name=>({name,players:(status?.players??[]).filter(player=>teamFor(player.role)===name)})).filter(group=>group.players.length)
+  const announce=async(event:FormEvent)=>{
+    event.preventDefault();if(!announcement.trim()||busy)return
+    setBusy('announce')
+    try{await api(`/servers/${server.id}/announcement`,{method:'POST',body:JSON.stringify({message:announcement.trim(),durationSeconds:duration})});setAnnouncement('');window.dispatchEvent(new CustomEvent('panel-success',{detail:'Round announcement sent.'}))}
+    catch(error){onError(error instanceof Error?error.message:'Unable to announce')}
+    finally{setBusy('')}
+  }
+  const restart=async()=>{
+    if(!await confirmation.ask('Restart server?',`Restart ${server.name}? Every connected player will be disconnected.`,'RESTART SERVER'))return
+    setBusy('restart')
+    try{await api(`/servers/${server.id}/restart`,{method:'POST'});window.dispatchEvent(new CustomEvent('panel-success',{detail:'Server restart requested.'}))}
+    catch(error){onError(error instanceof Error?error.message:'Unable to restart server')}
+    finally{setBusy('')}
+  }
+  const spectators=(status?.players??[]).filter(player=>teamFor(player.role)==='SPECTATORS').length
+  return <section className="round-control">{confirmation.dialog}
+    <header className="round-command-header panel"><div><span className="eyebrow">LIVE OPERATIONS</span><h2>Round Control Center</h2><p>Live bridge telemetry and permission-checked server controls.</p></div><div className={`round-phase ${status?.connected?'connected':''}`}><span>{status?.connected?'LIVE':'OFFLINE'}</span><strong>{(status?.roundState??'unknown').replaceAll('-',' ').toUpperCase()}</strong><small>{status?.lastSeenAt?`Heartbeat ${fmtAgo(status.lastSeenAt)}`:'Bridge unavailable'}</small></div></header>
+    <div className="round-stat-strip"><article><small>ROUND TIME</small><strong>{roundSeconds==null?'—':formatPlaytime(roundSeconds)}</strong></article><article><small>PLAYERS</small><strong>{status?.players.length??0}<em> / {status?.maxPlayers||'—'}</em></strong></article><article><small>ALIVE / ACTIVE</small><strong>{(status?.players.length??0)-spectators}</strong></article><article><small>SPECTATORS</small><strong>{spectators}</strong></article></div>
+    <div className="round-control-grid"><article className="panel round-roster"><div className="panel-head"><div><span className="eyebrow">LIVE ROSTER</span><h2>Players by faction</h2></div><span className="tag">{groups.length} GROUPS</span></div>
+      {groups.map(group=><section className={`faction-block faction-${group.name.toLowerCase()}`} key={group.name}><header><strong>{group.name}</strong><span>{group.players.length}</span></header>{group.players.map(player=><div className="round-player" key={player.id}><i/><div><strong>{player.nickname}</strong><small>{player.role}</small></div><span>{player.ping||'—'} ms</span>{player.isMuted&&<b>MUTED</b>}</div>)}</section>)}
+      {!groups.length&&<EmptyMini text={status?.connected?'No players are currently connected.':'Waiting for the LabAPI bridge.'}/>}</article>
+      <aside className="round-side"><form className="panel round-announcement" onSubmit={announce}><div className="panel-head"><div><span className="eyebrow">BROADCAST</span><h2>Round announcement</h2></div></div><textarea disabled={!canAnnounce||!status?.connected} value={announcement} onChange={event=>setAnnouncement(event.target.value)} placeholder="Message every connected player…"/><div><select value={duration} onChange={event=>setDuration(Number(event.target.value))}><option value="5">5 seconds</option><option value="10">10 seconds</option><option value="15">15 seconds</option><option value="30">30 seconds</option></select><button className="primary" disabled={!canAnnounce||!status?.connected||busy==='announce'||!announcement.trim()}>SEND</button></div></form>
+      <article className="panel round-actions"><div className="panel-head"><div><span className="eyebrow">SERVER ACTIONS</span><h2>Quick controls</h2></div></div><button className="danger" disabled={!canRestart||!!busy||server.state==='offline'} onClick={()=>void restart()}><RotateCcw/><span><strong>RESTART SERVER</strong><small>Confirmation required</small></span></button><p>Facility controls will appear here when supported by the installed bridge version.</p></article>
+      <article className="panel round-events"><div className="panel-head"><div><span className="eyebrow">EVENT FEED</span><h2>Latest activity</h2></div></div>{events.slice(0,8).map(item=><div key={item.id}><span className="tag">{item.type.toUpperCase()}</span><p><strong>{item.displayName||'Server'}</strong>{item.detail?` · ${item.detail}`:''}</p><time>{fmtAgo(item.at)}</time></div>)}{!events.length&&<EmptyMini text="No recent bridge activity."/ >}</article></aside>
+    </div>
+  </section>
 }
 
 function RestartManagerPage({ server, onError }: { server: Server; onError: (value: string) => void }) {

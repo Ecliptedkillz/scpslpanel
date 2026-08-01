@@ -6,6 +6,7 @@ using Microsoft.AspNetCore.Authentication.Cookies;
 using Microsoft.AspNetCore.DataProtection;
 using Microsoft.AspNetCore.SignalR;
 using Microsoft.AspNetCore.RateLimiting;
+using HeaderNames = Microsoft.Net.Http.Headers.HeaderNames;
 using System.Threading.RateLimiting;
 using ScpSlPanel.Api.Domain;
 using ScpSlPanel.Api.Hubs;
@@ -51,6 +52,7 @@ builder.Services.AddAuthentication(CookieAuthenticationDefaults.AuthenticationSc
     options.Cookie.Name = "scpsl_panel";
     options.Cookie.HttpOnly = true;
     options.Cookie.SameSite = SameSiteMode.Lax;
+    options.Cookie.SecurePolicy = CookieSecurePolicy.SameAsRequest;
     options.ExpireTimeSpan = TimeSpan.FromHours(12);
     options.SlidingExpiration = true;
     options.Events.OnRedirectToLogin = context => { context.Response.StatusCode = 401; return Task.CompletedTask; };
@@ -84,15 +86,59 @@ builder.Services.AddAuthorization(options =>
 builder.Services.AddCors(options => options.AddDefaultPolicy(policy =>
     policy.WithOrigins(builder.Configuration.GetSection("Panel:AllowedHosts").Get<string[]>() ?? [])
         .AllowAnyHeader().AllowAnyMethod().AllowCredentials()));
-builder.Services.AddRateLimiter(options => options.AddFixedWindowLimiter("login", limiter =>
+builder.Services.AddRateLimiter(options =>
 {
-    limiter.PermitLimit = 8;
-    limiter.Window = TimeSpan.FromMinutes(1);
-    limiter.QueueLimit = 0;
-    limiter.AutoReplenishment = true;
-}));
+    options.RejectionStatusCode = StatusCodes.Status429TooManyRequests;
+    options.GlobalLimiter = PartitionedRateLimiter.Create<HttpContext, string>(context =>
+        RateLimitPartition.GetFixedWindowLimiter(
+            context.User.FindFirstValue(ClaimTypes.NameIdentifier)
+                ?? context.Connection.RemoteIpAddress?.ToString() ?? "unknown",
+            _ => new FixedWindowRateLimiterOptions
+            {
+                PermitLimit = 300, Window = TimeSpan.FromMinutes(1), QueueLimit = 0,
+                AutoReplenishment = true
+            }));
+    options.AddFixedWindowLimiter("login", limiter =>
+    {
+        limiter.PermitLimit = 8;
+        limiter.Window = TimeSpan.FromMinutes(1);
+        limiter.QueueLimit = 0;
+        limiter.AutoReplenishment = true;
+    });
+});
 
 var app = builder.Build();
+app.Use(async (context, next) =>
+{
+    context.Response.Headers[HeaderNames.XContentTypeOptions] = "nosniff";
+    context.Response.Headers[HeaderNames.XFrameOptions] = "DENY";
+    context.Response.Headers["Referrer-Policy"] = "no-referrer";
+    context.Response.Headers["Permissions-Policy"] = "camera=(), microphone=(), geolocation=()";
+    context.Response.Headers[HeaderNames.ContentSecurityPolicy] =
+        "default-src 'self'; base-uri 'self'; frame-ancestors 'none'; form-action 'self'; " +
+        "connect-src 'self' ws: wss:; img-src 'self' data: https:; " +
+        "style-src 'self' 'unsafe-inline'; script-src 'self'";
+    if (context.Request.IsHttps)
+        context.Response.Headers[HeaderNames.StrictTransportSecurity] = "max-age=31536000; includeSubDomains";
+    await next();
+});
+app.Use(async (context, next) =>
+{
+    var unsafeMethod = !HttpMethods.IsGet(context.Request.Method)
+        && !HttpMethods.IsHead(context.Request.Method)
+        && !HttpMethods.IsOptions(context.Request.Method);
+    var protectedApi = context.Request.Path.StartsWithSegments("/api")
+        && !context.Request.Path.StartsWithSegments("/api/bridge")
+        && !context.Request.Path.Equals("/api/auth/login", StringComparison.OrdinalIgnoreCase);
+    if (unsafeMethod && protectedApi
+        && !string.Equals(context.Request.Headers["X-Panel-Request"], "1", StringComparison.Ordinal))
+    {
+        context.Response.StatusCode = StatusCodes.Status400BadRequest;
+        await context.Response.WriteAsJsonAsync(new { error = "The request could not be verified. Refresh the panel and try again." });
+        return;
+    }
+    await next();
+});
 app.Use(async (context, next) =>
 {
     try { await next(); }
@@ -107,7 +153,15 @@ app.Use(async (context, next) =>
             FileNotFoundException => 422,
             _ => 500
         };
-        await context.Response.WriteAsJsonAsync(new { error = ex.Message });
+        var message = app.Environment.IsDevelopment() ? ex.Message : context.Response.StatusCode switch
+        {
+            404 => "The requested resource was not found.",
+            400 => "The request was invalid.",
+            409 => "The request conflicts with the current state.",
+            422 => "The requested file could not be processed.",
+            _ => "An unexpected server error occurred."
+        };
+        await context.Response.WriteAsJsonAsync(new { error = message });
     }
 });
 app.UseCors();
@@ -492,6 +546,49 @@ api.MapGet("/overview", async (ServerManager servers, AuditService audit, Claims
         snapshots.Sum(x => x.Players), snapshots.Sum(x => x.MemoryBytes), snapshots,
         user?.Role == "Owner" ? await audit.RecentAsync(12) : []);
 });
+api.MapGet("/search", async (string? q, JsonStore store, ServerManager servers, ClaimsPrincipal principal) =>
+{
+    var query = q?.Trim();
+    if (string.IsNullOrWhiteSpace(query) || query.Length < 2) return Results.Ok(Array.Empty<object>());
+    query = query[..Math.Min(query.Length, 100)];
+    var account = await CurrentUser(principal, store);
+    if (account is null) return Results.Unauthorized();
+    var definitions = await servers.DefinitionsAsync();
+    var visible = definitions.Where(server => account.Role == "Owner"
+        || account.ServerAccess?.Any(grant => grant.ServerId == server.Id) == true
+        || account.ServerIds?.Contains(server.Id) == true).ToList();
+    var visibleIds = visible.Select(server => server.Id).ToHashSet();
+    var playerVisibleIds = new HashSet<Guid>();
+    foreach (var serverId in visibleIds)
+        if (await Can(principal, store, serverId, "players.history")) playerVisibleIds.Add(serverId);
+    var names = visible.ToDictionary(server => server.Id, server => server.Name);
+    var results = new List<object>();
+    results.AddRange(visible.Where(server => server.Name.Contains(query, StringComparison.OrdinalIgnoreCase))
+        .Take(5).Select(server => new { type = "server", title = server.Name,
+            subtitle = $"Server · Port {server.QueryPort}", serverId = (Guid?)server.Id, playerId = (Guid?)null }));
+    var players = await store.ReadAsync<PlayerRecord>("players");
+    results.AddRange(players.Where(player => playerVisibleIds.Contains(player.ServerId) &&
+            (player.CurrentName.Contains(query, StringComparison.OrdinalIgnoreCase)
+             || player.UserId.Contains(query, StringComparison.OrdinalIgnoreCase)
+             || (player.DiscordId?.Contains(query, StringComparison.OrdinalIgnoreCase) ?? false)
+             || player.NameHistory.Any(name => name.Name.Contains(query, StringComparison.OrdinalIgnoreCase))))
+        .OrderByDescending(player => player.LastConnectedAt).Take(12)
+        .Select(player => new { type = "player", title = player.CurrentName,
+            subtitle = $"{names.GetValueOrDefault(player.ServerId, "Server")} · {player.UserId}",
+            serverId = (Guid?)player.ServerId, playerId = (Guid?)player.Id }));
+    if (account.Role == "Owner")
+    {
+        var audit = await store.ReadAsync<AuditEntry>("audit");
+        results.AddRange(audit.Where(entry => entry.Actor.Contains(query, StringComparison.OrdinalIgnoreCase)
+                || entry.Action.Contains(query, StringComparison.OrdinalIgnoreCase)
+                || entry.Target.Contains(query, StringComparison.OrdinalIgnoreCase)
+                || entry.Detail.Contains(query, StringComparison.OrdinalIgnoreCase))
+            .OrderByDescending(entry => entry.At).Take(8)
+            .Select(entry => new { type = "audit", title = entry.Action,
+                subtitle = $"{entry.Actor} · {entry.Detail}", serverId = (Guid?)null, playerId = (Guid?)null }));
+    }
+    return Results.Ok(results.Take(25));
+});
 api.MapGet("/staff-dashboard", async (JsonStore store, ServerManager servers, BridgeStateService bridge,
     ClaimsPrincipal user, OperationTracker operations) =>
 {
@@ -677,14 +774,16 @@ api.MapPost("/servers/{id:guid}/players/{playerId}/unmute", async (Guid id, stri
             player.Nickname, "unmute", "Unmuted from panel", Actor(user), null);
     return Results.Ok(result);
 });
-api.MapPost("/servers/{id:guid}/announcement", async (Guid id, AnnouncementRequest request, BridgeCommandService commands, BridgeStateService bridge, ClaimsPrincipal user, JsonStore store, CancellationToken cancellationToken) =>
+api.MapPost("/servers/{id:guid}/announcement", async (Guid id, AnnouncementRequest request, BridgeCommandService commands, BridgeStateService bridge, AuditService audit, ClaimsPrincipal user, JsonStore store, CancellationToken cancellationToken) =>
 {
     if (!await Can(user, store, id, "announcements")) return Results.Forbid();
     if (string.IsNullOrWhiteSpace(request.Message)) return Results.BadRequest(new { error = "Announcement text is required." });
     if (!bridge.Get(id).Connected) return Results.Conflict(new { error = "The LabAPI bridge is not connected." });
     var result = await commands.ExecuteAsync(id, "announcement", message: request.Message.Trim(),
         durationSeconds: Math.Clamp(request.DurationSeconds, 1, ushort.MaxValue), cancellationToken: cancellationToken);
-    return result.Success ? Results.Ok(result) : Results.Conflict(new { error = result.Message });
+    if (!result.Success) return Results.Conflict(new { error = result.Message });
+    await audit.AddAsync(Actor(user), "round.announcement", id.ToString(), request.Message.Trim());
+    return Results.Ok(result);
 });
 api.MapGet("/servers/{id:guid}/activity", async (Guid id, int? take, BridgeCommandService commands, ClaimsPrincipal user, JsonStore store) =>
     !await Can(user, store, id, "monitoring") ? Results.Forbid() : Results.Ok(await commands.ActivityAsync(id, take ?? 250)));
