@@ -382,16 +382,34 @@ public sealed class DiscordLinkService(NotificationService settingsService, ILog
 
     private Dictionary<string, string> ReadLinks(ServerDefinition server)
     {
-        var path = LinkPath(server);
         var links = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
-        if (!File.Exists(path)) return links;
+        var localPath = LinkPath(server);
+        ReadLinkFile(localPath, links, overwrite: true);
+
+        // Discord identities belong to the player, not one game instance. Fall back to
+        // links created on another server so permissions and badges work fleet-wide.
+        var configsPath = Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
+            "SCP Secret Laboratory", "LabAPI", "configs");
+        if (Directory.Exists(configsPath))
+            foreach (var path in Directory.EnumerateFiles(configsPath, "DiscordLinks.csv",
+                         SearchOption.AllDirectories))
+                if (!path.Equals(localPath, StringComparison.OrdinalIgnoreCase))
+                    ReadLinkFile(path, links, overwrite: false);
+        return links;
+    }
+
+    private void ReadLinkFile(string path, IDictionary<string, string> links, bool overwrite)
+    {
+        if (!File.Exists(path)) return;
         try {
             foreach (var line in File.ReadLines(path)) {
                 var fields = line.Trim().Split(',', 3, StringSplitOptions.TrimEntries);
-                if (fields.Length >= 2 && fields[0].Length > 0 && fields[1].Length > 0) links[fields[0]] = fields[1];
+                if (fields.Length < 2 || fields[0].Length == 0 || fields[1].Length == 0) continue;
+                if (overwrite) links[fields[0]] = fields[1];
+                else links.TryAdd(fields[0], fields[1]);
             }
         } catch (Exception ex) { logger.LogWarning(ex, "Unable to read Discord link file {Path}", path); }
-        return links;
     }
 
     private static string LinkPath(ServerDefinition server) => Path.Combine(
