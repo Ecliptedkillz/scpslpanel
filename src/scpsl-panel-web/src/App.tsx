@@ -435,6 +435,9 @@ function ServersPage({ user, servers, refresh, openServer, onError }: { user: Us
   useEffect(()=>{api<typeof preference>('/users/me/preferences').then(setPreference).catch(()=>{})},[])
   const toggleFavorite=(id:string)=>setPreference(current=>{const next={...current,favoriteServerIds:current.favoriteServerIds.includes(id)?current.favoriteServerIds.filter(value=>value!==id):[...current.favoriteServerIds,id]};void api('/users/me/preferences',{method:'PUT',body:JSON.stringify(next)}).catch(e=>onError(e.message));return next})
   const ordered=[...servers].sort((a,b)=>Number(favorites.includes(b.id))-Number(favorites.includes(a.id))||a.name.localeCompare(b.name))
+  const onlineCount=servers.filter(server=>server.state==='online').length
+  const playerCount=servers.reduce((total,server)=>total+server.players,0)
+  const memoryTotal=servers.reduce((total,server)=>total+server.memoryBytes,0)
   const [modal, setModal] = useState(false)
   const [busyServer, setBusyServer] = useState<string | null>(null)
   const confirmation=useConfirmDialog()
@@ -448,10 +451,11 @@ function ServersPage({ user, servers, refresh, openServer, onError }: { user: Us
     catch (e) { onError(e instanceof Error ? e.message : 'Action failed') }
     finally { setBusyServer(null) }
   }
-  return <>
+  return <div className="servers-page">
     <PageTitle eyebrow="INFRASTRUCTURE" title="Server fleet"><button className="primary" onClick={() => setModal(true)}><Plus size={16}/> REGISTER SERVER</button></PageTitle>
+    {!!servers.length&&<section className="fleet-summary" aria-label="Fleet summary"><div><span>SERVERS ONLINE</span><strong>{onlineCount}<small> / {servers.length}</small></strong></div><div><span>ACTIVE PLAYERS</span><strong>{playerCount}</strong></div><div><span>MEMORY IN USE</span><strong>{fmtBytes(memoryTotal)}</strong></div><p><i className={onlineCount===servers.length?'healthy':''}/><span><strong>{onlineCount===servers.length?'All systems operational':'Fleet attention required'}</strong><small>{onlineCount===servers.length?'Every registered server is responding normally.':`${servers.length-onlineCount} server${servers.length-onlineCount===1?' is':'s are'} not online.`}</small></span></p></section>}
     <div className="server-cards">{ordered.map(server => <article className={`server-card ${favorites.includes(server.id)?'favorite':''}`} key={server.id}>
-      <div className="server-card-head"><div className={`server-state ${server.state}`}><Gamepad2/></div><div><h2>{server.name}</h2><span className={`state-label ${server.state}`}><span/> {server.state}</span></div><button className={`favorite-button ${favorites.includes(server.id)?'active':''}`} title="Favorite server" onClick={()=>toggleFavorite(server.id)}><Star size={15}/></button><button className="manage-button" onClick={() => openServer(server.id)}>MANAGE <ChevronRight size={15}/></button></div>
+      <div className="server-card-head"><div className={`server-state ${server.state}`}><Gamepad2/></div><div className="server-card-identity"><h2>{server.name}</h2><span className={`state-label ${server.state}`}><span/> {server.state}</span></div><div className="server-card-tools"><button className={`favorite-button ${favorites.includes(server.id)?'active':''}`} aria-label="Favorite server" title="Favorite server" onClick={()=>toggleFavorite(server.id)}><Star size={16}/></button><button className="manage-button" onClick={() => openServer(server.id)}>MANAGE SERVER <ChevronRight size={15}/></button></div></div>
       <div className="metric-strip"><div><span>PROCESS</span><strong>{server.processId ?? '—'}</strong></div><div><span>CPU</span><strong>{server.cpuPercent}%</strong></div><div><span>MEMORY</span><strong>{fmtBytes(server.memoryBytes)}</strong></div><div><span>PLAYERS</span><strong>{server.players}/{server.maxPlayers || '—'}</strong></div></div>
       {server.lastError && <p className="error">{server.lastError}</p>}
       <div className="server-actions">{hasServerPermission(user, server.id, 'server.start') && <button disabled={busyServer === server.id || server.state === 'online'} onClick={() => action(server.id, 'start')}><Play size={15}/> START</button>}{hasServerPermission(user, server.id, 'server.restart') && <button disabled={busyServer === server.id || server.state === 'offline'} onClick={() => action(server.id, 'restart')}><RotateCcw size={15}/> RESTART</button>}{hasServerPermission(user, server.id, 'server.stop') && <button disabled={busyServer === server.id || server.state === 'offline'} className="danger" onClick={() => action(server.id, 'stop')}><Square size={14}/> STOP</button>}</div>
@@ -459,7 +463,7 @@ function ServersPage({ user, servers, refresh, openServer, onError }: { user: Us
     {!servers.length && <EmptyPage icon={ServerIcon} title="No servers registered" text="Connect your first SCP:SL dedicated server to begin operations."><button className="primary" onClick={() => setModal(true)}><Plus size={16}/> REGISTER SERVER</button></EmptyPage>}
     {modal && <AddServerModal close={() => setModal(false)} saved={() => { setModal(false); refresh() }} onError={onError}/>}
     {confirmation.dialog}
-  </>
+  </div>
 }
 
 function AddServerModal({ close, saved, onError }: { close: () => void; saved: () => void; onError: (e: string) => void }) {
