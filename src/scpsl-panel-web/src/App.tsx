@@ -375,7 +375,23 @@ function ReportTicketsPage({user,servers,onError}:{user:User;servers:Server[];on
 }
 
 function PageTitle({ eyebrow, title, children }: { eyebrow: string; title: string; children?: React.ReactNode }) {
-  return <div className="page-title"><div><span className="eyebrow">{eyebrow}</span><h1>{title}</h1></div>{children && <div className="actions">{children}</div>}</div>
+  const descriptions:Record<string,string>={
+    'Operations overview':'Monitor your infrastructure, players, and recent operator activity.',
+    'Server fleet':'Monitor health, resource usage, and controls across every registered server.',
+    'Live console':'Follow server output in real time and run authorized commands.',
+    'Ban manager':'Review active restrictions and manage player access across the network.',
+    'Scheduler':'Coordinate automated restarts, updates, and recurring server tasks.',
+    'Plugin inventory':'Inspect installed extensions and manage plugin deployment by server.',
+    'Audit log':'Trace administrative activity and export a durable security record.',
+    'Admin Manager':'Control panel accounts, server scope, and administrative permissions.',
+    'Settings':'Configure your account, integrations, security, and panel behavior.',
+    'Incident management':'Track operational incidents from detection through resolution.',
+    'In-game report tickets':'Triage player reports and document moderation outcomes.',
+    'In-game Permissions':'Define synchronized staff roles and Remote Admin capabilities.',
+    'Donors & Custom Badges':'Manage Discord-linked benefits and visible player recognition.',
+    'Custom User Badges':'Create and assign individual player badges.'
+  }
+  return <div className="page-title page-heading"><div className="page-heading-copy"><span className="eyebrow">{eyebrow}</span><h1>{title}</h1>{descriptions[title]&&<p>{descriptions[title]}</p>}</div>{children && <div className="actions">{children}</div>}</div>
 }
 
 function OverviewPage({ data, navigatePage, openServer }: { data: Overview | null; navigatePage: (p: Page) => void; openServer: (id: string) => void }) {
