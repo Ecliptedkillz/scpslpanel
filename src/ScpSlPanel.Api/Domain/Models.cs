@@ -28,7 +28,8 @@ public sealed record ServerDefinition(
 public sealed record ServerSnapshot(
     Guid Id, string Name, ServerState State, int? ProcessId, DateTimeOffset? StartedAt,
     long MemoryBytes, double CpuPercent, int Players, int MaxPlayers, string? LastError,
-    string Icon = "gamepad", string AccentColor = "#e44343");
+    string Icon = "gamepad", string AccentColor = "#e44343", bool BridgeConnected = false,
+    string? RoundState = null, bool IsRestarting = false);
 public sealed record ManagedProcessRecord(
     Guid ServerId, int ProcessId, string ExecutablePath, DateTimeOffset StartedAt);
 

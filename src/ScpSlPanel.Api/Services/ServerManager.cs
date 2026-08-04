@@ -15,6 +15,7 @@ public sealed class ServerManager(
     {
         public Process? Process;
         public ServerState State = ServerState.Offline;
+        public bool IsRestarting;
         public DateTimeOffset? StartedAt;
         public string? LastError;
         public long PreviousCpuTicks;
@@ -106,7 +107,8 @@ public sealed class ServerManager(
         var bridgeStatus = bridge.Get(definition.Id);
         return new(definition.Id, definition.Name, runtime.State, processId, runtime.StartedAt,
             memory, Math.Round(cpu, 1), bridgeStatus.Players.Count, bridgeStatus.MaxPlayers,
-            runtime.LastError, definition.Icon, definition.AccentColor);
+            runtime.LastError, definition.Icon, definition.AccentColor, bridgeStatus.Connected,
+            bridgeStatus.RoundState, runtime.IsRestarting);
     }
 
     public async Task<string> EnsureBridgeTokenAsync(Guid id, bool regenerate = false)
@@ -258,11 +260,17 @@ public sealed class ServerManager(
 
     public async Task RestartAsync(Guid id, string actor)
     {
+        var runtime = _runtime.GetOrAdd(id, _ => new Runtime());
+        runtime.IsRestarting = true;
         // LocalAdmin can crash while reading redirected console commands and may leave
         // SCPSL.exe behind. A restart must replace the complete managed process tree.
-        await StopAsync(id, actor, force: true);
-        await Task.Delay(TimeSpan.FromMilliseconds(750));
-        await StartAsync(id, actor);
+        try
+        {
+            await StopAsync(id, actor, force: true);
+            await Task.Delay(TimeSpan.FromMilliseconds(750));
+            await StartAsync(id, actor);
+        }
+        finally { runtime.IsRestarting = false; }
     }
 
     public async Task CommandAsync(Guid id, string command, string actor)

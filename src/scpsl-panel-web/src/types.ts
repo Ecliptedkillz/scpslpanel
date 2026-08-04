@@ -13,6 +13,9 @@ export interface Server {
   lastError: string | null
   icon?: string
   accentColor?: string
+  bridgeConnected?: boolean
+  roundState?: string | null
+  isRestarting?: boolean
 }
 
 export interface AuditEntry {

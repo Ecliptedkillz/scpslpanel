@@ -41,6 +41,20 @@ const nav: { page: Page; label: string; icon: typeof LayoutDashboard }[] = [
 
 const fmtBytes = (bytes: number) => bytes ? `${(bytes / 1024 / 1024).toFixed(0)} MB` : '0 MB'
 const fmtState = (state: unknown) => typeof state === 'string' ? state.toUpperCase() : 'UNKNOWN'
+const serverStatus = (server: Server) => {
+  if (server.isRestarting) return { label:'Restarting', className:'restarting' }
+  if (server.state === 'starting') return { label:'Starting', className:'starting' }
+  if (server.state === 'stopping') return { label:'Stopping', className:'stopping' }
+  if (server.state === 'offline') return { label:'Offline', className:'offline' }
+  if (server.state === 'faulted') return { label:'Faulted', className:'faulted' }
+  if (server.bridgeConnected) {
+    const round=(server.roundState??'').toLowerCase()
+    if (['waiting','lobby'].includes(round)) return { label:'Lobby', className:'lobby' }
+    if (['starting','active','in-progress','in_progress'].includes(round)) return { label:'Round in progress', className:'round-active' }
+    if (['ending','ended'].includes(round)) return { label:'Round ended', className:'round-ended' }
+  }
+  return { label:'Online', className:'online' }
+}
 const topLevelPages = new Set<Page>(['overview', 'servers', 'players', 'reports', 'incidents', 'permissions', 'donors', 'bans', 'schedules', 'audit', 'admins', 'settings'])
 const serverTabs = new Set<ServerTab>(['overview', 'operations', 'monitoring', 'console', 'players', 'player-history', 'activity', 'restarts', 'plugins', 'files', 'maintenance'])
 const readRoute = () => {
@@ -417,7 +431,7 @@ function OverviewPage({ data, navigatePage, openServer }: { data: Overview | nul
         {data.servers.length ? <div className="server-list">{data.servers.slice(0, 5).map(server =>
           <button className="server-row" key={server.id} onClick={() => openServer(server.id)}>
             <span className={`server-state ${server.state}`}><Gamepad2 size={19}/></span><span className="server-name"><strong>{server.name}</strong><small>PID {server.processId ?? '—'} • {server.players}/{server.maxPlayers || '—'} players</small></span>
-            <span className={`state-label ${server.state}`}><span/> {server.state}</span><span>{server.cpuPercent}% CPU</span><span>{fmtBytes(server.memoryBytes)}</span><ChevronRight size={16}/>
+            <span className={`state-label ${serverStatus(server).className}`}><span/> {serverStatus(server).label}</span><span>{server.cpuPercent}% CPU</span><span>{fmtBytes(server.memoryBytes)}</span><ChevronRight size={16}/>
           </button>)}</div> : <EmptyMini text="No servers configured yet."/>}
       </article>}
       {widgets.includes('activity')&&<article className="panel">
@@ -476,7 +490,7 @@ function ServersPage({ user, servers, refresh, openServer, onError }: { user: Us
     <PageTitle eyebrow="INFRASTRUCTURE" title="Server fleet"><button className="primary" onClick={() => setModal(true)}><Plus size={16}/> REGISTER SERVER</button></PageTitle>
     {!!servers.length&&<section className="fleet-summary" aria-label="Fleet summary"><div><span>SERVERS ONLINE</span><strong>{onlineCount}<small> / {servers.length}</small></strong></div><div><span>ACTIVE PLAYERS</span><strong>{playerCount}</strong></div><div><span>MEMORY IN USE</span><strong>{fmtBytes(memoryTotal)}</strong></div><p><i className={onlineCount===servers.length?'healthy':''}/><span><strong>{onlineCount===servers.length?'All systems operational':'Fleet attention required'}</strong><small>{onlineCount===servers.length?'Every registered server is responding normally.':`${servers.length-onlineCount} server${servers.length-onlineCount===1?' is':'s are'} not online.`}</small></span></p></section>}
     <div className="server-cards">{ordered.map(server => <article className={`server-card ${favorites.includes(server.id)?'favorite':''}`} key={server.id}>
-      <div className="server-card-head"><div className={`server-state ${server.state}`}><Gamepad2/></div><div className="server-card-identity"><h2>{server.name}</h2><span className={`state-label ${server.state}`}><span/> {server.state}</span></div><div className="server-card-tools"><button className={`favorite-button ${favorites.includes(server.id)?'active':''}`} aria-label="Favorite server" title="Favorite server" onClick={()=>toggleFavorite(server.id)}><Star size={16}/></button><button className="manage-button" onClick={() => openServer(server.id)}>MANAGE SERVER <ChevronRight size={15}/></button></div></div>
+      <div className="server-card-head"><div className={`server-state ${server.state}`}><Gamepad2/></div><div className="server-card-identity"><h2>{server.name}</h2><span className={`state-label ${serverStatus(server).className}`}><span/> {serverStatus(server).label}</span></div><div className="server-card-tools"><button className={`favorite-button ${favorites.includes(server.id)?'active':''}`} aria-label="Favorite server" title="Favorite server" onClick={()=>toggleFavorite(server.id)}><Star size={16}/></button><button className="manage-button" onClick={() => openServer(server.id)}>MANAGE SERVER <ChevronRight size={15}/></button></div></div>
       <div className="metric-strip"><div><span>PROCESS</span><strong>{server.processId ?? '—'}</strong></div><div><span>CPU</span><strong>{server.cpuPercent}%</strong></div><div><span>MEMORY</span><strong>{fmtBytes(server.memoryBytes)}</strong></div><div><span>PLAYERS</span><strong>{server.players}/{server.maxPlayers || '—'}</strong></div></div>
       {server.lastError && <p className="error">{server.lastError}</p>}
       <div className="server-actions">{hasServerPermission(user, server.id, 'server.start') && <button disabled={busyServer === server.id || server.state === 'online'} onClick={() => action(server.id, 'start')}><Play size={15}/> START</button>}{hasServerPermission(user, server.id, 'server.restart') && <button disabled={busyServer === server.id || server.state === 'offline'} onClick={() => action(server.id, 'restart')}><RotateCcw size={15}/> RESTART</button>}{hasServerPermission(user, server.id, 'server.stop') && <button disabled={busyServer === server.id || server.state === 'offline'} className="danger" onClick={() => action(server.id, 'stop')}><Square size={14}/> STOP</button>}</div>
@@ -545,7 +559,7 @@ function ServerWorkspace({ user, server, tab, setTab, refresh, back, onError }: 
     <button className="back-button" onClick={back}><ArrowLeft size={15}/> ALL SERVERS</button>
     <section className="server-hero">
       <div className={`server-state ${server.state}`} style={{borderColor:server.accentColor}}><ServerGlyph server={server} size={28}/></div>
-      <div><span className="eyebrow">MANAGED INSTANCE</span><h1>{server.name}</h1><span className={`state-label ${server.state}`}><span/> {fmtState(server.state)}</span></div>
+      <div><span className="eyebrow">MANAGED INSTANCE</span><h1>{server.name}</h1><span className={`state-label ${serverStatus(server).className}`}><span/> {serverStatus(server).label}</span></div>
       <div className="server-hero-actions">
         {allowed('server.start') && <button disabled={busy || server.state === 'online'} onClick={() => action('start')}><Play size={15}/> START</button>}
         {allowed('server.restart') && <button disabled={busy || server.state === 'offline'} onClick={() => action('restart')}><RotateCcw size={15}/> RESTART</button>}
@@ -576,7 +590,7 @@ function ServerOverview({ server, setTab }: { server: Server; setTab: (tab: Serv
   const uptime = server.startedAt ? fmtAgo(server.startedAt).replace(' ago', '') : 'Not running'
   return <section className="server-overview-grid">
     <div className="stat-grid server-stats">
-      <article className="stat-card"><div className="card-top"><span>PROCESS ID</span><Activity size={18}/></div><strong>{server.processId ?? '—'}</strong><small>{fmtState(server.state)}</small></article>
+      <article className="stat-card"><div className="card-top"><span>PROCESS ID</span><Activity size={18}/></div><strong>{server.processId ?? '—'}</strong><small>{serverStatus(server).label}</small></article>
       <article className="stat-card"><div className="card-top"><span>PLAYERS</span><Users size={18}/></div><strong>{server.players}/{server.maxPlayers || '—'}</strong><small>Current population</small></article>
       <article className="stat-card"><div className="card-top"><span>CPU / MEMORY</span><CircleGauge size={18}/></div><strong>{server.cpuPercent}%</strong><small>{fmtBytes(server.memoryBytes)} memory</small></article>
       <article className="stat-card"><div className="card-top"><span>UPTIME</span><History size={18}/></div><strong>{uptime}</strong><small>{server.startedAt ? new Date(server.startedAt).toLocaleString() : 'Offline'}</small></article>
