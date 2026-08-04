@@ -1097,10 +1097,28 @@ const defaultIntegration: IntegrationSettings = {
   discordGameRoleGrants: [], discordDonorRoleGrants: [], customUserBadges: [], customRoleBadges: [],
   discordDailyReportEnabled: false, discordDailyReportHourUtc: 12,
 }
+const includeInheritedRoleServers = (roles:IntegrationSettings['discordGameRoleGrants']) => {
+  const next=roles.map(role=>({...role,serverIds:[...new Set(role.serverIds?.length?role.serverIds:[role.serverId])]}))
+  const byName=new Map<string,typeof next>()
+  for(const role of next){
+    const key=role.groupName.trim().toLowerCase()
+    byName.set(key,[...(byName.get(key)??[]),role])
+  }
+  let changed=true
+  while(changed){
+    changed=false
+    for(const child of next) for(const inherited of child.inheritedGroups??[])
+      for(const parent of byName.get(inherited.trim().toLowerCase())??[]){
+        const serverIds=[...new Set([...parent.serverIds,...child.serverIds])]
+        if(serverIds.length!==parent.serverIds.length){parent.serverIds=serverIds;parent.serverId=serverIds[0]??parent.serverId;changed=true}
+      }
+  }
+  return next
+}
 const expandedIntegration = (settings:IntegrationSettings):IntegrationSettings => ({
   ...settings,
   discordGameRoleGrants:uniqueAssignments(
-    expandServerAssignments(settings.discordGameRoleGrants??[]),
+    expandServerAssignments(includeInheritedRoleServers(settings.discordGameRoleGrants??[])),
     item=>`${item.serverId}:${item.groupName.trim().toLowerCase()}`),
   discordDonorRoleGrants:uniqueAssignments(
     expandServerAssignments(settings.discordDonorRoleGrants??[]),
