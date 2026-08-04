@@ -560,3 +560,5 @@ th{font-weight:700;letter-spacing:.09em}
 
 [data-theme="light"] .stat-card,[data-theme="light"] .moderation-kpis>div,[data-theme="light"] .panel,[data-theme="light"] .table-wrap,[data-theme="light"] .page-tabs{box-shadow:0 8px 24px #1d293908}
 @media(max-width:760px){.page-heading{min-height:0!important;padding-bottom:17px}.page-heading-copy h1{font-size:27px!important}.page-heading-copy p{font-size:11px}.page-heading>.actions{align-self:stretch}.page-heading>.actions>select{width:100%}.stat-grid,.moderation-kpis{gap:10px}}
+
+.ingame-permissions-page .ingame-role-card h2{margin:0 0 7px;font-size:22px;letter-spacing:-.025em}
