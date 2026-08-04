@@ -252,6 +252,11 @@ function Panel({ user, onLogout, theme, setTheme }: { user: User; onLogout: () =
       || user.permissions.includes('players.history'))
     && (item.page !== 'incidents' || user.serverAccess?.some(grant => grant.permissions.includes('monitoring'))
       || user.permissions.includes('monitoring')))
+  const navGroups:{label:string;pages:Page[]}[]=[
+    {label:'OPERATIONS',pages:['overview','servers','players']},
+    {label:'MODERATION',pages:['reports','incidents','permissions','donors','bans']},
+    {label:'SYSTEM',pages:['schedules','audit','admins','settings']}
+  ]
   const selectedServer = servers.find(server => server.id === selected)
   const navigatePage = (nextPage: Page) => {
     setPage(nextPage)
@@ -269,9 +274,9 @@ function Panel({ user, onLogout, theme, setTheme }: { user: User; onLogout: () =
 
   const logout = async () => { await api('/auth/logout', { method: 'POST' }).catch(() => {}); onLogout() }
   return <div className="app-shell">
-    <aside className={drawer ? 'open' : ''}>
+    <aside className={`main-sidebar ${drawer ? 'open' : ''}`}>
       <div className="brand"><div className="brand-mark"><img src="/scpcontrol.png" alt="SCP Control"/></div><div><strong>SCP CONTROL</strong><span>ADMINISTRATION</span></div></div>
-      <nav>{visibleNav.map(item => <button key={item.page} className={page === item.page ? 'active' : ''} onClick={() => { navigatePage(item.page); setDrawer(false) }}><item.icon size={18}/>{item.label}</button>)}</nav>
+      <nav className="sidebar-nav">{navGroups.map(group=>{const items=visibleNav.filter(item=>group.pages.includes(item.page));return items.length?<section className="sidebar-group" key={group.label}><span className="sidebar-group-label">{group.label}</span>{items.map(item => <button key={item.page} className={page === item.page ? 'active' : ''} onClick={() => { navigatePage(item.page); setDrawer(false) }}><span className="sidebar-icon"><item.icon size={18}/></span><span>{item.label}</span>{page===item.page&&<i/>}</button>)}</section>:null})}</nav>
       <div className="aside-bottom"><div className="system-line"><span className="status-dot"/>System operational</div><div className="profile"><button className="profile-settings" onClick={()=>setPersonalOpen(true)} title="Personal settings"><div className="avatar">{user.username.slice(0, 2).toUpperCase()}</div><div><strong>{user.username}</strong><span>{user.role}</span></div><Settings size={15}/></button><button onClick={logout} title="Log out"><LogOut size={17}/></button></div></div>
     </aside>
     <main className="workspace">
