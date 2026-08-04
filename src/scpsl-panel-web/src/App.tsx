@@ -31,7 +31,11 @@ const collapseServerAssignments = <T extends ServerAssigned>(items:T[]):T[] => {
   return [...grouped.values()]
 }
 const expandServerAssignments = <T extends ServerAssigned>(items:T[]):T[] => items.flatMap(item=>
-  (item.serverIds?.length?item.serverIds:[item.serverId]).map(serverId=>({...item,serverId,serverIds:undefined})))
+  [...new Set(item.serverIds?.length?item.serverIds:[item.serverId])]
+    .filter(Boolean).map(serverId=>({...item,serverId,serverIds:undefined})))
+
+const uniqueAssignments = <T extends ServerAssigned>(items:T[], key:(item:T)=>string):T[] =>
+  [...new Map(items.map(item=>[key(item),item])).values()]
 const hasServerPermission = (user: User, serverId: string, permission: string) => {
   if (user.role === 'Owner') return true
   const permissions = user.serverAccess?.find(grant => grant.serverId === serverId)?.permissions ?? user.permissions
@@ -1095,8 +1099,12 @@ const defaultIntegration: IntegrationSettings = {
 }
 const expandedIntegration = (settings:IntegrationSettings):IntegrationSettings => ({
   ...settings,
-  discordGameRoleGrants:expandServerAssignments(settings.discordGameRoleGrants??[]),
-  discordDonorRoleGrants:expandServerAssignments(settings.discordDonorRoleGrants??[]),
+  discordGameRoleGrants:uniqueAssignments(
+    expandServerAssignments(settings.discordGameRoleGrants??[]),
+    item=>`${item.serverId}:${item.groupName.trim().toLowerCase()}`),
+  discordDonorRoleGrants:uniqueAssignments(
+    expandServerAssignments(settings.discordDonorRoleGrants??[]),
+    item=>`${item.serverId}:${item.roleId}`),
 })
 
 function SettingsPage({ user, servers, onError }: { user: User; servers: Server[]; onError: (e: string) => void }) {

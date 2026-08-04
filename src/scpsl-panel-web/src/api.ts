@@ -20,8 +20,13 @@ export async function api<T>(path: string, init?: RequestInit, retryAfterReauthe
     catch { body = text }
   }
   if (!response.ok) {
+    const details = typeof body === 'object' && body !== null && 'issues' in body && Array.isArray((body as { issues?: unknown }).issues)
+      ? (body as { issues: Array<{ severity?: string; message?: string }> }).issues
+          .filter(issue => issue.severity === 'error' && issue.message)
+          .map(issue => issue.message).join(' ')
+      : ''
     const message = typeof body === 'object' && body !== null && 'error' in body
-      ? String((body as { error: unknown }).error)
+      ? `${String((body as { error: unknown }).error)}${details ? ` ${details}` : ''}`
       : typeof body === 'string' && body
         ? body
         : `Request failed (${response.status})`

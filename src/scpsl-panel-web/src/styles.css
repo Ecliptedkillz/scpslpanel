@@ -1,9 +1,7 @@
-@import url('https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&display=swap');
-
 :root {
   color: #e9edf2;
   background: #090b0f;
-  font-family: 'DM Sans', sans-serif;
+  font-family: 'Segoe UI', Arial, sans-serif;
   font-synthesis: none;
   --bg: #090b0f;
   --surface: #101318;
@@ -54,7 +52,7 @@
 [data-theme="light"] *::-webkit-scrollbar-thumb:active { background:var(--red) }
 *, *::before, *::after {
   box-sizing: border-box;
-  font-family: 'DM Sans', sans-serif !important;
+  font-family: 'Segoe UI', Arial, sans-serif !important;
 }
 html {
   scrollbar-color: #434c58 var(--bg);
