@@ -1077,8 +1077,8 @@ type IntegrationSettings = {
     permissions:string[];inheritedGroups:string[];badgeText:string;badgeColor:string;hidden:boolean;
     cover:boolean;reservedSlot:boolean;kickPower:number;requiredKickPower:number;pluginPermissions:string[]}[]
   discordDonorRoleGrants: {roleId:string;serverId:string;serverIds?:string[];tier:number;priority:number;enabled:boolean}[]
-  customUserBadges: {serverId:string;steamId:string;badgeText:string;badgeColor:string}[]
-  customRoleBadges: {roleId:string;serverId:string;badgeText:string;badgeColor:string;priority:number;enabled:boolean}[]
+  customUserBadges: {serverId:string;serverIds?:string[];steamId:string;badgeText:string;badgeColor:string}[]
+  customRoleBadges: {roleId:string;serverId:string;serverIds?:string[];badgeText:string;badgeColor:string;priority:number;enabled:boolean}[]
   discordDailyReportEnabled: boolean; discordDailyReportHourUtc: number
 }
 const defaultIntegration: IntegrationSettings = {
@@ -1115,14 +1115,18 @@ const includeInheritedRoleServers = (roles:IntegrationSettings['discordGameRoleG
   }
   return next
 }
-const expandedIntegration = (settings:IntegrationSettings):IntegrationSettings => ({
+const assignedToEveryServer = <T extends ServerAssigned>(items:T[],serverIds:string[]):T[] =>
+  items.map(item=>({...item,serverId:serverIds[0]??item.serverId,serverIds}))
+const expandedIntegration = (settings:IntegrationSettings,serverIds:string[]):IntegrationSettings => ({
   ...settings,
   discordGameRoleGrants:uniqueAssignments(
-    expandServerAssignments(includeInheritedRoleServers(settings.discordGameRoleGrants??[])),
+    expandServerAssignments(includeInheritedRoleServers(assignedToEveryServer(settings.discordGameRoleGrants??[],serverIds))),
     item=>`${item.serverId}:${item.groupName.trim().toLowerCase()}`),
   discordDonorRoleGrants:uniqueAssignments(
-    expandServerAssignments(settings.discordDonorRoleGrants??[]),
+    expandServerAssignments(assignedToEveryServer(settings.discordDonorRoleGrants??[],serverIds)),
     item=>`${item.serverId}:${item.roleId}`),
+  customUserBadges:expandServerAssignments(assignedToEveryServer(settings.customUserBadges??[],serverIds)),
+  customRoleBadges:expandServerAssignments(assignedToEveryServer(settings.customRoleBadges??[],serverIds)),
 })
 
 function SettingsPage({ user, servers, onError }: { user: User; servers: Server[]; onError: (e: string) => void }) {
@@ -1287,7 +1291,7 @@ function IngamePermissionsPage({servers,onError}:{servers:Server[];onError:(mess
     if(!await confirmation.ask('Delete in-game role?',`Permanently remove ${roles[index].groupName||'this role'}?`,'DELETE ROLE',true))return
     const next={...settings,discordGameRoleGrants:roles.filter((_,i)=>i!==index)}
     try{
-      await api('/integrations',{method:'PUT',body:JSON.stringify(expandedIntegration(next))})
+      await api('/integrations',{method:'PUT',body:JSON.stringify(expandedIntegration(next,servers.map(server=>server.id)))})
       setSettings(next)
       setPersistedSettings(next)
       setRoleModal(null)
@@ -1302,7 +1306,7 @@ function IngamePermissionsPage({servers,onError}:{servers:Server[];onError:(mess
     ;[reordered[index],reordered[target]]=[reordered[target],reordered[index]]
     const next={...settings,discordGameRoleGrants:reordered}
     try{
-      await api('/integrations',{method:'PUT',body:JSON.stringify(expandedIntegration(next))})
+      await api('/integrations',{method:'PUT',body:JSON.stringify(expandedIntegration(next,servers.map(server=>server.id)))})
       setSettings(next)
       setPersistedSettings(next)
       void loadHealth()
@@ -1333,7 +1337,7 @@ function IngamePermissionsPage({servers,onError}:{servers:Server[];onError:(mess
   return <><PageTitle eyebrow="ACCESS CONTROL" title="In-game Permissions"><button className="primary" onClick={add}><Plus size={15}/> ADD ROLE</button></PageTitle>
     <section className="panel ingame-permissions-intro"><Shield size={24}/><div><h2>Discord-synchronized Remote Admin</h2><p>Define complete runtime SCP:SL roles. The highest-priority matching Discord role is applied when a linked player joins.</p></div><span className="tag">{roles.length} ROLE{roles.length===1?'':'S'}</span></section>
     <section className="permission-operations-grid"><article className="panel permission-health-panel"><div className="panel-head"><div><span className="eyebrow">CONFIGURATION HEALTH</span><h2>{health?.issues.length??0} issue{health?.issues.length===1?'':'s'} detected</h2></div><button onClick={()=>void loadHealth()}><RefreshCw size={14}/> REFRESH</button></div>{health?.issues.length?<div className="permission-issue-list">{health.issues.map((issue,index)=><div className={`permission-issue ${issue.severity}`} key={`${issue.code}-${index}`}><span>{issue.severity.toUpperCase()}</span><div><strong>{issue.code}</strong><p>{issue.message}</p></div></div>)}</div>:<p className="permission-ok">No role conflicts or validation problems detected.</p>}</article><article className="panel permission-diagnostic-panel"><div className="panel-head"><div><span className="eyebrow">PLAYER DIAGNOSTICS</span><h2>Resolve effective access</h2></div><button disabled={syncing} onClick={()=>void syncAll()}><RefreshCw size={14}/> {syncing?'SYNCING…':'SYNC ONLINE'}</button></div><div className="diagnostic-controls"><select value={diagnosticServer} onChange={e=>{setDiagnosticServer(e.target.value);setNativeComparison(null)}}><option value="">Select server…</option>{servers.map(server=><option value={server.id} key={server.id}>{server.name}</option>)}</select><input value={diagnosticUser} onChange={e=>setDiagnosticUser(e.target.value)} placeholder="Steam ID, user ID, or online player ID"/><button className="primary" onClick={()=>void diagnose()}>DIAGNOSE</button><button onClick={()=>void compareNative()}>COMPARE NATIVE RA</button></div>{diagnostic&&<div className="diagnostic-result"><div><span>MATCH</span><strong>{diagnostic.assignment.assigned?diagnostic.assignment.groupName:'No matching role'}</strong></div><div><span>PLAYER</span><strong>{diagnostic.displayName||diagnostic.userId}</strong></div><div><span>NATIVE PERMS</span><strong>{diagnostic.assignment.permissions?.length??0}</strong></div><div><span>PLUGIN PERMS</span><strong>{diagnostic.assignment.pluginPermissions?.length??0}</strong></div></div>}{nativeComparison&&<div className="native-comparison"><strong>{nativeComparison.found?'Native RA configuration found':'Native RA configuration not found'}</strong><p>{nativeComparison.path||'Check the server query-port configuration directory.'}</p><span>Native groups: {nativeComparison.nativeGroups.join(', ')||'none'}</span><span>Panel groups: {nativeComparison.panelGroups.join(', ')||'none'}</span><span>Static members: {nativeComparison.nativeMembers.length}</span></div>}</article></section>
-    <form className="ingame-permissions-page" onSubmit={async event=>{event.preventDefault();try{await api('/integrations',{method:'PUT',body:JSON.stringify(expandedIntegration(settings))});setPersistedSettings(settings);window.dispatchEvent(new CustomEvent('panel-success',{detail:'In-game permissions saved'}));setRoleModal(null);void loadHealth()}catch(error){onError(error instanceof Error?error.message:'Unable to save roles')}}}>
+    <form className="ingame-permissions-page" onSubmit={async event=>{event.preventDefault();try{await api('/integrations',{method:'PUT',body:JSON.stringify(expandedIntegration(settings,servers.map(server=>server.id)))});setPersistedSettings(settings);window.dispatchEvent(new CustomEvent('panel-success',{detail:'In-game permissions saved for all servers'}));setRoleModal(null);void loadHealth()}catch(error){onError(error instanceof Error?error.message:'Unable to save roles')}}}>
       {!!roles.length&&<div className="ingame-role-grid">{roles.map((role,index)=><article className={`panel ingame-role-card ${role.enabled?'':'disabled'}`} key={`card-${index}`}><header><div><h2>{guildRoles.find(item=>item.id===role.roleId)?.name||role.roleId||'No Discord role selected'}</h2></div>{!role.enabled&&<span className="tag red">DISABLED</span>}</header><div className="role-card-stats"><div><small>SERVERS</small><strong>{(role.serverIds??[role.serverId]).map(id=>servers.find(server=>server.id===id)?.name??'Unknown').join(', ')}</strong></div><div><small>PERMISSIONS</small><strong>{(role.permissions??[]).length}</strong></div><div><small>PRIORITY</small><strong>{role.priority}</strong></div></div><footer><div className="role-order-actions"><button type="button" disabled={index===0} title="Move role earlier" onClick={()=>void move(index,-1)}><ArrowLeft size={14}/></button><button type="button" disabled={index===roles.length-1} title="Move role later" onClick={()=>void move(index,1)}><ChevronRight size={14}/></button></div><button type="button" onClick={()=>setRoleModal({index,view:true})}><Eye size={14}/> VIEW</button><button type="button" className="edit" onClick={()=>setRoleModal({index,view:false})}><Pencil size={14}/> EDIT</button><button type="button" onClick={()=>duplicate(index)}><Copy size={14}/> DUPLICATE</button><button type="button" className="danger" onClick={()=>void remove(index)}><Trash2 size={14}/> DELETE</button></footer></article>)}</div>}
       <datalist id="plugin-permission-catalog">{health?.pluginPermissionCatalog.map(permission=><option value={permission} key={permission}/>)}</datalist>
       {roles.map((role,index)=><article className={`panel ingame-role-editor ${roleModal?.index===index?'open':''} ${roleModal?.view?'readonly':''}`} key={index}><header><div><span className="eyebrow">{roleModal?.view?'ROLE DETAILS':`EDIT ROLE ${index+1}`}</span><h2>{role.groupName||'New in-game role'}</h2><p>Discord role {role.roleId||'not selected'} · Priority {role.priority}</p></div><div><label className="check-row"><input type="checkbox" checked={role.enabled} onChange={e=>update(index,{enabled:e.target.checked})}/> Enabled</label>{roleModal?.view&&<button type="button" className="edit" onClick={()=>setRoleModal({index,view:false})}><Pencil size={14}/> EDIT</button>}<button type="button" className="icon-button" onClick={closeEditor}><X size={18}/></button></div></header>
@@ -1361,7 +1365,7 @@ function DonorManagementPageV2({servers,onError}:{servers:Server[];onError:(e:st
   const [busy,setBusy]=useState(false)
   const confirmation=useConfirmDialog()
   useEffect(()=>{
-    api<IntegrationSettings>('/integrations/donors-badges').then(value=>{const loaded={...defaultIntegration,...value,discordDonorRoleGrants:collapseServerAssignments(value.discordDonorRoleGrants??[]),customUserBadges:value.customUserBadges??[],customRoleBadges:value.customRoleBadges??[]};setSettings(loaded);setPersisted(loaded)}).catch(error=>onError(error.message))
+    api<IntegrationSettings>('/integrations/donors-badges').then(value=>{const loaded={...defaultIntegration,...value,discordDonorRoleGrants:collapseServerAssignments(value.discordDonorRoleGrants??[]),customUserBadges:collapseServerAssignments(value.customUserBadges??[]),customRoleBadges:collapseServerAssignments(value.customRoleBadges??[])};setSettings(loaded);setPersisted(loaded)}).catch(error=>onError(error.message))
     api<typeof roles>('/integrations/discord/roles').then(setRoles).catch(error=>onError(error.message))
     api<typeof players>('/players/global').then(setPlayers).catch(error=>onError(error.message))
   },[onError])
@@ -1378,13 +1382,13 @@ function DonorManagementPageV2({servers,onError}:{servers:Server[];onError:(e:st
   const close=()=>{if(persisted)setSettings(persisted);setEditor(null)}
   const save=async(sync=false)=>{
     setBusy(true)
-    try{await api('/integrations/donors-badges',{method:'PUT',body:JSON.stringify(expandedIntegration(settings))});setPersisted(settings);setEditor(null);let message='Donor settings saved';if(sync){const result=await api<{donors:number}[]>('/integrations/discord/donors/sync',{method:'POST'});message=`Synchronized ${result.reduce((sum,item)=>sum+item.donors,0)} donor rows`}window.dispatchEvent(new CustomEvent('panel-success',{detail:message}))}
+    try{await api('/integrations/donors-badges',{method:'PUT',body:JSON.stringify(expandedIntegration(settings,servers.map(server=>server.id)))});setPersisted(settings);setEditor(null);let message='Donors and badges saved for all servers';if(sync){const result=await api<{donors:number}[]>('/integrations/discord/donors/sync',{method:'POST'});message=`Synchronized ${result.reduce((sum,item)=>sum+item.donors,0)} donor rows across all servers`}window.dispatchEvent(new CustomEvent('panel-success',{detail:message}))}
     catch(error){onError(error instanceof Error?error.message:'Unable to save donor settings')}finally{setBusy(false)}
   }
   const remove=async(kind:'donor'|'badge'|'roleBadge',index:number)=>{
     if(!await confirmation.ask(kind==='donor'?'Delete donor mapping?':kind==='roleBadge'?'Delete custom role badge?':'Delete custom user badge?','This item will be removed immediately.','DELETE',true))return
     const next=kind==='donor'?{...settings,discordDonorRoleGrants:grants.filter((_,i)=>i!==index)}:kind==='badge'?{...settings,customUserBadges:badges.filter((_,i)=>i!==index)}:{...settings,customRoleBadges:roleBadges.filter((_,i)=>i!==index)}
-    try{await api('/integrations/donors-badges',{method:'PUT',body:JSON.stringify(expandedIntegration(next))});setSettings(next);setPersisted(next);window.dispatchEvent(new CustomEvent('panel-success',{detail:'Item deleted'}))}catch(error){onError(error instanceof Error?error.message:'Unable to delete item')}
+    try{await api('/integrations/donors-badges',{method:'PUT',body:JSON.stringify(expandedIntegration(next,servers.map(server=>server.id)))});setSettings(next);setPersisted(next);window.dispatchEvent(new CustomEvent('panel-success',{detail:'Item deleted'}))}catch(error){onError(error instanceof Error?error.message:'Unable to delete item')}
   }
   const grant=editor?.kind==='donor'?grants[editor.index]:null
   const badge=editor?.kind==='badge'?badges[editor.index]:null
