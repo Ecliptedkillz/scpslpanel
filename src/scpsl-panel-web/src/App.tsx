@@ -1001,19 +1001,30 @@ const defaultIntegration: IntegrationSettings = {
 }
 
 function SettingsPage({ user, servers, onError }: { user: User; servers: Server[]; onError: (e: string) => void }) {
-  const [tab,setTab]=useState<'general'|'appearance'|'discord'|'diagnostics'|'updates'|'alerts'|'delivery'>('general')
+  const [tab,setTab]=useState<'general'|'appearance'|'health'|'discord'|'diagnostics'|'updates'|'alerts'|'delivery'>('general')
   const tabs: Array<[typeof tab,string]>=[['general','General']]
   tabs.splice(1,0,['appearance','Appearance'])
-  if(user.role==='Owner') tabs.push(['discord','Discord'],['diagnostics','Diagnostics'],['updates','Update center'],['alerts','Alert rules'],['delivery','Delivery log'])
+  if(user.role==='Owner') tabs.push(['health','System health'],['discord','Discord'],['diagnostics','Diagnostics'],['updates','Update center'],['alerts','Alert rules'],['delivery','Delivery log'])
   return <><PageTitle eyebrow="SYSTEM" title="Settings"/><nav className="page-tabs settings-tabs">{tabs.map(([value,label])=><button key={value} className={tab===value?'active':''} onClick={()=>setTab(value)}>{label}</button>)}</nav><section className="settings-tab-content">
     {tab==='general'&&<article className="panel settings-section"><FileCode2 size={26}/><h2>Panel configuration</h2><p>Server access and permissions are managed in Admin Manager. Runtime settings are stored in <code>appsettings.json</code>.</p><div className="setting-info-row"><strong>Signed-in account</strong><span>{user.username}</span></div><div className="setting-info-row"><strong>Account role</strong><span>{user.role}</span></div><div className="setting-info-row"><strong>Registered servers</strong><span>{servers.length}</span></div></article>}
     {tab==='appearance'&&<AppearancePanel/>}
+    {tab==='health'&&user.role==='Owner'&&<SystemHealthPanel onError={onError}/>} 
     {tab==='discord'&&user.role==='Owner'&&<DiscordBotPanel servers={servers} onError={onError}/>}
     {tab==='diagnostics'&&user.role==='Owner'&&<DiscordDiagnosticsPanel onError={onError}/>}
     {tab==='updates'&&user.role==='Owner'&&<UpdateCenterPanel onError={onError}/>}
     {tab==='alerts'&&user.role==='Owner'&&<AlertRulesPanel onError={onError}/>}
     {tab==='delivery'&&user.role==='Owner'&&<NotificationHistoryPanel onError={onError}/>}
   </section></>
+}
+
+function SystemHealthPanel({onError}:{onError:(message:string)=>void}) {
+  type Check={key:string;name:string;status:'healthy'|'warning'|'critical';detail:string;action?:string}
+  type Report={status:Check['status'];checkedAt:string;checks:Check[]}
+  const [report,setReport]=useState<Report|null>(null)
+  const [busy,setBusy]=useState(false)
+  const load=async()=>{setBusy(true);try{setReport(await api<Report>('/system/health'))}catch(e){onError(e instanceof Error?e.message:'Health check failed')}finally{setBusy(false)}}
+  useEffect(()=>{void load()},[])
+  return <article className="panel health-panel"><div className="health-head"><div><CircleGauge size={28}/><span><span className="eyebrow">DEPLOYMENT READINESS</span><h2>System health</h2><p>Storage, integrations, bridges, backups, and host capacity.</p></span></div><button onClick={()=>void load()} disabled={busy}><RefreshCw size={14}/>{busy?'CHECKING…':'RUN CHECKS'}</button></div>{report&&<><div className={`health-summary ${report.status}`}><strong>{report.status.toUpperCase()}</strong><span>{report.checks.filter(x=>x.status==='healthy').length} healthy · {report.checks.filter(x=>x.status==='warning').length} warnings · {report.checks.filter(x=>x.status==='critical').length} critical</span><small>{new Date(report.checkedAt).toLocaleString()}</small></div><div className="health-checks">{report.checks.map(check=><section key={check.key}><i className={check.status}/><div><strong>{check.name}</strong><p>{check.detail}</p>{check.action&&<small>{check.action}</small>}</div><span className={`tag ${check.status==='critical'?'red':''}`}>{check.status}</span></section>)}</div></>}</article>
 }
 
 function AppearancePanel(){

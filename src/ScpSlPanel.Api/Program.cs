@@ -41,6 +41,9 @@ builder.Services.AddSingleton<DiscordBotService>();
 builder.Services.AddSingleton<MaintenanceService>();
 builder.Services.AddSingleton<RestartCoordinator>();
 builder.Services.AddSingleton<ServerManager>();
+builder.Services.AddSingleton<DeploymentHealthService>();
+builder.Services.AddSingleton<PanelBackupService>();
+builder.Services.AddHostedService(provider => provider.GetRequiredService<PanelBackupService>());
 builder.Services.AddHostedService<BootstrapService>();
 builder.Services.AddHostedService<SchedulerService>();
 builder.Services.AddHostedService<MonitoringService>();
@@ -137,6 +140,9 @@ if (discordOAuthEnabled)
                 {
                     user = users.FirstOrDefault(value => value.Enabled && value.DiscordId == discordId);
                     if (user is null) throw new InvalidOperationException("This Discord account is not connected to an enabled panel account.");
+                    var audit = context.HttpContext.RequestServices.GetRequiredService<AuditService>();
+                    await audit.AddAsync(user.Username, "auth.discord-success", user.Username,
+                        $"Discord sign-in from {context.HttpContext.Connection.RemoteIpAddress}");
                 }
 
                 var session = new PanelSession(Guid.NewGuid(), user.Id, DateTimeOffset.UtcNow, DateTimeOffset.UtcNow,
@@ -310,13 +316,22 @@ static async Task<bool> Can(ClaimsPrincipal principal, JsonStore store, Guid ser
             && permissions.Contains(permission, StringComparer.OrdinalIgnoreCase)));
 }
 
-app.MapPost("/api/auth/login", async (LoginRequest request, JsonStore store, PasswordService passwords, TotpService totp, HttpContext context) =>
+app.MapPost("/api/auth/login", async (LoginRequest request, JsonStore store, PasswordService passwords, TotpService totp, AuditService audit, HttpContext context) =>
 {
     var user = (await store.ReadAsync<PanelUser>("users"))
         .FirstOrDefault(x => x.Enabled && x.Username.Equals(request.Username, StringComparison.OrdinalIgnoreCase));
-    if (user is null || !passwords.Verify(request.Password, user.PasswordHash)) return Results.Unauthorized();
+    if (user is null || !passwords.Verify(request.Password, user.PasswordHash))
+    {
+        await audit.AddAsync("anonymous", "auth.password-failure", request.Username.Trim(),
+            $"Rejected password sign-in from {context.Connection.RemoteIpAddress}");
+        return Results.Unauthorized();
+    }
     if (user.TotpEnabled && (string.IsNullOrWhiteSpace(user.TotpSecret) || !totp.Verify(user.TotpSecret, request.Code)))
+    {
+        await audit.AddAsync(user.Username, "auth.2fa-failure", user.Username,
+            $"Rejected second-factor sign-in from {context.Connection.RemoteIpAddress}");
         return Results.Json(new { error = "A valid two-factor authentication code is required.", requiresTwoFactor = true }, statusCode: 401);
+    }
     var session = new PanelSession(Guid.NewGuid(), user.Id, DateTimeOffset.UtcNow, DateTimeOffset.UtcNow,
         context.Connection.RemoteIpAddress?.ToString() ?? "unknown",
         context.Request.Headers.UserAgent.ToString());
@@ -325,6 +340,8 @@ app.MapPost("/api/auth/login", async (LoginRequest request, JsonStore store, Pas
     await store.WriteAsync("sessions", sessions.Where(x => x.CreatedAt > DateTimeOffset.UtcNow.AddDays(-30)).TakeLast(5000));
     var claims = new[] { new Claim(ClaimTypes.NameIdentifier, user.Id.ToString()), new Claim(ClaimTypes.Name, user.Username), new Claim(ClaimTypes.Role, user.Role), new Claim("session_version", user.SessionVersion.ToString()), new Claim("session_id", session.Id.ToString()) };
     await context.SignInAsync(CookieAuthenticationDefaults.AuthenticationScheme, new ClaimsPrincipal(new ClaimsIdentity(claims, CookieAuthenticationDefaults.AuthenticationScheme)));
+    await audit.AddAsync(user.Username, "auth.password-success", user.Username,
+        $"Password sign-in from {context.Connection.RemoteIpAddress}");
     return Results.Ok(new { user.Id, user.Username, user.Role });
 }).RequireRateLimiting("login");
 app.MapGet("/api/auth/discord/status", (ClaimsPrincipal principal) => Results.Ok(new
@@ -353,7 +370,7 @@ app.MapDelete("/api/auth/discord/link", async (ClaimsPrincipal principal, JsonSt
     await audit.AddAsync(users[index].Username, "user.discord-unlink", previous ?? "Discord", "Discord login disconnected");
     return Results.NoContent();
 }).RequireAuthorization();
-app.MapPost("/api/auth/logout", async (HttpContext context, JsonStore store) =>
+app.MapPost("/api/auth/logout", async (HttpContext context, JsonStore store, AuditService audit) =>
 {
     if (Guid.TryParse(context.User.FindFirstValue("session_id"), out var sessionId))
     {
@@ -361,6 +378,8 @@ app.MapPost("/api/auth/logout", async (HttpContext context, JsonStore store) =>
         var index = sessions.FindIndex(x => x.Id == sessionId);
         if (index >= 0) { sessions[index] = sessions[index] with { Revoked = true }; await store.WriteAsync("sessions", sessions); }
     }
+    await audit.AddAsync(Actor(context.User), "auth.logout", Actor(context.User),
+        $"Signed out from {context.Connection.RemoteIpAddress}");
     await context.SignOutAsync(CookieAuthenticationDefaults.AuthenticationScheme);
     return Results.NoContent();
 }).RequireAuthorization();
@@ -386,7 +405,7 @@ app.MapPost("/api/auth/2fa/setup", async (ClaimsPrincipal principal, JsonStore s
     var account = Uri.EscapeDataString(users[index].Username);
     return Results.Ok(new { secret, uri = $"otpauth://totp/{issuer}:{account}?secret={secret}&issuer={issuer}" });
 }).RequireAuthorization();
-app.MapPost("/api/auth/2fa/confirm", async (TotpRequest request, ClaimsPrincipal principal, JsonStore store, TotpService totp) =>
+app.MapPost("/api/auth/2fa/confirm", async (TotpRequest request, ClaimsPrincipal principal, JsonStore store, TotpService totp, AuditService audit) =>
 {
     var users = await store.ReadAsync<PanelUser>("users");
     var index = users.FindIndex(x => x.Id.ToString() == principal.FindFirstValue(ClaimTypes.NameIdentifier));
@@ -394,9 +413,10 @@ app.MapPost("/api/auth/2fa/confirm", async (TotpRequest request, ClaimsPrincipal
         return Results.BadRequest(new { error = "The verification code is invalid." });
     users[index] = users[index] with { TotpEnabled = true };
     await store.WriteAsync("users", users);
+    await audit.AddAsync(Actor(principal), "auth.2fa-enabled", users[index].Username, "TOTP enabled");
     return Results.NoContent();
 }).RequireAuthorization();
-app.MapPost("/api/auth/2fa/disable", async (TotpRequest request, ClaimsPrincipal principal, JsonStore store, TotpService totp) =>
+app.MapPost("/api/auth/2fa/disable", async (TotpRequest request, ClaimsPrincipal principal, JsonStore store, TotpService totp, AuditService audit) =>
 {
     var users = await store.ReadAsync<PanelUser>("users");
     var index = users.FindIndex(x => x.Id.ToString() == principal.FindFirstValue(ClaimTypes.NameIdentifier));
@@ -404,6 +424,7 @@ app.MapPost("/api/auth/2fa/disable", async (TotpRequest request, ClaimsPrincipal
         return Results.BadRequest(new { error = "The verification code is invalid." });
     users[index] = users[index] with { TotpEnabled = false, TotpSecret = null };
     await store.WriteAsync("users", users);
+    await audit.AddAsync(Actor(principal), "auth.2fa-disabled", users[index].Username, "TOTP disabled");
     return Results.NoContent();
 }).RequireAuthorization();
 app.MapPost("/api/auth/sessions/revoke", async (ClaimsPrincipal principal, JsonStore store, HttpContext context) =>
@@ -1625,6 +1646,22 @@ api.MapGet("/system/versions", (BridgeStateService bridge) => Results.Ok(new
     architecture = System.Runtime.InteropServices.RuntimeInformation.ProcessArchitecture.ToString(),
     serverTime = DateTimeOffset.UtcNow
 })).RequireAuthorization("Owner");
+api.MapGet("/system/health", (DeploymentHealthService health) => health.CheckAsync())
+    .RequireAuthorization("Owner");
+api.MapGet("/system/backups", (PanelBackupService backups) => backups.List()).RequireAuthorization("Owner");
+api.MapPost("/system/backups", async (PanelBackupService backups, AuditService audit, ClaimsPrincipal user, CancellationToken cancellationToken) =>
+{
+    var result = await backups.CreateAsync(cancellationToken);
+    await audit.AddAsync(Actor(user), "panel.backup", result.FileName, result.Verified ? "Created and verified" : "Verification failed");
+    return Results.Ok(result);
+}).RequireAuthorization("Owner");
+api.MapPost("/system/backups/{fileName}/verify", async (string fileName, PanelBackupService backups) =>
+    Results.Ok(new { verified = await backups.VerifyAsync(fileName) })).RequireAuthorization("Owner");
+api.MapGet("/system/backups/{fileName}", (string fileName, PanelBackupService backups) =>
+{
+    var path = backups.PathFor(fileName);
+    return File.Exists(path) ? Results.File(path, "application/zip", Path.GetFileName(path)) : Results.NotFound();
+}).RequireAuthorization("Owner");
 api.MapGet("/integrations/notifications/history", (int? take, NotificationService notifications) =>
     notifications.HistoryAsync(take ?? 100)).RequireAuthorization("Owner");
 api.MapGet("/integrations/discord/bot/status", (DiscordBotService bot) =>
