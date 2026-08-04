@@ -181,6 +181,7 @@ function Panel({ user, onLogout, theme, setTheme }: { user: User; onLogout: () =
   const [success, setSuccess] = useState('')
   const [activityOpen, setActivityOpen] = useState(false)
   const [searchOpen, setSearchOpen] = useState(false)
+  const [personalOpen, setPersonalOpen] = useState(false)
   const [operations, setOperations] = useState<Array<{id:string;type:string;target:string;status:string;message:string;createdAt:string}>>([])
 
   const load = useCallback(async () => {
@@ -250,7 +251,7 @@ function Panel({ user, onLogout, theme, setTheme }: { user: User; onLogout: () =
     <aside className={drawer ? 'open' : ''}>
       <div className="brand"><div className="brand-mark"><img src="/scpcontrol.png" alt="SCP Control"/></div><div><strong>SCP CONTROL</strong><span>ADMINISTRATION</span></div></div>
       <nav>{visibleNav.map(item => <button key={item.page} className={page === item.page ? 'active' : ''} onClick={() => { navigatePage(item.page); setDrawer(false) }}><item.icon size={18}/>{item.label}</button>)}</nav>
-      <div className="aside-bottom"><div className="system-line"><span className="status-dot"/>System operational</div><div className="profile"><div className="avatar">{user.username.slice(0, 2).toUpperCase()}</div><div><strong>{user.username}</strong><span>{user.role}</span></div><button onClick={logout} title="Log out"><LogOut size={17}/></button></div></div>
+      <div className="aside-bottom"><div className="system-line"><span className="status-dot"/>System operational</div><div className="profile"><button className="profile-settings" onClick={()=>setPersonalOpen(true)} title="Personal settings"><div className="avatar">{user.username.slice(0, 2).toUpperCase()}</div><div><strong>{user.username}</strong><span>{user.role}</span></div><Settings size={15}/></button><button onClick={logout} title="Log out"><LogOut size={17}/></button></div></div>
     </aside>
     <main className="workspace">
       <header><button className="mobile-menu" onClick={() => setDrawer(!drawer)}>{drawer ? <X/> : <Menu/>}</button><div><span className="crumb">SCP CONTROL / </span>{page === 'server' ? selectedServer?.name.toUpperCase() ?? 'SERVER' : nav.find(x => x.page === page)?.label.toUpperCase()}</div><div className="header-right"><button className="global-search-trigger" onClick={()=>setSearchOpen(true)} title="Global search (Ctrl+K)"><Search size={15}/><span>SEARCH</span><kbd>CTRL K</kbd></button><span className="live-pill"><span className="status-dot"/> LIVE</span><button className="icon-button operation-trigger" title="Recent operations" onClick={() => setActivityOpen(!activityOpen)}><Activity size={17}/>{operations.some(x=>x.status==='queued'||x.status==='running')&&<span/>}</button><ThemeButton theme={theme} setTheme={setTheme}/><button className="icon-button" onClick={load}><RefreshCw size={17}/></button></div></header>
@@ -276,6 +277,7 @@ function Panel({ user, onLogout, theme, setTheme }: { user: User; onLogout: () =
         {page === 'settings' && <SettingsPage user={user} servers={servers} onError={setError}/>}
       </div>
     </main>
+    {personalOpen&&<div className="personal-settings-backdrop" onMouseDown={event=>{if(event.target===event.currentTarget)setPersonalOpen(false)}}><section className="personal-settings-modal"><header><div><span className="eyebrow">PERSONAL SETTINGS</span><h2>{user.username}</h2><p>Manage your password, Discord login, two-factor authentication, and active sessions.</p></div><button className="icon-button" onClick={()=>setPersonalOpen(false)}><X size={18}/></button></header><div className="personal-settings-body"><SettingsBasePage user={user} onError={setError}/><TwoFactorPanel user={user} onError={setError}/></div></section></div>}
   </div>
 }
 
@@ -999,14 +1001,13 @@ const defaultIntegration: IntegrationSettings = {
 }
 
 function SettingsPage({ user, servers, onError }: { user: User; servers: Server[]; onError: (e: string) => void }) {
-  const [tab,setTab]=useState<'general'|'appearance'|'security'|'discord'|'diagnostics'|'updates'|'alerts'|'delivery'>('general')
-  const tabs: Array<[typeof tab,string]>=[['general','General'],['security','Security']]
+  const [tab,setTab]=useState<'general'|'appearance'|'discord'|'diagnostics'|'updates'|'alerts'|'delivery'>('general')
+  const tabs: Array<[typeof tab,string]>=[['general','General']]
   tabs.splice(1,0,['appearance','Appearance'])
   if(user.role==='Owner') tabs.push(['discord','Discord'],['diagnostics','Diagnostics'],['updates','Update center'],['alerts','Alert rules'],['delivery','Delivery log'])
   return <><PageTitle eyebrow="SYSTEM" title="Settings"/><nav className="page-tabs settings-tabs">{tabs.map(([value,label])=><button key={value} className={tab===value?'active':''} onClick={()=>setTab(value)}>{label}</button>)}</nav><section className="settings-tab-content">
     {tab==='general'&&<article className="panel settings-section"><FileCode2 size={26}/><h2>Panel configuration</h2><p>Server access and permissions are managed in Admin Manager. Runtime settings are stored in <code>appsettings.json</code>.</p><div className="setting-info-row"><strong>Signed-in account</strong><span>{user.username}</span></div><div className="setting-info-row"><strong>Account role</strong><span>{user.role}</span></div><div className="setting-info-row"><strong>Registered servers</strong><span>{servers.length}</span></div></article>}
     {tab==='appearance'&&<AppearancePanel/>}
-    {tab==='security'&&<div className="settings-grid"><SettingsBasePage user={user} onError={onError}/><TwoFactorPanel user={user} onError={onError}/></div>}
     {tab==='discord'&&user.role==='Owner'&&<DiscordBotPanel servers={servers} onError={onError}/>}
     {tab==='diagnostics'&&user.role==='Owner'&&<DiscordDiagnosticsPanel onError={onError}/>}
     {tab==='updates'&&user.role==='Owner'&&<UpdateCenterPanel onError={onError}/>}
