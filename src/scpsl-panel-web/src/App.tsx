@@ -277,7 +277,7 @@ function Panel({ user, onLogout, theme, setTheme }: { user: User; onLogout: () =
         {page === 'settings' && <SettingsPage user={user} servers={servers} onError={setError}/>}
       </div>
     </main>
-    {personalOpen&&<div className="personal-settings-backdrop" onMouseDown={event=>{if(event.target===event.currentTarget)setPersonalOpen(false)}}><section className="personal-settings-modal"><header><div><span className="eyebrow">PERSONAL SETTINGS</span><h2>{user.username}</h2><p>Manage your password, Discord login, two-factor authentication, and active sessions.</p></div><button className="icon-button" onClick={()=>setPersonalOpen(false)}><X size={18}/></button></header><div className="personal-settings-body"><SettingsBasePage user={user} onError={setError}/><TwoFactorPanel user={user} onError={setError}/></div></section></div>}
+    {personalOpen&&<PersonalSettings user={user} onError={setError} close={()=>setPersonalOpen(false)}/>} 
   </div>
 }
 
@@ -1027,6 +1027,15 @@ function AppearancePanel(){
   const applyMotion=(value:boolean)=>{setReducedMotion(value);localStorage.setItem('scpcontrol-motion',value?'reduced':'full');document.documentElement.dataset.motion=value?'reduced':'full'}
   const applyConsoleSize=(value:number)=>{setConsoleSize(value);localStorage.setItem('scpcontrol-console-size',String(value));document.documentElement.style.setProperty('--console-font-size',`${value}px`)}
   return <article className="panel settings-section appearance-panel"><Activity size={26}/><h2>Interface appearance</h2><p>Choose how much information fits on screen and personalize the panel accent.</p><section><span className="eyebrow">DISPLAY DENSITY</span><div className="choice-cards"><button className={density==='comfortable'?'active':''} onClick={()=>applyDensity('comfortable')}><strong>Comfortable</strong><small>Larger controls and generous spacing</small></button><button className={density==='compact'?'active':''} onClick={()=>applyDensity('compact')}><strong>Compact</strong><small>More rows and information on screen</small></button></div></section><section><span className="eyebrow">ACCENT COLOR</span><div className="accent-picker">{accents.map(color=><button key={color} className={accent===color?'active':''} style={{backgroundColor:color}} aria-label={`Use ${color}`} onClick={()=>applyAccent(color)}/>) }<label title="Custom accent"><input type="color" value={accent} onChange={e=>applyAccent(e.target.value)}/></label></div></section><section><span className="eyebrow">ACCESSIBILITY & CONSOLE</span><label className="check-row"><input type="checkbox" checked={reducedMotion} onChange={e=>applyMotion(e.target.checked)}/> Reduce interface motion</label><label>CONSOLE FONT SIZE ({consoleSize}px)<input type="range" min="12" max="20" value={consoleSize} onChange={e=>applyConsoleSize(Number(e.target.value))}/></label></section></article>
+}
+
+function PersonalSettings({user,onError,close}:{user:User;onError:(message:string)=>void;close:()=>void}) {
+  const [tab,setTab]=useState<'password'|'security'>('password')
+  return <div className="personal-settings-backdrop" onMouseDown={event=>{if(event.target===event.currentTarget)close()}}><section className="personal-settings-modal">
+    <header><div><span className="eyebrow">PERSONAL SETTINGS</span><h2>{user.username}</h2><p>Manage your personal account and sign-in security.</p></div><button className="icon-button" onClick={close}><X size={18}/></button></header>
+    <nav className="personal-settings-tabs"><button className={tab==='password'?'active':''} onClick={()=>setTab('password')}>PASSWORD</button><button className={tab==='security'?'active':''} onClick={()=>setTab('security')}>SECURITY &amp; SESSIONS</button></nav>
+    <div className="personal-settings-body">{tab==='password'?<SettingsBasePage user={user} onError={onError}/>:<TwoFactorPanel user={user} onError={onError}/>}</div>
+  </section></div>
 }
 
 function TwoFactorPanel({user,onError}:{user:User;onError:(message:string)=>void}) {
