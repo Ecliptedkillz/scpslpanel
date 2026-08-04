@@ -564,3 +564,15 @@ th{font-weight:700;letter-spacing:.09em}
 .ingame-permissions-page .ingame-role-card h2{margin:0 0 7px;font-size:22px;letter-spacing:-.025em}
 .ingame-permissions-page .ingame-role-card>header{grid-template-columns:minmax(0,1fr) auto;min-height:92px;padding:20px 22px}
 .ingame-permissions-page .ingame-role-card>header>div:first-child{min-width:0}
+
+/* Clearly interactive secondary controls */
+.panel-head>button,.health-head button,.diagnostic-controls>button:not(.primary),.console-tools button,.console-tools a,.command-line button{
+  min-height:38px;display:inline-flex;align-items:center;justify-content:center;gap:7px;padding:0 13px;
+  border:1px solid color-mix(in srgb,var(--muted) 38%,var(--line));border-radius:var(--radius-sm);
+  background:linear-gradient(180deg,color-mix(in srgb,var(--surface-2) 88%,white 2%),var(--surface-2));
+  color:color-mix(in srgb,var(--text) 78%,var(--muted));font-size:9px;font-weight:700;letter-spacing:.045em;
+  text-decoration:none;box-shadow:0 1px 2px #0003;transition:border-color .15s ease,color .15s ease,background .15s ease,transform .15s ease
+}
+.panel-head>button:hover:not(:disabled),.health-head button:hover:not(:disabled),.diagnostic-controls>button:not(.primary):hover:not(:disabled),.console-tools button:hover:not(:disabled),.console-tools a:hover,.command-line button:hover:not(:disabled){border-color:color-mix(in srgb,var(--muted) 72%,var(--line));background:color-mix(in srgb,var(--surface-2) 82%,white 5%);color:var(--text);transform:translateY(-1px)}
+.panel-head>button:active:not(:disabled),.health-head button:active:not(:disabled),.diagnostic-controls>button:not(.primary):active:not(:disabled),.console-tools button:active:not(:disabled),.command-line button:active:not(:disabled){transform:translateY(0);box-shadow:none}
+.ban-modal .modal-head p{margin:5px 0 0;color:var(--muted);font-size:11px}.ban-modal label:first-of-type{margin-top:4px}.ban-modal select{width:100%}
