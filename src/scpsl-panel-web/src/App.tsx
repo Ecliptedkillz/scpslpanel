@@ -1110,7 +1110,7 @@ function AppearancePanel(){
 function PersonalSettings({user,onError,close}:{user:User;onError:(message:string)=>void;close:()=>void}) {
   const [tab,setTab]=useState<'password'|'security'|'dashboard'>('password')
   return <div className="personal-settings-backdrop" onMouseDown={event=>{if(event.target===event.currentTarget)close()}}><section className="personal-settings-modal">
-    <header><div><span className="eyebrow">PERSONAL SETTINGS</span><h2>{user.username}</h2><p>Manage your personal account and sign-in security.</p></div><button className="icon-button" onClick={close}><X size={18}/></button></header>
+    <header><div className="personal-profile-identity"><span className="personal-profile-avatar">{user.username.slice(0,2).toUpperCase()}</span><div><h2>{user.username}</h2><p>Manage your personal account and sign-in security.</p><span className="personal-profile-role">{user.role}</span></div></div><button className="icon-button" onClick={close}><X size={18}/></button></header>
     <nav className="personal-settings-tabs"><button className={tab==='password'?'active':''} onClick={()=>setTab('password')}>PASSWORD</button><button className={tab==='security'?'active':''} onClick={()=>setTab('security')}>SECURITY &amp; SESSIONS</button><button className={tab==='dashboard'?'active':''} onClick={()=>setTab('dashboard')}>DASHBOARD</button></nav>
     <div className="personal-settings-body">{tab==='password'?<SettingsBasePage user={user} onError={onError}/>:tab==='security'?<TwoFactorPanel user={user} onError={onError}/>:<DashboardPreferences onError={onError}/>}</div>
   </section></div>
