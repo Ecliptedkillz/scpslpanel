@@ -374,7 +374,7 @@ function ReportTicketsPage({user,servers,onError}:{user:User;servers:Server[];on
   </>
 }
 
-function PageTitle({ eyebrow, title, children }: { eyebrow: string; title: string; children?: React.ReactNode }) {
+function PageTitle({ eyebrow: _eyebrow, title, children }: { eyebrow: string; title: string; children?: React.ReactNode }) {
   const descriptions:Record<string,string>={
     'Operations overview':'Monitor your infrastructure, players, and recent operator activity.',
     'Server fleet':'Monitor health, resource usage, and controls across every registered server.',
@@ -391,7 +391,7 @@ function PageTitle({ eyebrow, title, children }: { eyebrow: string; title: strin
     'Donors & Custom Badges':'Manage Discord-linked benefits and visible player recognition.',
     'Custom User Badges':'Create and assign individual player badges.'
   }
-  return <div className="page-title page-heading"><div className="page-heading-copy"><span className="eyebrow">{eyebrow}</span><h1>{title}</h1>{descriptions[title]&&<p>{descriptions[title]}</p>}</div>{children && <div className="actions">{children}</div>}</div>
+  return <div className="page-title page-heading"><div className="page-heading-copy"><h1>{title}</h1>{descriptions[title]&&<p>{descriptions[title]}</p>}</div>{children && <div className="actions">{children}</div>}</div>
 }
 
 function OverviewPage({ data, navigatePage, openServer }: { data: Overview | null; navigatePage: (p: Page) => void; openServer: (id: string) => void }) {
