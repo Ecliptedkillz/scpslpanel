@@ -1,4 +1,4 @@
-@import url('https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&display=swap');
 
 :root {
   color: #e9edf2;
@@ -52,7 +52,10 @@
 [data-theme="light"] *::-webkit-scrollbar-thumb { background:#aeb7c3 }
 [data-theme="light"] *::-webkit-scrollbar-thumb:hover { background:#8e99a8 }
 [data-theme="light"] *::-webkit-scrollbar-thumb:active { background:var(--red) }
-* { box-sizing: border-box }
+*, *::before, *::after {
+  box-sizing: border-box;
+  font-family: 'DM Sans', sans-serif !important;
+}
 html {
   scrollbar-color: #434c58 var(--bg);
   scrollbar-width: thin;
