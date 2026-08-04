@@ -133,7 +133,7 @@ function GlobalProfileModal({record,close,onError,onUpdated}:{record:GlobalPlaye
   return <div className="modal-backdrop"><article className="modal global-profile-modal">
     <header className="global-profile-hero">
       <div className="dual-avatar large">{player.steamAvatarUrl ? <img src={player.steamAvatarUrl} alt="Steam avatar"/> : <UserRound/>}{player.discordAvatarUrl && <img src={player.discordAvatarUrl} alt="Discord avatar"/>}</div>
-      <div><span className="eyebrow">{record.serverName} · PLAYER PROFILE</span><h2>{player.currentName}</h2><p>{player.steamDisplayName ?? player.userId} {player.discordDisplayName ? `· ${player.discordDisplayName}` : ''}</p></div>
+      <div><h2>{player.currentName}</h2><p>{player.steamDisplayName ?? player.userId} {player.discordDisplayName ? `· ${player.discordDisplayName}` : ''}</p></div>
       <button className="icon-button" onClick={close}><X/></button>
     </header>
     <div className="global-profile-shell">
