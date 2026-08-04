@@ -3,6 +3,7 @@ using System.Text.Json;
 using System.Text.Json.Serialization;
 using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Authentication.Cookies;
+using Microsoft.AspNetCore.Authentication.OAuth;
 using Microsoft.AspNetCore.DataProtection;
 using Microsoft.AspNetCore.HttpOverrides;
 using Microsoft.AspNetCore.SignalR;
@@ -54,7 +55,7 @@ builder.Services.Configure<ForwardedHeadersOptions>(options =>
 });
 builder.Services.ConfigureHttpJsonOptions(options =>
     options.SerializerOptions.Converters.Add(new JsonStringEnumConverter(JsonNamingPolicy.CamelCase)));
-builder.Services.AddAuthentication(CookieAuthenticationDefaults.AuthenticationScheme).AddCookie(options =>
+var authentication = builder.Services.AddAuthentication(CookieAuthenticationDefaults.AuthenticationScheme).AddCookie(options =>
 {
     options.Cookie.Name = "scpsl_panel";
     options.Cookie.HttpOnly = true;
@@ -88,6 +89,74 @@ builder.Services.AddAuthentication(CookieAuthenticationDefaults.AuthenticationSc
         }
     };
 });
+var discordClientId = builder.Configuration["Panel:DiscordOAuth:ClientId"];
+var discordClientSecret = builder.Configuration["Panel:DiscordOAuth:ClientSecret"];
+var discordOAuthEnabled = !string.IsNullOrWhiteSpace(discordClientId)
+    && !string.IsNullOrWhiteSpace(discordClientSecret);
+if (discordOAuthEnabled)
+{
+    authentication.AddOAuth("Discord", options =>
+    {
+        options.ClientId = discordClientId!;
+        options.ClientSecret = discordClientSecret!;
+        options.CallbackPath = "/api/auth/discord/callback";
+        options.AuthorizationEndpoint = "https://discord.com/oauth2/authorize";
+        options.TokenEndpoint = "https://discord.com/api/oauth2/token";
+        options.UserInformationEndpoint = "https://discord.com/api/users/@me";
+        options.Scope.Add("identify");
+        options.SaveTokens = false;
+        options.Events = new OAuthEvents
+        {
+            OnCreatingTicket = async context =>
+            {
+                using var request = new HttpRequestMessage(HttpMethod.Get, context.Options.UserInformationEndpoint);
+                request.Headers.Authorization = new("Bearer", context.AccessToken);
+                using var response = await context.Backchannel.SendAsync(request, context.HttpContext.RequestAborted);
+                response.EnsureSuccessStatusCode();
+                using var profile = JsonDocument.Parse(await response.Content.ReadAsStringAsync(context.HttpContext.RequestAborted));
+                var discordId = profile.RootElement.GetProperty("id").GetString()!;
+                var discordUsername = profile.RootElement.GetProperty("username").GetString() ?? "Discord user";
+                var store = context.HttpContext.RequestServices.GetRequiredService<JsonStore>();
+                var users = await store.ReadAsync<PanelUser>("users", context.HttpContext.RequestAborted);
+                PanelUser? user;
+                if (context.Properties.Items.TryGetValue("panel_link_user", out var linkUserId)
+                    && Guid.TryParse(linkUserId, out var parsedUserId))
+                {
+                    var index = users.FindIndex(value => value.Id == parsedUserId && value.Enabled);
+                    if (index < 0) throw new InvalidOperationException("The panel account is no longer available.");
+                    if (users.Any(value => value.Id != parsedUserId && value.DiscordId == discordId))
+                        throw new InvalidOperationException("That Discord account is already connected to another panel account.");
+                    users[index] = users[index] with { DiscordId = discordId, DiscordUsername = discordUsername };
+                    await store.WriteAsync("users", users, context.HttpContext.RequestAborted);
+                    user = users[index];
+                    context.Properties.RedirectUri = "/?discord=linked";
+                    var audit = context.HttpContext.RequestServices.GetRequiredService<AuditService>();
+                    await audit.AddAsync(user.Username, "user.discord-link", discordUsername, "Discord login connected");
+                }
+                else
+                {
+                    user = users.FirstOrDefault(value => value.Enabled && value.DiscordId == discordId);
+                    if (user is null) throw new InvalidOperationException("This Discord account is not connected to an enabled panel account.");
+                }
+
+                var session = new PanelSession(Guid.NewGuid(), user.Id, DateTimeOffset.UtcNow, DateTimeOffset.UtcNow,
+                    context.HttpContext.Connection.RemoteIpAddress?.ToString() ?? "unknown",
+                    context.HttpContext.Request.Headers.UserAgent.ToString());
+                var sessions = await store.ReadAsync<PanelSession>("sessions", context.HttpContext.RequestAborted);
+                sessions.Add(session);
+                await store.WriteAsync("sessions", sessions.Where(value => value.CreatedAt > DateTimeOffset.UtcNow.AddDays(-30)).TakeLast(5000), context.HttpContext.RequestAborted);
+                var claims = new[] { new Claim(ClaimTypes.NameIdentifier, user.Id.ToString()), new Claim(ClaimTypes.Name, user.Username), new Claim(ClaimTypes.Role, user.Role), new Claim("session_version", user.SessionVersion.ToString()), new Claim("session_id", session.Id.ToString()), new Claim("discord_id", discordId) };
+                context.Principal = new ClaimsPrincipal(new ClaimsIdentity(claims, CookieAuthenticationDefaults.AuthenticationScheme));
+            },
+            OnRemoteFailure = context =>
+            {
+                context.HandleResponse();
+                context.Response.Redirect("/?discord_error=" + Uri.EscapeDataString(context.Failure?.Message ?? "Discord authentication failed."));
+                return Task.CompletedTask;
+            }
+        };
+    });
+}
 builder.Services.AddAuthorization(options =>
     options.AddPolicy("Owner", policy => policy.RequireRole("Owner")));
 builder.Services.AddCors(options => options.AddDefaultPolicy(policy =>
@@ -258,6 +327,32 @@ app.MapPost("/api/auth/login", async (LoginRequest request, JsonStore store, Pas
     await context.SignInAsync(CookieAuthenticationDefaults.AuthenticationScheme, new ClaimsPrincipal(new ClaimsIdentity(claims, CookieAuthenticationDefaults.AuthenticationScheme)));
     return Results.Ok(new { user.Id, user.Username, user.Role });
 }).RequireRateLimiting("login");
+app.MapGet("/api/auth/discord/status", (ClaimsPrincipal principal) => Results.Ok(new
+{
+    enabled = discordOAuthEnabled,
+    linked = principal.Identity?.IsAuthenticated == true && principal.HasClaim(claim => claim.Type == "discord_id")
+}));
+app.MapGet("/api/auth/discord/login", () => discordOAuthEnabled
+    ? Results.Challenge(new AuthenticationProperties { RedirectUri = "/" }, ["Discord"])
+    : Results.NotFound(new { error = "Discord login is not configured." })).RequireRateLimiting("login");
+app.MapGet("/api/auth/discord/link", (ClaimsPrincipal principal) =>
+{
+    if (!discordOAuthEnabled) return Results.NotFound(new { error = "Discord login is not configured." });
+    var properties = new AuthenticationProperties { RedirectUri = "/?discord=linked" };
+    properties.Items["panel_link_user"] = principal.FindFirstValue(ClaimTypes.NameIdentifier);
+    return Results.Challenge(properties, ["Discord"]);
+}).RequireAuthorization();
+app.MapDelete("/api/auth/discord/link", async (ClaimsPrincipal principal, JsonStore store, AuditService audit) =>
+{
+    var users = await store.ReadAsync<PanelUser>("users");
+    var index = users.FindIndex(value => value.Id.ToString() == principal.FindFirstValue(ClaimTypes.NameIdentifier));
+    if (index < 0) return Results.Unauthorized();
+    var previous = users[index].DiscordUsername ?? users[index].DiscordId;
+    users[index] = users[index] with { DiscordId = null, DiscordUsername = null };
+    await store.WriteAsync("users", users);
+    await audit.AddAsync(users[index].Username, "user.discord-unlink", previous ?? "Discord", "Discord login disconnected");
+    return Results.NoContent();
+}).RequireAuthorization();
 app.MapPost("/api/auth/logout", async (HttpContext context, JsonStore store) =>
 {
     if (Guid.TryParse(context.User.FindFirstValue("session_id"), out var sessionId))
@@ -275,7 +370,8 @@ app.MapGet("/api/auth/me", async (ClaimsPrincipal principal, JsonStore store) =>
     return user is null ? Results.Unauthorized() : Results.Ok(new
     {
         user.Username, user.Role, serverIds = user.ServerAccess?.Select(x => x.ServerId).Distinct().ToArray() ?? user.ServerIds ?? [],
-        permissions = user.Permissions ?? [], serverAccess = user.ServerAccess ?? [], twoFactorEnabled = user.TotpEnabled
+        permissions = user.Permissions ?? [], serverAccess = user.ServerAccess ?? [], twoFactorEnabled = user.TotpEnabled,
+        discordLinked = !string.IsNullOrWhiteSpace(user.DiscordId), discordUsername = user.DiscordUsername
     });
 }).RequireAuthorization();
 app.MapPost("/api/auth/2fa/setup", async (ClaimsPrincipal principal, JsonStore store, TotpService totp) =>
@@ -1274,7 +1370,8 @@ api.MapGet("/users", async (JsonStore store) => (await store.ReadAsync<PanelUser
 {
     user.Id, user.Username, user.Role, user.Enabled, user.CreatedAt,
     serverIds = user.ServerAccess?.Select(x => x.ServerId).Distinct().ToArray() ?? user.ServerIds ?? [],
-    permissions = user.Permissions ?? [], serverAccess = user.ServerAccess ?? []
+    permissions = user.Permissions ?? [], serverAccess = user.ServerAccess ?? [],
+    discordLinked = !string.IsNullOrWhiteSpace(user.DiscordId), user.DiscordUsername
 })).RequireAuthorization("Owner");
 api.MapPost("/users", async (AccountRequest request, JsonStore store, PasswordService passwords, AuditService audit, ClaimsPrincipal actor) =>
 {

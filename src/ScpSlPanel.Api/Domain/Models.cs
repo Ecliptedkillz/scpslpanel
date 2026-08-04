@@ -55,7 +55,8 @@ public sealed record PanelUser(
     Guid Id, string Username, string PasswordHash, string Role, bool Enabled,
     DateTimeOffset CreatedAt, IReadOnlyList<Guid>? ServerIds = null,
     IReadOnlyList<string>? Permissions = null, IReadOnlyList<ServerAccessGrant>? ServerAccess = null,
-    string? TotpSecret = null, bool TotpEnabled = false, int SessionVersion = 0);
+    string? TotpSecret = null, bool TotpEnabled = false, int SessionVersion = 0,
+    string? DiscordId = null, string? DiscordUsername = null);
 public sealed record PanelSession(
     Guid Id, Guid UserId, DateTimeOffset CreatedAt, DateTimeOffset LastSeenAt,
     string IpAddress, string UserAgent, bool Revoked = false);

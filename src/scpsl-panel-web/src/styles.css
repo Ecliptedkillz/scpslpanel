@@ -107,6 +107,9 @@ button { background: transparent; border: 0 }
 .primary, .danger.solid { background:var(--red); border:1px solid #f15a5a; min-height:42px; padding:11px 17px; border-radius:6px; font:600 10px 'IBM Plex Mono'; letter-spacing:.08em; display:inline-flex; align-items:center; justify-content:center; gap:9px }
 .primary:hover { background: #ef5050 }.primary:disabled { opacity: .5 }
 .wide { width: 100%; margin-top: 10px }
+.login-divider { display:flex; align-items:center; gap:12px; margin:18px 0 8px; color:var(--muted); font:600 9px 'IBM Plex Mono' }.login-divider:before,.login-divider:after{content:'';height:1px;background:var(--line);flex:1}
+.discord-login { min-height:42px; padding:11px 17px; border:1px solid #5865f2; border-radius:6px; color:#fff; background:#5865f2; font:600 10px 'IBM Plex Mono'; letter-spacing:.08em; display:inline-flex; align-items:center; justify-content:center; gap:9px; text-decoration:none }.discord-login:hover{background:#6875f5}
+.discord-connect{border-top:1px solid var(--line);margin-top:24px;padding-top:22px}.discord-connect>div{display:flex;align-items:center;gap:12px;margin-top:12px}.discord-connect>div>span{display:grid;gap:4px;flex:1}.discord-connect small{color:var(--muted)}
 .login-card footer { color: #67707d; border-top: 1px solid var(--line); margin-top: 35px; padding-top: 20px; text-align: center; font: 500 8px 'IBM Plex Mono'; letter-spacing: .12em }
 .login-card footer span { margin: 0 6px }
 .status-dot { display: inline-block; width: 7px; height: 7px; border-radius: 50%; background: var(--green); box-shadow: 0 0 9px var(--green); margin-right: 7px }

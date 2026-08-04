@@ -3,6 +3,16 @@ setlocal
 
 cd /d "%~dp0"
 
+if not exist ".env" (
+    echo ERROR: .env was not found.
+    echo Copy .env.example to .env and enter the deployment secrets.
+    exit /b 1
+)
+
+for /f "usebackq eol=# tokens=1,* delims==" %%A in (".env") do (
+    if not "%%A"=="" set "%%A=%%B"
+)
+
 echo.
 echo Starting SCP Control...
 echo Dashboard: https://esbpanel.ezaiahhangout.com

@@ -230,6 +230,24 @@ Settings may be provided in `appsettings.json` or standard ASP.NET Core environm
 | `Panel__BootstrapUsername` | First owner username |
 | `Panel__BootstrapPassword` | First owner password |
 | `Panel__AllowedHosts__0` | Allowed development UI origin |
+| `Panel__DiscordOAuth__ClientId` | Discord application ID used for staff account login |
+| `Panel__DiscordOAuth__ClientSecret` | Discord OAuth2 client secret |
+
+For local Windows and Docker deployments, copy `.env.example` to `.env` and put these
+values there. `start.bat` loads that file automatically, and Compose passes the same file
+to the container. The real `.env` is ignored by Git and must not be committed.
+
+To enable linked Discord login, create an application in the Discord Developer Portal and
+add this OAuth2 redirect URL:
+
+```text
+https://esbpanel.ezaiahhangout.com/api/auth/discord/callback
+```
+
+Set both Discord OAuth environment variables and restart the panel. Staff members can then
+open **Settings → Security**, connect their Discord identity to their existing panel account,
+and use **Continue with Discord** on later visits. Discord login never creates panel accounts
+or changes their server permissions.
 
 The `data` directory contains security-sensitive user, audit, server, ban, and schedule
 records. Back it up and restrict filesystem access.

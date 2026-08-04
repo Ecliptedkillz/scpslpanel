@@ -5,9 +5,8 @@ services:
     restart: unless-stopped
     ports:
       - "127.0.0.1:5080:8080"
-    environment:
-      Panel__BootstrapUsername: admin
-      Panel__BootstrapPassword: ${PANEL_BOOTSTRAP_PASSWORD:?Set PANEL_BOOTSTRAP_PASSWORD}
+    env_file:
+      - .env
     volumes:
       - panel-data:/app/data
       # Mount the server directories the panel is allowed to manage:

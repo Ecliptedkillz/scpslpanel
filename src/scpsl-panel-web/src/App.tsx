@@ -15,7 +15,7 @@ import type { AuditEntry, Ban, BridgeSetup, BridgeStatus, Overview, Player, Sche
 type Page = 'overview' | 'servers' | 'server' | 'players' | 'reports' | 'incidents' | 'permissions' | 'donors' | 'bans' | 'schedules' | 'audit' | 'admins' | 'settings'
 type ServerTab = 'overview' | 'operations' | 'monitoring' | 'console' | 'players' | 'player-history' | 'activity' | 'restarts' | 'plugins' | 'files' | 'maintenance'
 type ServerAccessGrant = { serverId: string; permissions: string[] }
-type User = { username: string; role: string; serverIds: string[]; permissions: string[]; serverAccess?: ServerAccessGrant[]; twoFactorEnabled?: boolean }
+type User = { username: string; role: string; serverIds: string[]; permissions: string[]; serverAccess?: ServerAccessGrant[]; twoFactorEnabled?: boolean; discordLinked?: boolean; discordUsername?: string }
 type ThemeMode = 'dark' | 'light' | 'system'
 type SearchResult = { type: 'server' | 'player' | 'audit'; title: string; subtitle: string; serverId?: string; playerId?: string }
 const hasServerPermission = (user: User, serverId: string, permission: string) => {
@@ -141,6 +141,12 @@ function Login({ onLogin, theme, setTheme }: { onLogin: (user: User) => void; th
   const [code, setCode] = useState('')
   const [error, setError] = useState('')
   const [busy, setBusy] = useState(false)
+  const [discordEnabled, setDiscordEnabled] = useState(false)
+  useEffect(() => {
+    api<{enabled:boolean}>('/auth/discord/status').then(value=>setDiscordEnabled(value.enabled)).catch(()=>{})
+    const message = new URLSearchParams(location.search).get('discord_error')
+    if (message) { setError(message); history.replaceState(null, '', location.pathname) }
+  }, [])
   const submit = async (event: FormEvent) => {
     event.preventDefault(); setBusy(true); setError('')
     try { onLogin(await api<User>('/auth/login', { method: 'POST', body: JSON.stringify({ username, password, code }) })) }
@@ -158,6 +164,7 @@ function Login({ onLogin, theme, setTheme }: { onLogin: (user: User) => void; th
         {error && <p className="error">{error}</p>}
         <button className="primary wide" disabled={busy}>{busy ? 'AUTHENTICATING…' : 'AUTHENTICATE'} <ChevronRight size={17}/></button>
       </form>
+      {discordEnabled&&<><div className="login-divider"><span>OR</span></div><a className="discord-login wide" href="/api/auth/discord/login"><Bot size={17}/> CONTINUE WITH DISCORD</a></>}
       <footer><span className="status-dot"/> SYSTEM OPERATIONAL <span>•</span> ENCRYPTED CONNECTION</footer>
     </section>
   </main>
@@ -1032,6 +1039,7 @@ function TwoFactorPanel({user,onError}:{user:User;onError:(message:string)=>void
     {setup&&<div className="totp-setup"><div className="totp-qr"><QRCodeSVG value={setup.uri} size={210} level="M" marginSize={2}/><small>SCAN WITH GOOGLE AUTHENTICATOR</small></div><div><p>Open Google Authenticator, tap <strong>+</strong>, choose <strong>Scan a QR code</strong>, then enter the generated six-digit code below.</p><label>MANUAL SETUP SECRET<div className="input-action"><input readOnly value={setup.secret}/><button type="button" onClick={()=>void copyText(setup.secret)}>COPY</button></div></label><details><summary>Show setup URI</summary><small className="mono totp-uri">{setup.uri}</small></details></div></div>}
     <label>6-DIGIT CODE<input inputMode="numeric" maxLength={6} value={code} onChange={e=>setCode(e.target.value.replace(/\D/g,''))}/></label>
     <div className="button-row">{!user.twoFactorEnabled&&!setup&&<button onClick={async()=>{try{setSetup(await api('/auth/2fa/setup',{method:'POST'}))}catch(e){onError(e instanceof Error?e.message:'Unable to begin setup')}}}>BEGIN SETUP</button>}{setup&&<button className="primary" onClick={async()=>{try{await api('/auth/2fa/confirm',{method:'POST',body:JSON.stringify({code})});location.reload()}catch(e){onError(e instanceof Error?e.message:'Invalid code')}}}>ENABLE 2FA</button>}{user.twoFactorEnabled&&<button className="danger" onClick={async()=>{try{await api('/auth/2fa/disable',{method:'POST',body:JSON.stringify({code})});location.reload()}catch(e){onError(e instanceof Error?e.message:'Invalid code')}}}>DISABLE 2FA</button>}<button className="danger" onClick={async()=>{if(!await confirmation.ask('Revoke all sessions?','Every device, including this one, will be signed out.','REVOKE ALL',true,'REVOKE ALL'))return;await api('/auth/sessions/revoke',{method:'POST'});location.reload()}}>REVOKE ALL SESSIONS</button></div>
+    <div className="discord-connect"><span className="eyebrow">DISCORD LOGIN</span><div><Bot size={22}/><span><strong>{user.discordLinked ? user.discordUsername ?? 'Discord connected' : 'Connect your Discord account'}</strong><small>{user.discordLinked ? 'You can use Discord to sign in to this panel account.' : 'Authorize Discord once, then use it for future panel logins.'}</small></span>{user.discordLinked?<button className="danger" onClick={async()=>{try{await api('/auth/discord/link',{method:'DELETE'});location.reload()}catch(e){onError(e instanceof Error?e.message:'Unable to disconnect Discord')}}}>DISCONNECT</button>:<a className="discord-login" href="/api/auth/discord/link">CONNECT DISCORD</a>}</div></div>
     <div className="active-sessions"><span className="eyebrow">ACTIVE SESSIONS</span>{sessions.map(item=><div className="session-row" key={item.id}><div><strong>{item.current?'This device':'Signed-in device'}</strong><small>{item.ipAddress} · {new Date(item.lastSeenAt).toLocaleString()}</small><p>{item.userAgent}</p></div><button disabled={item.current} onClick={async()=>{if(await confirmation.ask('Revoke session?','This device will be signed out on its next request.','REVOKE')){await api(`/auth/sessions/${item.id}`,{method:'DELETE'});loadSessions()}}}>REVOKE</button></div>)}</div>
   </article>
 }
