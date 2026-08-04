@@ -8,7 +8,7 @@ public sealed record DeploymentHealthReport(string Status, DateTimeOffset Checke
 
 public sealed class DeploymentHealthService(
     JsonStore store, IConfiguration configuration, ServerManager servers, BridgeStateService bridge,
-    DiscordBotService discord, OperationsDataService operations)
+    DiscordBotService discord, OperationsDataService operations, PanelBackupService panelBackups)
 {
     public async Task<DeploymentHealthReport> CheckAsync()
     {
@@ -38,16 +38,36 @@ public sealed class DeploymentHealthService(
         }
         catch (Exception exception) { checks.Add(new("disk", "Disk space", "warning", exception.Message)); }
 
+        var publicOrigin = configuration.GetSection("Panel:AllowedHosts").Get<string[]>()?
+            .FirstOrDefault(value => value.StartsWith("https://", StringComparison.OrdinalIgnoreCase));
+        checks.Add(new("public-url", "HTTPS public origin", publicOrigin is null ? "warning" : "healthy",
+            publicOrigin ?? "No HTTPS production origin is configured.",
+            publicOrigin is null ? "Add the Caddy-served HTTPS origin to Panel:AllowedHosts." : null));
+
         var oauthConfigured = !string.IsNullOrWhiteSpace(configuration["Panel:DiscordOAuth:ClientId"])
             && !string.IsNullOrWhiteSpace(configuration["Panel:DiscordOAuth:ClientSecret"]);
         checks.Add(new("discord-oauth", "Discord staff login", oauthConfigured ? "healthy" : "warning",
             oauthConfigured ? "OAuth client credentials are configured." : "Discord login is disabled.",
             oauthConfigured ? null : "Set the Discord OAuth values in .env."));
+        var membershipRequired = configuration.GetValue("Panel:DiscordOAuth:RequireGuildMembership", false);
+        checks.Add(new("discord-membership", "Discord membership policy", membershipRequired ? "healthy" : "warning",
+            membershipRequired ? "Staff Discord identities must belong to the configured guild." : "Guild membership is not required.",
+            membershipRequired ? null : "Enable RequireGuildMembership if panel access should be limited to community members."));
 
         var bot = discord.Status;
         checks.Add(new("discord-bot", "Discord bot", !bot.Enabled ? "warning" : bot.Connected ? "healthy" : "critical",
             !bot.Enabled ? "Bot integration is disabled." : bot.Connected ? $"Connected as {bot.BotName}." : bot.Error ?? "Bot is offline.",
             bot.Enabled && !bot.Connected ? "Review Discord diagnostics and bot permissions." : null));
+
+        var recovery = panelBackups.List().FirstOrDefault();
+        var recoveryVerified = recovery is not null && await panelBackups.VerifyAsync(recovery.FileName);
+        var recoveryFresh = recovery is not null && recovery.CreatedAt > DateTimeOffset.UtcNow.AddDays(-1);
+        checks.Add(new("panel-backup", "Panel recovery", recoveryVerified && recoveryFresh ? "healthy" : "warning",
+            recovery is null ? "No panel recovery archive exists." : $"Latest: {recovery.CreatedAt:O}; verified: {recoveryVerified}.",
+            recoveryVerified && recoveryFresh ? null : "Create and download a verified recovery archive."));
+        checks.Add(new("backup-encryption", "Recovery encryption", panelBackups.EncryptionConfigured ? "healthy" : "warning",
+            panelBackups.EncryptionConfigured ? "AES-GCM encryption is configured." : "Recovery archives are not encrypted.",
+            panelBackups.EncryptionConfigured ? null : "Set Panel__Backups__EncryptionKey to a base64 AES key."));
 
         var definitions = await servers.DefinitionsAsync();
         foreach (var server in definitions)

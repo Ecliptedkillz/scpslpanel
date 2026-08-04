@@ -252,6 +252,32 @@ or changes their server permissions.
 The `data` directory contains security-sensitive user, audit, server, ban, and schedule
 records. Back it up and restrict filesystem access.
 
+### Operational safeguards
+
+- **Settings → System health** checks storage, disk capacity, Discord, bridges, and backup freshness.
+- Panel recovery archives are created daily under `Panel__Backups__Path` (or `data/panel-backups`)
+  and retained according to `Panel__Backups__Retention`. Set `Panel__Backups__EncryptionKey`
+  to a base64 16, 24, or 32-byte key for AES-GCM encryption; retain an offline copy of that key.
+- High-impact operations require a fresh password or TOTP confirmation and retry automatically
+  after successful confirmation.
+- **Update center → Run preflight** requires healthy infrastructure, a verified recent recovery
+  archive, stopped game servers, and a production frontend build.
+- First-run owners receive an onboarding checklist until domain, OAuth, server, bridge, and
+  recovery setup are ready.
+- Set `Panel__DiscordOAuth__RequireGuildMembership=true` to reject linked Discord identities
+  that are not members of the configured Discord guild.
+- Personal dashboard widgets, favorite servers, and notification read state sync with each
+  panel account.
+
+Run the automated verification suite with:
+
+```powershell
+dotnet test tests\ScpSlPanel.Api.Tests\ScpSlPanel.Api.Tests.csproj
+cd src\scpsl-panel-web
+npm.cmd run build
+npm.cmd run test:smoke
+```
+
 ## Architecture
 
 `ScpSlPanel.Api` is the control plane and static-file host. `ServerManager` is the local

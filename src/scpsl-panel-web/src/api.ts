@@ -4,7 +4,10 @@ export class ApiError extends Error {
   }
 }
 
-export async function api<T>(path: string, init?: RequestInit): Promise<T> {
+let requestReauthentication: (() => Promise<void>) | null = null
+export const setReauthenticationHandler = (handler: (() => Promise<void>) | null) => { requestReauthentication = handler }
+
+export async function api<T>(path: string, init?: RequestInit, retryAfterReauthentication = true): Promise<T> {
   const response = await fetch(`/api${path}`, {
     credentials: 'include',
     ...init,
@@ -22,6 +25,10 @@ export async function api<T>(path: string, init?: RequestInit): Promise<T> {
       : typeof body === 'string' && body
         ? body
         : `Request failed (${response.status})`
+    if (response.status === 428 && retryAfterReauthentication && requestReauthentication && path !== '/auth/reauthenticate') {
+      await requestReauthentication()
+      return api<T>(path, init, false)
+    }
     throw new ApiError(response.status, message)
   }
   return body as T

@@ -118,7 +118,26 @@ if (discordOAuthEnabled)
                 response.EnsureSuccessStatusCode();
                 using var profile = JsonDocument.Parse(await response.Content.ReadAsStringAsync(context.HttpContext.RequestAborted));
                 var discordId = profile.RootElement.GetProperty("id").GetString()!;
-                var discordUsername = profile.RootElement.GetProperty("username").GetString() ?? "Discord user";
+                var discordUsername = profile.RootElement.TryGetProperty("global_name", out var globalName)
+                    && globalName.ValueKind != JsonValueKind.Null ? globalName.GetString()
+                    : profile.RootElement.GetProperty("username").GetString() ?? "Discord user";
+                var avatarHash = profile.RootElement.TryGetProperty("avatar", out var avatarValue)
+                    && avatarValue.ValueKind != JsonValueKind.Null ? avatarValue.GetString() : null;
+                var discordAvatarUrl = avatarHash is null
+                    ? $"https://cdn.discordapp.com/embed/avatars/{(ulong.Parse(discordId) >> 22) % 6}.png"
+                    : $"https://cdn.discordapp.com/avatars/{discordId}/{avatarHash}.png?size=128";
+                if (builder.Configuration.GetValue("Panel:DiscordOAuth:RequireGuildMembership", false))
+                {
+                    var integrations = await context.HttpContext.RequestServices.GetRequiredService<NotificationService>().GetAsync();
+                    if (string.IsNullOrWhiteSpace(integrations.DiscordGuildId) || string.IsNullOrWhiteSpace(integrations.DiscordBotToken))
+                        throw new InvalidOperationException("Discord guild membership enforcement is enabled, but the guild or bot token is not configured.");
+                    using var membership = new HttpRequestMessage(HttpMethod.Get,
+                        $"https://discord.com/api/v10/guilds/{integrations.DiscordGuildId}/members/{discordId}");
+                    membership.Headers.Authorization = new("Bot", integrations.DiscordBotToken);
+                    using var membershipResponse = await context.Backchannel.SendAsync(membership, context.HttpContext.RequestAborted);
+                    if (!membershipResponse.IsSuccessStatusCode)
+                        throw new InvalidOperationException("Your Discord account is not a member of the required server.");
+                }
                 var store = context.HttpContext.RequestServices.GetRequiredService<JsonStore>();
                 var users = await store.ReadAsync<PanelUser>("users", context.HttpContext.RequestAborted);
                 PanelUser? user;
@@ -129,12 +148,13 @@ if (discordOAuthEnabled)
                     if (index < 0) throw new InvalidOperationException("The panel account is no longer available.");
                     if (users.Any(value => value.Id != parsedUserId && value.DiscordId == discordId))
                         throw new InvalidOperationException("That Discord account is already connected to another panel account.");
-                    users[index] = users[index] with { DiscordId = discordId, DiscordUsername = discordUsername };
+                    users[index] = users[index] with { DiscordId = discordId, DiscordUsername = discordUsername,
+                        DiscordAvatarUrl = discordAvatarUrl, DiscordLinkedAt = DateTimeOffset.UtcNow };
                     await store.WriteAsync("users", users, context.HttpContext.RequestAborted);
                     user = users[index];
                     context.Properties.RedirectUri = "/?discord=linked";
                     var audit = context.HttpContext.RequestServices.GetRequiredService<AuditService>();
-                    await audit.AddAsync(user.Username, "user.discord-link", discordUsername, "Discord login connected");
+                    await audit.AddAsync(user.Username, "user.discord-link", discordUsername ?? "Discord user", "Discord login connected");
                 }
                 else
                 {
@@ -154,11 +174,13 @@ if (discordOAuthEnabled)
                 var claims = new[] { new Claim(ClaimTypes.NameIdentifier, user.Id.ToString()), new Claim(ClaimTypes.Name, user.Username), new Claim(ClaimTypes.Role, user.Role), new Claim("session_version", user.SessionVersion.ToString()), new Claim("session_id", session.Id.ToString()), new Claim("discord_id", discordId) };
                 context.Principal = new ClaimsPrincipal(new ClaimsIdentity(claims, CookieAuthenticationDefaults.AuthenticationScheme));
             },
-            OnRemoteFailure = context =>
+            OnRemoteFailure = async context =>
             {
+                var audit = context.HttpContext.RequestServices.GetRequiredService<AuditService>();
+                await audit.AddAsync(context.HttpContext.User.Identity?.Name ?? "anonymous", "auth.discord-failure",
+                    "Discord OAuth", $"{context.Failure?.Message ?? "Authentication failed"}; IP {context.HttpContext.Connection.RemoteIpAddress}");
                 context.HandleResponse();
                 context.Response.Redirect("/?discord_error=" + Uri.EscapeDataString(context.Failure?.Message ?? "Discord authentication failed."));
-                return Task.CompletedTask;
             }
         };
     });
@@ -262,6 +284,24 @@ app.UseStaticFiles(new StaticFileOptions
 app.UseRateLimiter();
 app.UseAuthentication();
 app.UseAuthorization();
+app.Use(async (context, next) =>
+{
+    var path = context.Request.Path;
+    var method = context.Request.Method;
+    var sensitive =
+        (HttpMethods.IsDelete(method) && (path.StartsWithSegments("/api/users") || path.StartsWithSegments("/api/servers")
+            || path.Equals("/api/auth/discord/link")))
+        || (HttpMethods.IsPut(method) && ((path.StartsWithSegments("/api/users") && !path.StartsWithSegments("/api/users/me")) || path.Equals("/api/integrations")))
+        || (HttpMethods.IsPost(method) && (path.Equals("/api/bans") || path.Equals("/api/auth/sessions/revoke")
+            || (path.StartsWithSegments("/api/servers") && (path.Value?.EndsWith("/restore", StringComparison.OrdinalIgnoreCase) == true
+                || path.Value?.EndsWith("/update", StringComparison.OrdinalIgnoreCase) == true))));
+    if (sensitive && context.User.Identity?.IsAuthenticated == true && !RecentlyReauthenticated(context.User))
+    {
+        await ReauthenticationRequired().ExecuteAsync(context);
+        return;
+    }
+    await next();
+});
 
 static string Actor(ClaimsPrincipal user) => user.Identity?.Name ?? "unknown";
 static IReadOnlyList<(string Framework, string Path)> PluginRoots(ServerDefinition server)
@@ -316,6 +356,16 @@ static async Task<bool> Can(ClaimsPrincipal principal, JsonStore store, Guid ser
             && permissions.Contains(permission, StringComparer.OrdinalIgnoreCase)));
 }
 
+static bool RecentlyReauthenticated(ClaimsPrincipal principal) =>
+    long.TryParse(principal.FindFirstValue("reauth_at"), out var value)
+    && DateTimeOffset.UtcNow - DateTimeOffset.FromUnixTimeSeconds(value) < TimeSpan.FromMinutes(5);
+
+static IResult ReauthenticationRequired() => Results.Json(new
+{
+    error = "Confirm your identity before performing this sensitive action.",
+    reauthenticationRequired = true
+}, statusCode: 428);
+
 app.MapPost("/api/auth/login", async (LoginRequest request, JsonStore store, PasswordService passwords, TotpService totp, AuditService audit, HttpContext context) =>
 {
     var user = (await store.ReadAsync<PanelUser>("users"))
@@ -359,13 +409,36 @@ app.MapGet("/api/auth/discord/link", (ClaimsPrincipal principal) =>
     properties.Items["panel_link_user"] = principal.FindFirstValue(ClaimTypes.NameIdentifier);
     return Results.Challenge(properties, ["Discord"]);
 }).RequireAuthorization();
+app.MapPost("/api/auth/reauthenticate", async (ReauthenticationRequest request, ClaimsPrincipal principal,
+    HttpContext context, JsonStore store, PasswordService passwords, TotpService totp, AuditService audit) =>
+{
+    var users = await store.ReadAsync<PanelUser>("users");
+    var user = users.FirstOrDefault(value => value.Id.ToString() == principal.FindFirstValue(ClaimTypes.NameIdentifier) && value.Enabled);
+    if (user is null) return Results.Unauthorized();
+    var passwordValid = !string.IsNullOrWhiteSpace(request.Password) && passwords.Verify(request.Password, user.PasswordHash);
+    var totpValid = user.TotpEnabled && !string.IsNullOrWhiteSpace(user.TotpSecret)
+        && !string.IsNullOrWhiteSpace(request.Code) && totp.Verify(user.TotpSecret, request.Code);
+    if (!passwordValid && !totpValid)
+    {
+        await audit.AddAsync(user.Username, "auth.reauthentication-failure", user.Username,
+            $"Sensitive-action confirmation rejected from {context.Connection.RemoteIpAddress}");
+        return Results.Unauthorized();
+    }
+    var claims = principal.Claims.Where(claim => claim.Type != "reauth_at").Append(
+        new Claim("reauth_at", DateTimeOffset.UtcNow.ToUnixTimeSeconds().ToString()));
+    await context.SignInAsync(CookieAuthenticationDefaults.AuthenticationScheme,
+        new ClaimsPrincipal(new ClaimsIdentity(claims, CookieAuthenticationDefaults.AuthenticationScheme)));
+    await audit.AddAsync(user.Username, "auth.reauthentication-success", user.Username,
+        $"Sensitive-action confirmation from {context.Connection.RemoteIpAddress}");
+    return Results.NoContent();
+}).RequireAuthorization().RequireRateLimiting("login");
 app.MapDelete("/api/auth/discord/link", async (ClaimsPrincipal principal, JsonStore store, AuditService audit) =>
 {
     var users = await store.ReadAsync<PanelUser>("users");
     var index = users.FindIndex(value => value.Id.ToString() == principal.FindFirstValue(ClaimTypes.NameIdentifier));
     if (index < 0) return Results.Unauthorized();
     var previous = users[index].DiscordUsername ?? users[index].DiscordId;
-    users[index] = users[index] with { DiscordId = null, DiscordUsername = null };
+    users[index] = users[index] with { DiscordId = null, DiscordUsername = null, DiscordAvatarUrl = null, DiscordLinkedAt = null };
     await store.WriteAsync("users", users);
     await audit.AddAsync(users[index].Username, "user.discord-unlink", previous ?? "Discord", "Discord login disconnected");
     return Results.NoContent();
@@ -390,8 +463,50 @@ app.MapGet("/api/auth/me", async (ClaimsPrincipal principal, JsonStore store) =>
     {
         user.Username, user.Role, serverIds = user.ServerAccess?.Select(x => x.ServerId).Distinct().ToArray() ?? user.ServerIds ?? [],
         permissions = user.Permissions ?? [], serverAccess = user.ServerAccess ?? [], twoFactorEnabled = user.TotpEnabled,
-        discordLinked = !string.IsNullOrWhiteSpace(user.DiscordId), discordUsername = user.DiscordUsername
+        discordLinked = !string.IsNullOrWhiteSpace(user.DiscordId), discordUsername = user.DiscordUsername,
+        discordAvatarUrl = user.DiscordAvatarUrl, discordLinkedAt = user.DiscordLinkedAt
     });
+}).RequireAuthorization();
+app.MapGet("/api/users/me/preferences", async (ClaimsPrincipal principal, JsonStore store) =>
+{
+    var userId = Guid.Parse(principal.FindFirstValue(ClaimTypes.NameIdentifier)!);
+    return (await store.ReadAsync<UserPreference>("user-preferences")).FirstOrDefault(value => value.UserId == userId)
+        ?? new UserPreference(userId, [], ["status", "servers", "activity", "staff", "permissions"]);
+}).RequireAuthorization();
+app.MapPut("/api/users/me/preferences", async (UserPreferenceRequest request, ClaimsPrincipal principal, JsonStore store) =>
+{
+    var userId = Guid.Parse(principal.FindFirstValue(ClaimTypes.NameIdentifier)!);
+    var values = await store.ReadAsync<UserPreference>("user-preferences");
+    var preference = new UserPreference(userId, request.FavoriteServerIds.Distinct().ToArray(),
+        request.DashboardWidgets.Distinct(StringComparer.OrdinalIgnoreCase).Take(12).ToArray(), request.NotificationsReadAt);
+    var index = values.FindIndex(value => value.UserId == userId);
+    if (index < 0) values.Add(preference); else values[index] = preference;
+    await store.WriteAsync("user-preferences", values);
+    return Results.NoContent();
+}).RequireAuthorization();
+app.MapGet("/api/users/me/inbox", async (ClaimsPrincipal principal, JsonStore store) =>
+{
+    var userId = Guid.Parse(principal.FindFirstValue(ClaimTypes.NameIdentifier)!);
+    var preference = (await store.ReadAsync<UserPreference>("user-preferences")).FirstOrDefault(value => value.UserId == userId);
+    var username = principal.Identity?.Name ?? "";
+    var owner = principal.IsInRole("Owner");
+    var entries = (await store.ReadAsync<AuditEntry>("audit")).Where(value => owner || value.Actor == username)
+        .OrderByDescending(value => value.At).Take(50).Select(value => new
+        {
+            id = value.Id, at = value.At, title = value.Action, detail = $"{value.Target}: {value.Detail}",
+            unread = preference?.NotificationsReadAt is null || value.At > preference.NotificationsReadAt
+        });
+    return Results.Ok(entries);
+}).RequireAuthorization();
+app.MapPost("/api/users/me/inbox/read", async (ClaimsPrincipal principal, JsonStore store) =>
+{
+    var userId = Guid.Parse(principal.FindFirstValue(ClaimTypes.NameIdentifier)!);
+    var values = await store.ReadAsync<UserPreference>("user-preferences");
+    var index = values.FindIndex(value => value.UserId == userId);
+    if (index < 0) values.Add(new(userId, [], ["status", "servers", "activity", "staff", "permissions"], DateTimeOffset.UtcNow));
+    else values[index] = values[index] with { NotificationsReadAt = DateTimeOffset.UtcNow };
+    await store.WriteAsync("user-preferences", values);
+    return Results.NoContent();
 }).RequireAuthorization();
 app.MapPost("/api/auth/2fa/setup", async (ClaimsPrincipal principal, JsonStore store, TotpService totp) =>
 {
@@ -427,13 +542,14 @@ app.MapPost("/api/auth/2fa/disable", async (TotpRequest request, ClaimsPrincipal
     await audit.AddAsync(Actor(principal), "auth.2fa-disabled", users[index].Username, "TOTP disabled");
     return Results.NoContent();
 }).RequireAuthorization();
-app.MapPost("/api/auth/sessions/revoke", async (ClaimsPrincipal principal, JsonStore store, HttpContext context) =>
+app.MapPost("/api/auth/sessions/revoke", async (ClaimsPrincipal principal, JsonStore store, HttpContext context, AuditService audit) =>
 {
     var users = await store.ReadAsync<PanelUser>("users");
     var index = users.FindIndex(x => x.Id.ToString() == principal.FindFirstValue(ClaimTypes.NameIdentifier));
     if (index < 0) return Results.Unauthorized();
     users[index] = users[index] with { SessionVersion = users[index].SessionVersion + 1 };
     await store.WriteAsync("users", users);
+    await audit.AddAsync(Actor(principal), "auth.sessions-revoke-all", users[index].Username, "All active sessions revoked");
     await context.SignOutAsync(CookieAuthenticationDefaults.AuthenticationScheme);
     return Results.NoContent();
 }).RequireAuthorization();
@@ -445,7 +561,7 @@ app.MapGet("/api/auth/sessions", async (ClaimsPrincipal principal, JsonStore sto
         .Where(x => x.UserId == userId && !x.Revoked).OrderByDescending(x => x.LastSeenAt)
         .Select(x => new { x.Id, x.CreatedAt, x.LastSeenAt, x.IpAddress, x.UserAgent, current = x.Id.ToString() == currentId }));
 }).RequireAuthorization();
-app.MapDelete("/api/auth/sessions/{id:guid}", async (Guid id, ClaimsPrincipal principal, JsonStore store, HttpContext context) =>
+app.MapDelete("/api/auth/sessions/{id:guid}", async (Guid id, ClaimsPrincipal principal, JsonStore store, HttpContext context, AuditService audit) =>
 {
     var userId = Guid.Parse(principal.FindFirstValue(ClaimTypes.NameIdentifier)!);
     var sessions = await store.ReadAsync<PanelSession>("sessions");
@@ -453,6 +569,7 @@ app.MapDelete("/api/auth/sessions/{id:guid}", async (Guid id, ClaimsPrincipal pr
     if (index < 0) return Results.NotFound();
     sessions[index] = sessions[index] with { Revoked = true };
     await store.WriteAsync("sessions", sessions);
+    await audit.AddAsync(Actor(principal), "auth.session-revoke", id.ToString(), sessions[index].IpAddress);
     if (principal.FindFirstValue("session_id") == id.ToString())
         await context.SignOutAsync(CookieAuthenticationDefaults.AuthenticationScheme);
     return Results.NoContent();
@@ -1648,6 +1765,24 @@ api.MapGet("/system/versions", (BridgeStateService bridge) => Results.Ok(new
 })).RequireAuthorization("Owner");
 api.MapGet("/system/health", (DeploymentHealthService health) => health.CheckAsync())
     .RequireAuthorization("Owner");
+api.MapGet("/system/onboarding", async (DeploymentHealthService health, ServerManager servers, JsonStore store) =>
+{
+    var report = await health.CheckAsync();
+    var definitions = await servers.DefinitionsAsync();
+    return Results.Ok(new
+    {
+        complete = definitions.Count > 0 && report.Checks.All(value => value.Status != "critical")
+            && report.Checks.Any(value => value.Key.StartsWith("bridge:") && value.Status == "healthy"),
+        steps = new[]
+        {
+            new { key = "domain", name = "HTTPS domain", complete = report.Checks.FirstOrDefault(value => value.Key == "public-url")?.Status == "healthy", detail = "Caddy terminates HTTPS for the panel." },
+            new { key = "discord", name = "Discord staff login", complete = report.Checks.FirstOrDefault(value => value.Key == "discord-oauth")?.Status == "healthy", detail = "Configure OAuth credentials in .env." },
+            new { key = "server", name = "Register a game server", complete = definitions.Count > 0, detail = "Add the first SCP:SL server from Servers." },
+            new { key = "bridge", name = "Connect the LabAPI bridge", complete = report.Checks.Any(value => value.Key.StartsWith("bridge:") && value.Status == "healthy"), detail = "Install the bridge and verify its heartbeat." },
+            new { key = "backup", name = "Create a recovery backup", complete = Directory.Exists(Path.Combine(store.StoragePath(), "panel-backups")), detail = "Create and download a verified recovery archive." }
+        }
+    });
+}).RequireAuthorization("Owner");
 api.MapGet("/system/backups", (PanelBackupService backups) => backups.List()).RequireAuthorization("Owner");
 api.MapPost("/system/backups", async (PanelBackupService backups, AuditService audit, ClaimsPrincipal user, CancellationToken cancellationToken) =>
 {
@@ -1660,7 +1795,23 @@ api.MapPost("/system/backups/{fileName}/verify", async (string fileName, PanelBa
 api.MapGet("/system/backups/{fileName}", (string fileName, PanelBackupService backups) =>
 {
     var path = backups.PathFor(fileName);
-    return File.Exists(path) ? Results.File(path, "application/zip", Path.GetFileName(path)) : Results.NotFound();
+    return File.Exists(path) ? Results.File(path, fileName.EndsWith(".aes") ? "application/octet-stream" : "application/zip", Path.GetFileName(path)) : Results.NotFound();
+}).RequireAuthorization("Owner");
+api.MapGet("/system/update/preflight", async (DeploymentHealthService health, PanelBackupService backups, ServerManager servers) =>
+{
+    var report = await health.CheckAsync();
+    var snapshots = await servers.SnapshotsAsync();
+    var latest = backups.List().FirstOrDefault();
+    var backupVerified = latest is not null && latest.CreatedAt > DateTimeOffset.UtcNow.AddDays(-1)
+        && await backups.VerifyAsync(latest.FileName);
+    var checks = new[]
+    {
+        new { name = "Deployment health", passed = report.Status != "critical", detail = report.Status },
+        new { name = "Current recovery archive", passed = backupVerified, detail = latest is null ? "No panel backup" : $"{latest.FileName} ({latest.CreatedAt:O})" },
+        new { name = "Game servers stopped", passed = snapshots.All(value => value.State.ToString().Equals("offline", StringComparison.OrdinalIgnoreCase)), detail = $"{snapshots.Count(value => !value.State.ToString().Equals("offline", StringComparison.OrdinalIgnoreCase))} running" },
+        new { name = "Production frontend", passed = File.Exists(Path.Combine(app.Environment.ContentRootPath, "wwwroot", "index.html")), detail = "Built static application" }
+    };
+    return Results.Ok(new { ready = checks.All(value => value.passed), checkedAt = DateTimeOffset.UtcNow, checks });
 }).RequireAuthorization("Owner");
 api.MapGet("/integrations/notifications/history", (int? take, NotificationService notifications) =>
     notifications.HistoryAsync(take ?? 100)).RequireAuthorization("Owner");
@@ -1706,3 +1857,5 @@ await using (var reconciliationScope = app.Services.CreateAsyncScope())
 }
 
 app.Run();
+
+public partial class Program { }

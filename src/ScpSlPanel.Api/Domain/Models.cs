@@ -56,11 +56,16 @@ public sealed record PanelUser(
     DateTimeOffset CreatedAt, IReadOnlyList<Guid>? ServerIds = null,
     IReadOnlyList<string>? Permissions = null, IReadOnlyList<ServerAccessGrant>? ServerAccess = null,
     string? TotpSecret = null, bool TotpEnabled = false, int SessionVersion = 0,
-    string? DiscordId = null, string? DiscordUsername = null);
+    string? DiscordId = null, string? DiscordUsername = null,
+    string? DiscordAvatarUrl = null, DateTimeOffset? DiscordLinkedAt = null);
 public sealed record PanelSession(
     Guid Id, Guid UserId, DateTimeOffset CreatedAt, DateTimeOffset LastSeenAt,
     string IpAddress, string UserAgent, bool Revoked = false);
 public sealed record ServerAccessGrant(Guid ServerId, IReadOnlyList<string> Permissions);
+public sealed record UserPreference(Guid UserId, IReadOnlyList<Guid> FavoriteServerIds,
+    IReadOnlyList<string> DashboardWidgets, DateTimeOffset? NotificationsReadAt = null);
+public sealed record UserPreferenceRequest(IReadOnlyList<Guid> FavoriteServerIds,
+    IReadOnlyList<string> DashboardWidgets, DateTimeOffset? NotificationsReadAt = null);
 
 public sealed record PluginEntry(
     string Name, string Version, string Framework, bool Enabled, string Path);
@@ -76,6 +81,7 @@ public sealed record ServerCreateRequest(
 
 public sealed record LoginRequest(string Username, string Password, string? Code = null);
 public sealed record TotpRequest(string Code);
+public sealed record ReauthenticationRequest(string? Password, string? Code);
 public sealed record AccountRequest(
     string Username, string? Password, bool Enabled, IReadOnlyList<Guid> ServerIds,
     IReadOnlyList<string> Permissions, IReadOnlyList<ServerAccessGrant>? ServerAccess = null);

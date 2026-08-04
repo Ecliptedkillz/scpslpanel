@@ -1,11 +1,11 @@
 import { FormEvent, useCallback, useEffect, useRef, useState } from 'react'
 import {
-  Activity, ArrowLeft, Ban as BanIcon, Bot, CalendarClock, ChevronRight, CircleGauge, Command, Copy,
+  Activity, ArrowLeft, Ban as BanIcon, Bell, Bot, CalendarClock, ChevronRight, CircleGauge, Command, Copy,
   Eye, FileCode2, FolderOpen, Gamepad2, History, LayoutDashboard, LogOut, Menu, Pencil, Play, Plug,
   Save, Plus, RefreshCw, RotateCcw, Search, Server as ServerIcon, Settings, Shield,
-  Square, Sun, Moon, Terminal, Trash2, Users, X,
+  Square, Star, Sun, Moon, Terminal, Trash2, Users, X,
 } from 'lucide-react'
-import { api, ApiError } from './api'
+import { api, ApiError, setReauthenticationHandler } from './api'
 import { QRCodeSVG } from 'qrcode.react'
 import { ServerConfigEditor } from './components/ServerConfigEditor'
 import { PlayerHistoryView, type StoredPlayer } from './components/PlayerHistoryView'
@@ -15,7 +15,7 @@ import type { AuditEntry, Ban, BridgeSetup, BridgeStatus, Overview, Player, Sche
 type Page = 'overview' | 'servers' | 'server' | 'players' | 'reports' | 'incidents' | 'permissions' | 'donors' | 'bans' | 'schedules' | 'audit' | 'admins' | 'settings'
 type ServerTab = 'overview' | 'operations' | 'monitoring' | 'console' | 'players' | 'player-history' | 'activity' | 'restarts' | 'plugins' | 'files' | 'maintenance'
 type ServerAccessGrant = { serverId: string; permissions: string[] }
-type User = { username: string; role: string; serverIds: string[]; permissions: string[]; serverAccess?: ServerAccessGrant[]; twoFactorEnabled?: boolean; discordLinked?: boolean; discordUsername?: string }
+type User = { username: string; role: string; serverIds: string[]; permissions: string[]; serverAccess?: ServerAccessGrant[]; twoFactorEnabled?: boolean; discordLinked?: boolean; discordUsername?: string; discordAvatarUrl?:string; discordLinkedAt?:string }
 type ThemeMode = 'dark' | 'light' | 'system'
 type SearchResult = { type: 'server' | 'player' | 'audit'; title: string; subtitle: string; serverId?: string; playerId?: string }
 const hasServerPermission = (user: User, serverId: string, permission: string) => {
@@ -102,6 +102,13 @@ function useUnsavedChanges(dirty:boolean){
 export function App() {
   const [theme, setTheme] = useState<ThemeMode>(() => (localStorage.getItem('scpcontrol-theme') as ThemeMode) || 'dark')
   const [user, setUser] = useState<User | null | undefined>(undefined)
+  const [reauthOpen,setReauthOpen]=useState(false)
+  const reauthResolve=useRef<(()=>void)|null>(null)
+  const reauthReject=useRef<((reason?:unknown)=>void)|null>(null)
+  useEffect(()=>{
+    setReauthenticationHandler(()=>new Promise<void>((resolve,reject)=>{reauthResolve.current=resolve;reauthReject.current=reject;setReauthOpen(true)}))
+    return()=>setReauthenticationHandler(null)
+  },[])
   useEffect(() => {
     document.documentElement.dataset.density=localStorage.getItem('scpcontrol-density')||'comfortable'
     const accent=localStorage.getItem('scpcontrol-accent')
@@ -122,9 +129,16 @@ export function App() {
     return () => media.removeEventListener('change', apply)
   }, [theme])
   useEffect(() => { api<User>('/auth/me').then(setUser).catch(() => setUser(null)) }, [])
-  if (user === undefined) return <Splash />
+  const reauthModal=reauthOpen&&<ReauthenticationModal close={(confirmed)=>{setReauthOpen(false);if(confirmed)reauthResolve.current?.();else reauthReject.current?.(new ApiError(428,'Identity confirmation was cancelled.'));reauthResolve.current=null;reauthReject.current=null}}/>
+  if (user === undefined) return <><Splash/>{reauthModal}</>
   if (!user) return <Login onLogin={setUser} theme={theme} setTheme={setTheme}/>
-  return <Panel user={user} onLogout={() => setUser(null)} theme={theme} setTheme={setTheme}/>
+  return <><Panel user={user} onLogout={() => setUser(null)} theme={theme} setTheme={setTheme}/>{reauthModal}</>
+}
+
+function ReauthenticationModal({close}:{close:(confirmed:boolean)=>void}) {
+  const [password,setPassword]=useState('');const [code,setCode]=useState('');const [error,setError]=useState('');const [busy,setBusy]=useState(false)
+  const submit=async(event:FormEvent)=>{event.preventDefault();setBusy(true);setError('');try{await api('/auth/reauthenticate',{method:'POST',body:JSON.stringify({password,code})},false);close(true)}catch(e){setError(e instanceof Error?e.message:'Confirmation failed')}finally{setBusy(false)}}
+  return <div className="reauth-backdrop"><form className="reauth-modal" onSubmit={submit}><div className="reauth-icon"><Shield size={23}/></div><span className="eyebrow">SENSITIVE ACTION</span><h2>Confirm your identity</h2><p>Enter your password or current authenticator code. Confirmation remains valid for five minutes.</p><label>PASSWORD<input autoFocus type="password" value={password} onChange={e=>setPassword(e.target.value)} autoComplete="current-password"/></label><label>2FA CODE<input inputMode="numeric" maxLength={6} value={code} onChange={e=>setCode(e.target.value.replace(/\D/g,''))} autoComplete="one-time-code"/></label>{error&&<p className="error">{error}</p>}<div className="modal-actions"><button type="button" onClick={()=>close(false)}>CANCEL</button><button className="primary" disabled={busy||(!password&&!code)}>{busy?'CONFIRMING…':'CONFIRM & CONTINUE'}</button></div></form></div>
 }
 
 function Splash() {
@@ -181,7 +195,14 @@ function Panel({ user, onLogout, theme, setTheme }: { user: User; onLogout: () =
   const [success, setSuccess] = useState('')
   const [activityOpen, setActivityOpen] = useState(false)
   const [searchOpen, setSearchOpen] = useState(false)
+  const [inboxOpen,setInboxOpen]=useState(false)
+  const [inbox,setInbox]=useState<Array<{id:string;at:string;title:string;detail:string;unread:boolean}>>([])
+  const loadInbox=useCallback(()=>api<typeof inbox>('/users/me/inbox').then(setInbox).catch(()=>{}),[])
+  useEffect(()=>{void loadInbox();const timer=setInterval(()=>void loadInbox(),60000);return()=>clearInterval(timer)},[loadInbox])
   const [personalOpen, setPersonalOpen] = useState(false)
+  const [onboarding,setOnboarding]=useState<{complete:boolean;steps:Array<{key:string;name:string;complete:boolean;detail:string}>}|null>(null)
+  const [onboardingOpen,setOnboardingOpen]=useState(()=>sessionStorage.getItem('scpcontrol-onboarding-dismissed')!=='1')
+  useEffect(()=>{if(user.role==='Owner')api<typeof onboarding>('/system/onboarding').then(setOnboarding).catch(()=>{})},[user.role])
   const [operations, setOperations] = useState<Array<{id:string;type:string;target:string;status:string;message:string;createdAt:string}>>([])
 
   const load = useCallback(async () => {
@@ -254,10 +275,11 @@ function Panel({ user, onLogout, theme, setTheme }: { user: User; onLogout: () =
       <div className="aside-bottom"><div className="system-line"><span className="status-dot"/>System operational</div><div className="profile"><button className="profile-settings" onClick={()=>setPersonalOpen(true)} title="Personal settings"><div className="avatar">{user.username.slice(0, 2).toUpperCase()}</div><div><strong>{user.username}</strong><span>{user.role}</span></div><Settings size={15}/></button><button onClick={logout} title="Log out"><LogOut size={17}/></button></div></div>
     </aside>
     <main className="workspace">
-      <header><button className="mobile-menu" onClick={() => setDrawer(!drawer)}>{drawer ? <X/> : <Menu/>}</button><div><span className="crumb">SCP CONTROL / </span>{page === 'server' ? selectedServer?.name.toUpperCase() ?? 'SERVER' : nav.find(x => x.page === page)?.label.toUpperCase()}</div><div className="header-right"><button className="global-search-trigger" onClick={()=>setSearchOpen(true)} title="Global search (Ctrl+K)"><Search size={15}/><span>SEARCH</span><kbd>CTRL K</kbd></button><span className="live-pill"><span className="status-dot"/> LIVE</span><button className="icon-button operation-trigger" title="Recent operations" onClick={() => setActivityOpen(!activityOpen)}><Activity size={17}/>{operations.some(x=>x.status==='queued'||x.status==='running')&&<span/>}</button><ThemeButton theme={theme} setTheme={setTheme}/><button className="icon-button" onClick={load}><RefreshCw size={17}/></button></div></header>
+      <header><button className="mobile-menu" onClick={() => setDrawer(!drawer)}>{drawer ? <X/> : <Menu/>}</button><div><span className="crumb">SCP CONTROL / </span>{page === 'server' ? selectedServer?.name.toUpperCase() ?? 'SERVER' : nav.find(x => x.page === page)?.label.toUpperCase()}</div><div className="header-right"><button className="global-search-trigger" onClick={()=>setSearchOpen(true)} title="Global search (Ctrl+K)"><Search size={15}/><span>SEARCH</span><kbd>CTRL K</kbd></button><span className="live-pill"><span className="status-dot"/> LIVE</span><button className="icon-button inbox-trigger" title="Notifications" onClick={async()=>{setInboxOpen(!inboxOpen);setActivityOpen(false);if(!inboxOpen){await api('/users/me/inbox/read',{method:'POST'}).catch(()=>{});setInbox(current=>current.map(item=>({...item,unread:false})))}}}><Bell size={17}/>{inbox.some(item=>item.unread)&&<span/>}</button><button className="icon-button operation-trigger" title="Recent operations" onClick={() => {setActivityOpen(!activityOpen);setInboxOpen(false)}}><Activity size={17}/>{operations.some(x=>x.status==='queued'||x.status==='running')&&<span/>}</button><ThemeButton theme={theme} setTheme={setTheme}/><button className="icon-button" onClick={load}><RefreshCw size={17}/></button></div></header>
       {error && <div className="toast error">{error}<button onClick={() => setError('')}><X size={15}/></button></div>}
       {success && <div className="toast success">{success}<button onClick={() => setSuccess('')}><X size={15}/></button></div>}
       {activityOpen && <aside className="operation-drawer"><div className="operation-head"><div><span className="eyebrow">ACTIVITY</span><h2>Recent operations</h2></div><button className="icon-button" onClick={()=>setActivityOpen(false)}><X/></button></div>{operations.map(item=><div className={`operation-row ${item.status}`} key={item.id}><span className="operation-state"/><div><strong>{item.type} · {item.target}</strong><p>{item.message}</p><small>{new Date(item.createdAt).toLocaleString()}</small></div><b>{item.status}</b></div>)}{!operations.length&&<EmptyMini text="No recent operations."/>}</aside>}
+      {inboxOpen&&<aside className="notification-drawer"><div className="operation-head"><div><span className="eyebrow">NOTIFICATIONS</span><h2>Your activity inbox</h2></div><button className="icon-button" onClick={()=>setInboxOpen(false)}><X/></button></div>{inbox.map(item=><div className="inbox-row" key={item.id}><i className={item.unread?'unread':''}/><div><strong>{item.title}</strong><p>{item.detail}</p><small>{new Date(item.at).toLocaleString()}</small></div></div>)}{!inbox.length&&<EmptyMini text="No account activity yet."/>}</aside>}
       {searchOpen && <GlobalSearch close={()=>setSearchOpen(false)} openServer={openServer} openAudit={()=>navigatePage('audit')}/>}
       <div className="content">
         {page === 'overview' && <OverviewPage data={overview} navigatePage={navigatePage} openServer={openServer}/>}
@@ -278,7 +300,13 @@ function Panel({ user, onLogout, theme, setTheme }: { user: User; onLogout: () =
       </div>
     </main>
     {personalOpen&&<PersonalSettings user={user} onError={setError} close={()=>setPersonalOpen(false)}/>} 
+    {onboarding&&!onboarding.complete&&onboardingOpen&&<OnboardingGuide data={onboarding} close={()=>{sessionStorage.setItem('scpcontrol-onboarding-dismissed','1');setOnboardingOpen(false)}} navigate={navigatePage}/>} 
   </div>
+}
+
+function OnboardingGuide({data,close,navigate}:{data:{steps:Array<{key:string;name:string;complete:boolean;detail:string}>};close:()=>void;navigate:(page:Page)=>void}) {
+  const complete=data.steps.filter(step=>step.complete).length
+  return <aside className="onboarding-guide"><header><div><span className="eyebrow">GETTING STARTED</span><h2>Finish panel setup</h2><p>{complete} of {data.steps.length} readiness steps complete</p></div><button className="icon-button" onClick={close}><X size={16}/></button></header><div className="onboarding-progress"><i style={{width:`${complete/data.steps.length*100}%`}}/></div>{data.steps.map(step=><section className={step.complete?'complete':''} key={step.key}><span>{step.complete?'✓':'○'}</span><div><strong>{step.name}</strong><small>{step.detail}</small></div></section>)}<footer><button onClick={()=>{navigate('settings');close()}}>OPEN SYSTEM SETTINGS</button><button className="primary" onClick={()=>{navigate('servers');close()}}>OPEN SERVERS</button></footer></aside>
 }
 
 type ManagedIncident={id:string;serverId:string;title:string;category:string;severity:string;status:string;description:string;createdBy:string;createdAt:string;updatedAt:string;assignedTo?:string;resolution?:string;resolvedAt?:string;notes:Array<{id:string;text:string;actor:string;at:string}>}
@@ -352,6 +380,7 @@ function PageTitle({ eyebrow, title, children }: { eyebrow: string; title: strin
 
 function OverviewPage({ data, navigatePage, openServer }: { data: Overview | null; navigatePage: (p: Page) => void; openServer: (id: string) => void }) {
   if (!data) return <Skeleton/>
+  const widgets:string[]=JSON.parse(localStorage.getItem('scpcontrol-dashboard-widgets')||'["status","servers","activity","staff","permissions"]')
   const cards = [
     { label: 'SERVERS ONLINE', value: `${data.serversOnline}/${data.serversTotal}`, sub: data.serversTotal ? 'Fleet availability' : 'Add your first server', icon: ServerIcon },
     { label: 'PLAYERS ONLINE', value: data.playersOnline, sub: 'Across all instances', icon: Users },
@@ -360,23 +389,23 @@ function OverviewPage({ data, navigatePage, openServer }: { data: Overview | nul
   ]
   return <>
     <PageTitle eyebrow="FACILITY COMMAND" title="Operations overview"><button className="primary" onClick={() => navigatePage('servers')}><Plus size={16}/> ADD SERVER</button></PageTitle>
-    <section className="stat-grid">{cards.map(card => <article className="stat-card" key={card.label}><div className="card-top"><span>{card.label}</span><card.icon size={19}/></div><strong>{card.value}</strong><small>{card.sub}</small></article>)}</section>
+    {widgets.includes('status')&&<section className="stat-grid">{cards.map(card => <article className="stat-card" key={card.label}><div className="card-top"><span>{card.label}</span><card.icon size={19}/></div><strong>{card.value}</strong><small>{card.sub}</small></article>)}</section>}
     <section className="split-grid">
-      <article className="panel">
+      {widgets.includes('servers')&&<article className="panel">
         <div className="panel-head"><div><span className="eyebrow">INFRASTRUCTURE</span><h2>Server fleet</h2></div><button className="text-button" onClick={() => navigatePage('servers')}>VIEW ALL <ChevronRight size={15}/></button></div>
         {data.servers.length ? <div className="server-list">{data.servers.slice(0, 5).map(server =>
           <button className="server-row" key={server.id} onClick={() => openServer(server.id)}>
             <span className={`server-state ${server.state}`}><Gamepad2 size={19}/></span><span className="server-name"><strong>{server.name}</strong><small>PID {server.processId ?? '—'} • {server.players}/{server.maxPlayers || '—'} players</small></span>
             <span className={`state-label ${server.state}`}><span/> {server.state}</span><span>{server.cpuPercent}% CPU</span><span>{fmtBytes(server.memoryBytes)}</span><ChevronRight size={16}/>
           </button>)}</div> : <EmptyMini text="No servers configured yet."/>}
-      </article>
-      <article className="panel">
+      </article>}
+      {widgets.includes('activity')&&<article className="panel">
         <div className="panel-head"><div><span className="eyebrow">SECURITY RECORD</span><h2>Recent activity</h2></div><button className="text-button" onClick={() => navigatePage('audit')}>AUDIT LOG <ChevronRight size={15}/></button></div>
         {data.recentActivity.length ? <div className="activity-list">{data.recentActivity.slice(0, 6).map(entry => <div className="activity-row" key={entry.id}><div className="event-icon"><Command size={16}/></div><div><strong>{entry.action}</strong><p>{entry.actor} · {entry.target}</p></div><time>{fmtAgo(entry.at)}</time></div>)}</div> : <EmptyMini text="Activity will appear here."/>}
-      </article>
+      </article>}
     </section>
-    <StaffDashboard/>
-    <PermissionHealthDashboard/>
+    {widgets.includes('staff')&&<StaffDashboard/>}
+    {widgets.includes('permissions')&&<PermissionHealthDashboard/>}
   </>
 }
 
@@ -401,6 +430,11 @@ function StaffDashboard(){
 }
 
 function ServersPage({ user, servers, refresh, openServer, onError }: { user: User; servers: Server[]; refresh: () => void; openServer: (id: string) => void; onError: (e: string) => void }) {
+  const [preference,setPreference]=useState<{favoriteServerIds:string[];dashboardWidgets:string[];notificationsReadAt?:string}>({favoriteServerIds:[],dashboardWidgets:['status','servers','activity']})
+  const favorites=preference.favoriteServerIds
+  useEffect(()=>{api<typeof preference>('/users/me/preferences').then(setPreference).catch(()=>{})},[])
+  const toggleFavorite=(id:string)=>setPreference(current=>{const next={...current,favoriteServerIds:current.favoriteServerIds.includes(id)?current.favoriteServerIds.filter(value=>value!==id):[...current.favoriteServerIds,id]};void api('/users/me/preferences',{method:'PUT',body:JSON.stringify(next)}).catch(e=>onError(e.message));return next})
+  const ordered=[...servers].sort((a,b)=>Number(favorites.includes(b.id))-Number(favorites.includes(a.id))||a.name.localeCompare(b.name))
   const [modal, setModal] = useState(false)
   const [busyServer, setBusyServer] = useState<string | null>(null)
   const confirmation=useConfirmDialog()
@@ -416,8 +450,8 @@ function ServersPage({ user, servers, refresh, openServer, onError }: { user: Us
   }
   return <>
     <PageTitle eyebrow="INFRASTRUCTURE" title="Server fleet"><button className="primary" onClick={() => setModal(true)}><Plus size={16}/> REGISTER SERVER</button></PageTitle>
-    <div className="server-cards">{servers.map(server => <article className="server-card" key={server.id}>
-      <div className="server-card-head"><div className={`server-state ${server.state}`}><Gamepad2/></div><div><h2>{server.name}</h2><span className={`state-label ${server.state}`}><span/> {server.state}</span></div><button className="manage-button" onClick={() => openServer(server.id)}>MANAGE <ChevronRight size={15}/></button></div>
+    <div className="server-cards">{ordered.map(server => <article className={`server-card ${favorites.includes(server.id)?'favorite':''}`} key={server.id}>
+      <div className="server-card-head"><div className={`server-state ${server.state}`}><Gamepad2/></div><div><h2>{server.name}</h2><span className={`state-label ${server.state}`}><span/> {server.state}</span></div><button className={`favorite-button ${favorites.includes(server.id)?'active':''}`} title="Favorite server" onClick={()=>toggleFavorite(server.id)}><Star size={15}/></button><button className="manage-button" onClick={() => openServer(server.id)}>MANAGE <ChevronRight size={15}/></button></div>
       <div className="metric-strip"><div><span>PROCESS</span><strong>{server.processId ?? '—'}</strong></div><div><span>CPU</span><strong>{server.cpuPercent}%</strong></div><div><span>MEMORY</span><strong>{fmtBytes(server.memoryBytes)}</strong></div><div><span>PLAYERS</span><strong>{server.players}/{server.maxPlayers || '—'}</strong></div></div>
       {server.lastError && <p className="error">{server.lastError}</p>}
       <div className="server-actions">{hasServerPermission(user, server.id, 'server.start') && <button disabled={busyServer === server.id || server.state === 'online'} onClick={() => action(server.id, 'start')}><Play size={15}/> START</button>}{hasServerPermission(user, server.id, 'server.restart') && <button disabled={busyServer === server.id || server.state === 'offline'} onClick={() => action(server.id, 'restart')}><RotateCcw size={15}/> RESTART</button>}{hasServerPermission(user, server.id, 'server.stop') && <button disabled={busyServer === server.id || server.state === 'offline'} className="danger" onClick={() => action(server.id, 'stop')}><Square size={14}/> STOP</button>}</div>
@@ -1008,7 +1042,7 @@ function SettingsPage({ user, servers, onError }: { user: User; servers: Server[
   return <><PageTitle eyebrow="SYSTEM" title="Settings"/><nav className="page-tabs settings-tabs">{tabs.map(([value,label])=><button key={value} className={tab===value?'active':''} onClick={()=>setTab(value)}>{label}</button>)}</nav><section className="settings-tab-content">
     {tab==='general'&&<article className="panel settings-section"><FileCode2 size={26}/><h2>Panel configuration</h2><p>Server access and permissions are managed in Admin Manager. Runtime settings are stored in <code>appsettings.json</code>.</p><div className="setting-info-row"><strong>Signed-in account</strong><span>{user.username}</span></div><div className="setting-info-row"><strong>Account role</strong><span>{user.role}</span></div><div className="setting-info-row"><strong>Registered servers</strong><span>{servers.length}</span></div></article>}
     {tab==='appearance'&&<AppearancePanel/>}
-    {tab==='health'&&user.role==='Owner'&&<SystemHealthPanel onError={onError}/>} 
+    {tab==='health'&&user.role==='Owner'&&<><SystemHealthPanel onError={onError}/><PanelBackupsPanel onError={onError}/></>} 
     {tab==='discord'&&user.role==='Owner'&&<DiscordBotPanel servers={servers} onError={onError}/>}
     {tab==='diagnostics'&&user.role==='Owner'&&<DiscordDiagnosticsPanel onError={onError}/>}
     {tab==='updates'&&user.role==='Owner'&&<UpdateCenterPanel onError={onError}/>}
@@ -1027,6 +1061,16 @@ function SystemHealthPanel({onError}:{onError:(message:string)=>void}) {
   return <article className="panel health-panel"><div className="health-head"><div><CircleGauge size={28}/><span><span className="eyebrow">DEPLOYMENT READINESS</span><h2>System health</h2><p>Storage, integrations, bridges, backups, and host capacity.</p></span></div><button onClick={()=>void load()} disabled={busy}><RefreshCw size={14}/>{busy?'CHECKING…':'RUN CHECKS'}</button></div>{report&&<><div className={`health-summary ${report.status}`}><strong>{report.status.toUpperCase()}</strong><span>{report.checks.filter(x=>x.status==='healthy').length} healthy · {report.checks.filter(x=>x.status==='warning').length} warnings · {report.checks.filter(x=>x.status==='critical').length} critical</span><small>{new Date(report.checkedAt).toLocaleString()}</small></div><div className="health-checks">{report.checks.map(check=><section key={check.key}><i className={check.status}/><div><strong>{check.name}</strong><p>{check.detail}</p>{check.action&&<small>{check.action}</small>}</div><span className={`tag ${check.status==='critical'?'red':''}`}>{check.status}</span></section>)}</div></>}</article>
 }
 
+function PanelBackupsPanel({onError}:{onError:(message:string)=>void}) {
+  type Backup={fileName:string;createdAt:string;sizeBytes:number;verified:boolean}
+  const [items,setItems]=useState<Backup[]>([]);const [busy,setBusy]=useState(false)
+  const load=()=>api<Backup[]>('/system/backups').then(setItems).catch(e=>onError(e.message))
+  useEffect(()=>{void load()},[])
+  const create=async()=>{setBusy(true);try{await api('/system/backups',{method:'POST'});load()}catch(e){onError(e instanceof Error?e.message:'Backup failed')}finally{setBusy(false)}}
+  const verify=async(item:Backup)=>{try{const result=await api<{verified:boolean}>(`/system/backups/${encodeURIComponent(item.fileName)}/verify`,{method:'POST'});if(!result.verified)onError('The recovery archive failed verification.');load()}catch(e){onError(e instanceof Error?e.message:'Verification failed')}}
+  return <article className="panel panel-backups"><div className="panel-head"><div><h2>Panel recovery</h2><p>Daily archives of accounts, configuration records, audit history, and panel data.</p></div><button className="primary" disabled={busy} onClick={()=>void create()}>{busy?'CREATING…':'CREATE RECOVERY BACKUP'}</button></div><div className="backup-list">{items.map(item=><section key={item.fileName}><div><strong>{item.fileName}</strong><small>{new Date(item.createdAt).toLocaleString()} · {(item.sizeBytes/1048576).toFixed(2)} MB</small></div><button onClick={()=>void verify(item)}>VERIFY</button><a href={`/api/system/backups/${encodeURIComponent(item.fileName)}`}>DOWNLOAD</a></section>)}{!items.length&&<EmptyMini text="No panel recovery archives yet."/>}</div></article>
+}
+
 function AppearancePanel(){
   const [density,setDensity]=useState(()=>localStorage.getItem('scpcontrol-density')||'comfortable')
   const [accent,setAccent]=useState(()=>localStorage.getItem('scpcontrol-accent')||'#e44343')
@@ -1041,12 +1085,20 @@ function AppearancePanel(){
 }
 
 function PersonalSettings({user,onError,close}:{user:User;onError:(message:string)=>void;close:()=>void}) {
-  const [tab,setTab]=useState<'password'|'security'>('password')
+  const [tab,setTab]=useState<'password'|'security'|'dashboard'>('password')
   return <div className="personal-settings-backdrop" onMouseDown={event=>{if(event.target===event.currentTarget)close()}}><section className="personal-settings-modal">
     <header><div><span className="eyebrow">PERSONAL SETTINGS</span><h2>{user.username}</h2><p>Manage your personal account and sign-in security.</p></div><button className="icon-button" onClick={close}><X size={18}/></button></header>
-    <nav className="personal-settings-tabs"><button className={tab==='password'?'active':''} onClick={()=>setTab('password')}>PASSWORD</button><button className={tab==='security'?'active':''} onClick={()=>setTab('security')}>SECURITY &amp; SESSIONS</button></nav>
-    <div className="personal-settings-body">{tab==='password'?<SettingsBasePage user={user} onError={onError}/>:<TwoFactorPanel user={user} onError={onError}/>}</div>
+    <nav className="personal-settings-tabs"><button className={tab==='password'?'active':''} onClick={()=>setTab('password')}>PASSWORD</button><button className={tab==='security'?'active':''} onClick={()=>setTab('security')}>SECURITY &amp; SESSIONS</button><button className={tab==='dashboard'?'active':''} onClick={()=>setTab('dashboard')}>DASHBOARD</button></nav>
+    <div className="personal-settings-body">{tab==='password'?<SettingsBasePage user={user} onError={onError}/>:tab==='security'?<TwoFactorPanel user={user} onError={onError}/>:<DashboardPreferences onError={onError}/>}</div>
   </section></div>
+}
+
+function DashboardPreferences({onError}:{onError:(message:string)=>void}) {
+  const options=[['status','Status cards'],['servers','Server fleet'],['activity','Recent activity'],['staff','Staff operations'],['permissions','Permission health']] as const
+  const [preference,setPreference]=useState<{favoriteServerIds:string[];dashboardWidgets:string[];notificationsReadAt?:string}>({favoriteServerIds:[],dashboardWidgets:options.map(item=>item[0])})
+  useEffect(()=>{api<typeof preference>('/users/me/preferences').then(value=>{setPreference(value);localStorage.setItem('scpcontrol-dashboard-widgets',JSON.stringify(value.dashboardWidgets))}).catch(e=>onError(e.message))},[])
+  const toggle=(key:string)=>setPreference(current=>{const next={...current,dashboardWidgets:current.dashboardWidgets.includes(key)?current.dashboardWidgets.filter(value=>value!==key):[...current.dashboardWidgets,key]};localStorage.setItem('scpcontrol-dashboard-widgets',JSON.stringify(next.dashboardWidgets));void api('/users/me/preferences',{method:'PUT',body:JSON.stringify(next)}).catch(e=>onError(e.message));return next})
+  return <article className="panel settings-password dashboard-preferences"><LayoutDashboard size={26}/><h2>Dashboard layout</h2><p>Choose which operational sections appear on your overview.</p>{options.map(([key,label])=><label className="account-enabled-card" key={key}><input type="checkbox" checked={preference.dashboardWidgets.includes(key)} onChange={()=>toggle(key)}/><span><strong>{label}</strong><small>Show this section on the Operations overview.</small></span></label>)}</article>
 }
 
 function TwoFactorPanel({user,onError}:{user:User;onError:(message:string)=>void}) {
@@ -1060,7 +1112,7 @@ function TwoFactorPanel({user,onError}:{user:User;onError:(message:string)=>void
     {setup&&<div className="totp-setup"><div className="totp-qr"><QRCodeSVG value={setup.uri} size={210} level="M" marginSize={2}/><small>SCAN WITH GOOGLE AUTHENTICATOR</small></div><div><p>Open Google Authenticator, tap <strong>+</strong>, choose <strong>Scan a QR code</strong>, then enter the generated six-digit code below.</p><label>MANUAL SETUP SECRET<div className="input-action"><input readOnly value={setup.secret}/><button type="button" onClick={()=>void copyText(setup.secret)}>COPY</button></div></label><details><summary>Show setup URI</summary><small className="mono totp-uri">{setup.uri}</small></details></div></div>}
     <label>6-DIGIT CODE<input inputMode="numeric" maxLength={6} value={code} onChange={e=>setCode(e.target.value.replace(/\D/g,''))}/></label>
     <div className="button-row">{!user.twoFactorEnabled&&!setup&&<button onClick={async()=>{try{setSetup(await api('/auth/2fa/setup',{method:'POST'}))}catch(e){onError(e instanceof Error?e.message:'Unable to begin setup')}}}>BEGIN SETUP</button>}{setup&&<button className="primary" onClick={async()=>{try{await api('/auth/2fa/confirm',{method:'POST',body:JSON.stringify({code})});location.reload()}catch(e){onError(e instanceof Error?e.message:'Invalid code')}}}>ENABLE 2FA</button>}{user.twoFactorEnabled&&<button className="danger" onClick={async()=>{try{await api('/auth/2fa/disable',{method:'POST',body:JSON.stringify({code})});location.reload()}catch(e){onError(e instanceof Error?e.message:'Invalid code')}}}>DISABLE 2FA</button>}<button className="danger" onClick={async()=>{if(!await confirmation.ask('Revoke all sessions?','Every device, including this one, will be signed out.','REVOKE ALL',true,'REVOKE ALL'))return;await api('/auth/sessions/revoke',{method:'POST'});location.reload()}}>REVOKE ALL SESSIONS</button></div>
-    <div className="discord-connect"><span className="eyebrow">DISCORD LOGIN</span><div><Bot size={22}/><span><strong>{user.discordLinked ? user.discordUsername ?? 'Discord connected' : 'Connect your Discord account'}</strong><small>{user.discordLinked ? 'You can use Discord to sign in to this panel account.' : 'Authorize Discord once, then use it for future panel logins.'}</small></span>{user.discordLinked?<button className="danger" onClick={async()=>{try{await api('/auth/discord/link',{method:'DELETE'});location.reload()}catch(e){onError(e instanceof Error?e.message:'Unable to disconnect Discord')}}}>DISCONNECT</button>:<a className="discord-login" href="/api/auth/discord/link">CONNECT DISCORD</a>}</div></div>
+    <div className="discord-connect"><span className="eyebrow">DISCORD LOGIN</span><div>{user.discordAvatarUrl?<img className="discord-account-avatar" src={user.discordAvatarUrl} alt=""/>:<Bot size={22}/>}<span><strong>{user.discordLinked ? user.discordUsername ?? 'Discord connected' : 'Connect your Discord account'}</strong><small>{user.discordLinked ? `Available for panel sign-in${user.discordLinkedAt?` · linked ${new Date(user.discordLinkedAt).toLocaleDateString()}`:''}.` : 'Authorize Discord once, then use it for future panel logins.'}</small></span>{user.discordLinked?<button className="danger" onClick={async()=>{try{await api('/auth/discord/link',{method:'DELETE'});location.reload()}catch(e){onError(e instanceof Error?e.message:'Unable to disconnect Discord')}}}>DISCONNECT</button>:<a className="discord-login" href="/api/auth/discord/link">CONNECT DISCORD</a>}</div></div>
     <div className="active-sessions"><span className="eyebrow">ACTIVE SESSIONS</span>{sessions.map(item=><div className="session-row" key={item.id}><div><strong>{item.current?'This device':'Signed-in device'}</strong><small>{item.ipAddress} · {new Date(item.lastSeenAt).toLocaleString()}</small><p>{item.userAgent}</p></div><button disabled={item.current} onClick={async()=>{if(await confirmation.ask('Revoke session?','This device will be signed out on its next request.','REVOKE')){await api(`/auth/sessions/${item.id}`,{method:'DELETE'});loadSessions()}}}>REVOKE</button></div>)}</div>
   </article>
 }
@@ -1075,8 +1127,10 @@ function DiscordDiagnosticsPanel({onError}:{onError:(message:string)=>void}){
 
 function UpdateCenterPanel({onError}:{onError:(message:string)=>void}){
   const [data,setData]=useState<Record<string,string>|null>(null)
+  const [preflight,setPreflight]=useState<{ready:boolean;checkedAt:string;checks:Array<{name:string;passed:boolean;detail:string}>}|null>(null)
   useEffect(()=>{api<Record<string,string>>('/system/versions').then(setData).catch(e=>onError(e.message))},[])
-  return <article className="panel settings-section"><RefreshCw size={26}/><h2>Update center</h2><p>Installed control-plane and runtime versions. Back up each server before applying updates.</p>{data&&Object.entries(data).map(([key,value])=><div className="setting-info-row" key={key}><strong>{key.replace(/([A-Z])/g,' $1')}</strong><code>{String(value)}</code></div>)}</article>
+  const check=()=>api<typeof preflight>('/system/update/preflight').then(setPreflight).catch(e=>onError(e.message))
+  return <article className="panel settings-section update-center"><RefreshCw size={26}/><div className="panel-head"><div><h2>Update center</h2><p>Validate recovery and runtime state before applying an update.</p></div><button className="primary" onClick={check}>RUN PREFLIGHT</button></div>{preflight&&<div className={`preflight-summary ${preflight.ready?'ready':'blocked'}`}><strong>{preflight.ready?'READY TO UPDATE':'UPDATE BLOCKED'}</strong><small>{new Date(preflight.checkedAt).toLocaleString()}</small>{preflight.checks.map(item=><div key={item.name}><span>{item.passed?'✓':'!'}</span><strong>{item.name}</strong><code>{item.detail}</code></div>)}</div>}{data&&Object.entries(data).map(([key,value])=><div className="setting-info-row" key={key}><strong>{key.replace(/([A-Z])/g,' $1')}</strong><code>{String(value)}</code></div>)}</article>
 }
 
 function NotificationHistoryPanel({onError}:{onError:(message:string)=>void}) {
