@@ -562,3 +562,5 @@ th{font-weight:700;letter-spacing:.09em}
 @media(max-width:760px){.page-heading{min-height:0!important;padding-bottom:17px}.page-heading-copy h1{font-size:27px!important}.page-heading-copy p{font-size:11px}.page-heading>.actions{align-self:stretch}.page-heading>.actions>select{width:100%}.stat-grid,.moderation-kpis{gap:10px}}
 
 .ingame-permissions-page .ingame-role-card h2{margin:0 0 7px;font-size:22px;letter-spacing:-.025em}
+.ingame-permissions-page .ingame-role-card>header{grid-template-columns:minmax(0,1fr) auto;min-height:92px;padding:20px 22px}
+.ingame-permissions-page .ingame-role-card>header>div:first-child{min-width:0}
