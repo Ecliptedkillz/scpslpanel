@@ -341,12 +341,15 @@ internal sealed class BridgeClient : IDisposable
                 var current = Player.ReadyList?.FirstOrDefault(candidate => candidate.PlayerId == playerId);
                 if (current == null) return;
                 PanelPermissionProvider.Set(current.UserId, assignment.PluginPermissions);
+                // Remove any animation before SetGroup applies the newly resolved badge.
+                PanelRainbowTag.Detach(current);
                 if (!TryApplyRemoteAdminGroup(current, assignment, out var error))
                 {
                     Logger.Warn($"SCP Control could not assign RA group '{assignment.GroupName}': {error}");
                     return;
                 }
-                PanelRainbowTag.Attach(current);
+                if (IsRainbow(assignment.BadgeColor))
+                    PanelRainbowTag.Attach(current, assignment.BadgeText);
                 _assignedGameRoleUsers.Add(current.UserId);
                 var options = GetOrCreateTagOptions(current.UserId);
                 options.RemoveAll(option => option.Id == "staff");
@@ -401,12 +404,12 @@ internal sealed class BridgeClient : IDisposable
                 if (_selectedTags.TryGetValue(current.UserId, out var selectedId)
                     && options.FirstOrDefault(option => option.Id == selectedId) is { } selected)
                 {
-                    TrySetCustomBadge(current, selected.BadgeText, selected.BadgeColor);
+                    ApplySelectableTag(current, selected);
                     _assignedCustomBadgeUsers.Add(current.UserId);
                 }
                 else if (options.FirstOrDefault(option => option.Id != "staff") is { } automatic)
                 {
-                    TrySetCustomBadge(current, automatic.BadgeText, automatic.BadgeColor);
+                    ApplySelectableTag(current, automatic);
                     _assignedCustomBadgeUsers.Add(current.UserId);
                 }
             });
@@ -437,6 +440,7 @@ internal sealed class BridgeClient : IDisposable
         {
             _selectedTags.Remove(player.UserId);
             _ = SaveTagPreferenceAsync(player.UserId, null);
+            PanelRainbowTag.Detach(player);
             RefreshBadge(player);
             CheckDiscordGameRole(player);
             return "Your tag was reset to the automatic default.";
@@ -446,7 +450,7 @@ internal sealed class BridgeClient : IDisposable
         var selected = options[number - 1];
         _selectedTags[player.UserId] = selected.Id;
         _ = SaveTagPreferenceAsync(player.UserId, selected.Id);
-        TrySetCustomBadge(player, selected.BadgeText, selected.BadgeColor);
+        ApplySelectableTag(player, selected);
         return $"Your active tag is now {selected.BadgeText}.";
     }
 
@@ -510,6 +514,19 @@ internal sealed class BridgeClient : IDisposable
         roles.GetType().GetMethod("SetText", flags, null, new[] { typeof(string) }, null)?.Invoke(roles, new object[] { text });
         roles.GetType().GetMethod("SetColor", flags, null, new[] { typeof(string) }, null)?.Invoke(roles, new object[] { color });
         return true;
+    }
+
+    private static bool IsRainbow(string? color) =>
+        string.Equals(color?.Trim(), "rainbow", StringComparison.OrdinalIgnoreCase);
+
+    private static void ApplySelectableTag(Player player, TagOptionPayload tag)
+    {
+        // Detach first so OnDestroy restores the pre-animation color before the
+        // selected tag's real color is applied.
+        PanelRainbowTag.Detach(player);
+        if (!TrySetCustomBadge(player, tag.BadgeText, tag.BadgeColor)) return;
+        if (IsRainbow(tag.BadgeColor))
+            PanelRainbowTag.Attach(player, tag.BadgeText);
     }
 
     private static void RefreshBadge(Player player)
