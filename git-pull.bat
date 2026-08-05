@@ -43,7 +43,9 @@ for /f "delims=" %%S in ('"%GIT_EXE%" status --porcelain') do (
     echo Pull cancelled because local changes are present:
     "%GIT_EXE%" status --short
     echo.
-    echo Run git-update.bat first, or handle the local changes manually.
+    echo If these changes are not intentional, preserve them with:
+    echo   git stash push -u -m "server changes before pull"
+    echo Then run git-pull.bat again. Do not publish generated server files.
     pause
     exit /b 1
 )

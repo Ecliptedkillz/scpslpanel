@@ -10,3 +10,5 @@ src/ScpSlPanel.Api/data/
 *.tsbuildinfo
 src/scpsl-panel-web/vite.config.js
 src/scpsl-panel-web/vite.config.d.ts
+launcher/publish/
+SCP Control Launcher.exe
