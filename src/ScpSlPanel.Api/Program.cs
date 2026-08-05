@@ -1654,8 +1654,10 @@ api.MapPut("/integrations/donors-badges", async (
     await audit.AddAsync(Actor(user), "donors-badges.update", "Discord donor integration",
         $"Saved {request.DiscordDonorRoleGrants.Count} donor mapping(s), "
         + $"{request.CustomRoleBadges.Count} role badge(s), and {request.CustomUserBadges.Count} user badge(s).");
-    foreach (var serverId in request.CustomUserBadges.Select(x => x.ServerId)
-        .Concat(request.CustomRoleBadges.Select(x => x.ServerId)).Distinct())
+    var badgeSyncServers = request.CustomRoleBadges.Select(x => x.ServerId);
+    if (request.CustomUserBadges.Count > 0 || (existing.CustomUserBadges?.Count ?? 0) > 0)
+        badgeSyncServers = badgeSyncServers.Concat((await servers.DefinitionsAsync()).Select(x => x.Id));
+    foreach (var serverId in badgeSyncServers.Distinct())
         if (bridge.Get(serverId).Connected)
             foreach (var player in bridge.Get(serverId).Players)
                 _ = Task.Run(() => commands.ExecuteAsync(serverId, "role-sync", player.Id));

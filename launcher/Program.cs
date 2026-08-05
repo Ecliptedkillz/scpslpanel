@@ -35,11 +35,13 @@ internal sealed class LauncherForm : Form
         var path = new Label { Text = repositoryRoot, Dock = DockStyle.Fill, ForeColor = Color.FromArgb(119, 128, 141), Font = new Font("Segoe UI", 9), AutoEllipsis = true };
         heading.Controls.Add(path); heading.Controls.Add(title); heading.Controls.Add(eyebrow);
 
-        var toolbar = new FlowLayoutPanel { Dock = DockStyle.Top, Height = 112, Padding = new Padding(24, 12, 14, 12), WrapContents = true };
+        var toolbar = new FlowLayoutPanel { Dock = DockStyle.Top, Height = 132, Padding = new Padding(24, 12, 14, 12), WrapContents = true };
         AddButton(toolbar, "Start Panel", async () => await StartPanel(), true);
         AddButton(toolbar, "Stop Panel", () => { StopPanel(); return Task.CompletedTask; });
         AddButton(toolbar, "Open Panel", () => { OpenUrl(GetPanelUrl()); return Task.CompletedTask; });
         AddButton(toolbar, "Build", async () => await BuildAll());
+        AddButton(toolbar, "Build Bridge", () => { RunInteractiveScript("build-bridge.bat", "Bridge builder"); return Task.CompletedTask; });
+        AddButton(toolbar, "Install Bridge", () => { RunInteractiveScript("install-bridge.bat", "Bridge installer"); return Task.CompletedTask; });
         AddButton(toolbar, "Install Dependencies", async () => await RunCommand(npmPath, "install --no-audit --no-fund", frontendRoot, "Installing frontend dependencies..."));
         AddButton(toolbar, "Update from Git", () => { UpdateFromGit(); return Task.CompletedTask; });
 
@@ -157,6 +159,30 @@ internal sealed class LauncherForm : Form
         }
         catch (Exception ex) { AppendLine($"Could not run command: {ex.Message}"); return false; }
         finally { SetBusy(false); }
+    }
+
+    private void RunInteractiveScript(string fileName, string label)
+    {
+        var script = Path.Combine(repositoryRoot, fileName);
+        if (!File.Exists(script))
+        {
+            AppendLine($"{label} was not found: {script}");
+            return;
+        }
+
+        try
+        {
+            Process.Start(new ProcessStartInfo("cmd.exe", $"/d /c \"\"{script}\"\"")
+            {
+                WorkingDirectory = repositoryRoot,
+                UseShellExecute = true
+            });
+            AppendLine($"Opened {label.ToLowerInvariant()} in a separate window.");
+        }
+        catch (Exception ex)
+        {
+            AppendLine($"Could not open {label.ToLowerInvariant()}: {ex.Message}");
+        }
     }
 
     private void UpdateFromGit()

@@ -101,8 +101,7 @@ public sealed class DiscordLinkService(NotificationService settingsService, ILog
         if (string.IsNullOrWhiteSpace(steamId)) return new(false);
         var settings = await settingsService.GetAsync();
         var userBadge = settings.CustomUserBadges?.LastOrDefault(badge =>
-            badge.ServerId == server.Id
-            && badge.SteamId.Equals(steamId, StringComparison.OrdinalIgnoreCase)
+            badge.SteamId.Equals(steamId, StringComparison.OrdinalIgnoreCase)
             && !string.IsNullOrWhiteSpace(badge.BadgeText));
         if (userBadge is not null)
             return new(true, userBadge.BadgeText.Trim(),
@@ -144,8 +143,7 @@ public sealed class DiscordLinkService(NotificationService settingsService, ILog
         var settings = await settingsService.GetAsync();
         var options = new List<BridgeTagOption>();
         foreach (var badge in settings.CustomUserBadges?.Where(badge =>
-                     badge.ServerId == server.Id
-                     && badge.SteamId.Equals(steamId, StringComparison.OrdinalIgnoreCase)
+                     badge.SteamId.Equals(steamId, StringComparison.OrdinalIgnoreCase)
                      && !string.IsNullOrWhiteSpace(badge.BadgeText)) ?? [])
             options.Add(new($"user:{badge.BadgeText.Trim()}:{badge.BadgeColor}", "custom user", badge.BadgeText.Trim(),
                 string.IsNullOrWhiteSpace(badge.BadgeColor) ? "silver" : badge.BadgeColor.Trim()));
